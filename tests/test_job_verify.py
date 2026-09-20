@@ -161,7 +161,17 @@ def test_verify_mirror_is_last_resort():
 def test_verify_respects_user_mark_open_answer():
     outcome = verify_posting(
         _posting(user_status="open", user_status_at="2026-09-01T00:00:00"),
-        feed_checked_ok=True, found_in_current_feed=False,
+        feed_checked_ok=True, found_in_current_feed=True,
+        browser_budget=BrowserBudget(remaining=5), now_iso="2026-09-20T08:00:00",
+    )
+    assert outcome.status == "open"
+    assert outcome.verified_via == "user"
+
+
+def test_verify_respects_user_mark_open_answer_when_feed_not_checked():
+    outcome = verify_posting(
+        _posting(user_status="open", user_status_at="2026-09-01T00:00:00"),
+        feed_checked_ok=False, found_in_current_feed=False,
         browser_budget=BrowserBudget(remaining=5), now_iso="2026-09-20T08:00:00",
     )
     assert outcome.status == "open"
@@ -169,8 +179,12 @@ def test_verify_respects_user_mark_open_answer():
 
 
 def test_verify_user_answer_overridden_when_posting_disappears_from_feed():
+    # This is the realistic case: the API always writes user_status_at
+    # alongside user_status, so the override must not depend on it being
+    # absent -- only on the posting actually disappearing from the feed.
     outcome = verify_posting(
-        _posting(user_status="open"), feed_checked_ok=True, found_in_current_feed=False,
+        _posting(user_status="open", user_status_at="2026-09-01T00:00:00"),
+        feed_checked_ok=True, found_in_current_feed=False,
         browser_budget=BrowserBudget(remaining=5), now_iso="2026-09-20T08:00:00",
     )
     assert outcome.status == "closed"
