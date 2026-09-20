@@ -396,7 +396,7 @@ async def check_companies(body: CheckCompaniesRequest, request: Request, db: Dat
     github: GitHubClient | None = request.app.state.github
     if github is not None:
         try:
-            await github.dispatch_workflow("check-now.yml", "main", {"request_id": str(new_id)})
+            await github.dispatch_workflow("check-now.yml", "master", {"request_id": str(new_id)})
         except GitHubApiError as exc:
             await db.run(
                 "UPDATE check_requests SET status = 'failed', result = ? WHERE id = ?",

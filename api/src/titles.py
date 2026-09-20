@@ -15,7 +15,7 @@ from github_client import GitHubClient
 
 TITLES_PATH = "config/titles.json"
 TITLES_BRANCH = "titles-update-from-dashboard"
-BASE_BRANCH = "main"
+BASE_BRANCH = "master"  # this repository's default branch (see README's setup steps)
 
 
 def validate_titles_doc(doc: dict) -> list[str]:
