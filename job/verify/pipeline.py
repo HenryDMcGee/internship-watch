@@ -34,13 +34,16 @@ def verify_posting(
     check_mirror_site=check_mirror,
 ) -> VerifyOutcome:
     user_status = posting.get("user_status")
+    user_status_at = posting.get("user_status_at")
     posting_disappeared = feed_checked_ok and not found_in_current_feed
 
     # Henry's Mark open/closed answer sticks unless the posting disappears
-    # from the company's own feed.
-    if user_status in ("open", "closed") and not posting_disappeared:
+    # from the company's own feed. A user_status without a user_status_at
+    # isn't a real Mark open/closed answer (the API always writes both
+    # together), so it doesn't get sticky protection from the feed check.
+    if user_status in ("open", "closed") and (not posting_disappeared or user_status_at):
         return VerifyOutcome(
-            status=user_status, verified_via="user", verified_at=posting.get("user_status_at") or now_iso
+            status=user_status, verified_via="user", verified_at=user_status_at or now_iso
         )
 
     # 1. The company's own data feed, when we could check it today.

@@ -45,6 +45,8 @@ def match_title(text: str, active_titles: list[dict]) -> TitleMatch | None:
 
     best: TitleMatch | None = None
     for entry in active_titles:
+        if not entry.get("active", True):
+            continue
         candidates = [entry["title"], *entry.get("aliases", [])]
         for candidate in candidates:
             needle = _normalize(candidate)
