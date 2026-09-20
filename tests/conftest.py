@@ -23,7 +23,10 @@ from src.db import SqliteDatabase  # noqa: E402
 
 
 def fresh_schema_connection() -> sqlite3.Connection:
-    conn = sqlite3.connect(":memory:")
+    # FastAPI's TestClient runs the app in a worker thread, but requests are
+    # dispatched to it one at a time, so it's safe for the single in-memory
+    # connection created here (in the test thread) to be reused there.
+    conn = sqlite3.connect(":memory:", check_same_thread=False)
     conn.executescript(SCHEMA_SQL)
     conn.commit()
     return conn

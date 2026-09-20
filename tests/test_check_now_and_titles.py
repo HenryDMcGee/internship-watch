@@ -3,7 +3,7 @@ import asyncio
 import pytest
 from fastapi.testclient import TestClient
 
-from src.github_client import GitHubClient
+from github_client import GitHubClient
 from src.main import app, central_today
 
 
