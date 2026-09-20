@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -259,6 +260,16 @@ def render_sql(statements: list[Statement]) -> str:
     return "\n".join(lines) + "\n"
 
 
+def resolve_executable(name: str) -> str | None:
+    """Return the full path to a command-line program, or None if it isn't installed.
+
+    On Windows, `npx` is really `npx.cmd`. subprocess can't launch it by the
+    bare name, but shutil.which finds the real file (npx.cmd on Windows, npx
+    elsewhere), and subprocess can run it from its full path.
+    """
+    return shutil.which(name)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--remote", action="store_true", help="Seed the real database instead of the local one")
@@ -267,15 +278,28 @@ def main() -> int:
     statements = build_statements()
     sql_text = render_sql(statements)
 
-    with tempfile.NamedTemporaryFile("w", suffix=".sql", delete=False) as f:
+    npx = resolve_executable("npx")
+    if npx is None:
+        print(
+            "Couldn't find npx. Install Node.js (current LTS), open a new terminal, "
+            "and run this script again. npx comes with Node.js.",
+            file=sys.stderr,
+        )
+        return 1
+
+    # Write as UTF-8 so non-English text survives on Windows, where the
+    # default file encoding isn't UTF-8.
+    with tempfile.NamedTemporaryFile("w", suffix=".sql", delete=False, encoding="utf-8") as f:
         f.write(sql_text)
         sql_path = Path(f.name)
 
     target = "--remote" if args.remote else "--local"
-    command = ["npx", "wrangler", "d1", "execute", DATABASE_NAME, target, f"--file={sql_path}"]
-    print(f"Running: {' '.join(command)} (from {API_DIR})")
-    result = subprocess.run(command, cwd=API_DIR)
-    sql_path.unlink(missing_ok=True)
+    args_after_npx = ["wrangler", "d1", "execute", DATABASE_NAME, target, f"--file={sql_path}"]
+    print(f"Running: npx {' '.join(args_after_npx)} (from {API_DIR})")
+    try:
+        result = subprocess.run([npx, *args_after_npx], cwd=API_DIR)
+    finally:
+        sql_path.unlink(missing_ok=True)
     if result.returncode != 0:
         return result.returncode
 

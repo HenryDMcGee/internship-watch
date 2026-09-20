@@ -56,3 +56,9 @@ jobs:
           # To switch to an API key, replace this line with:
           # anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # Commands Claude may run in this throwaway runner: enough to install
+          # dependencies and run the test suite before opening a pull request.
+          # Nothing else is allowed.
+          claude_args: >-
+            --allowedTools
+            "Bash(python -m pytest:*),Bash(python -m pip install:*),Bash(uv run:*),Bash(uv sync:*),Bash(uv tool install:*),Bash(git status:*),Bash(git diff:*)"
