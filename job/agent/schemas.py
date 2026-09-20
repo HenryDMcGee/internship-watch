@@ -161,6 +161,55 @@ def validate_scout_output(payload) -> list[str]:
     return problems
 
 
+def validate_scout_document(payload) -> list[str]:
+    """Shape-only check for a scout reply: a JSON object with a `sources`
+    list. Used as the hard parse gate in `scout.run_scout` instead of
+    `validate_scout_output`, which also rejects the whole list over a single
+    bad item -- exactly the failure mode that let a full batch of otherwise
+    good scout results (issue #20) get thrown away silently. Per-item
+    problems are handled separately by `split_scout_sources`.
+    """
+    if not isinstance(payload, dict):
+        return ["document must be a JSON object"]
+    if not isinstance(payload.get("sources"), list):
+        return ["'sources' must be a list"]
+    return []
+
+
+def validate_scout_source(s) -> list[str]:
+    """Per-item version of `validate_scout_output`'s checks, for one entry
+    in a scout reply's `sources` list."""
+    if not isinstance(s, dict):
+        return ["must be an object"]
+    problems: list[str] = []
+    for field_name in ("name", "url"):
+        if not _is_nonempty_str(s.get(field_name)):
+            problems.append(f"{field_name} must be a non-empty string")
+    kind = s.get("kind")
+    if kind is not None and kind not in SOURCE_KINDS:
+        problems.append(f"kind must be one of {sorted(SOURCE_KINDS)}")
+    if not _is_str_or_none(s.get("covers")):
+        problems.append("covers must be a string")
+    return problems
+
+
+def split_scout_sources(payload: dict) -> tuple[list[dict], list[str]]:
+    """Splits an already-shape-checked scout reply into the sources that
+    pass per-item validation and human-readable problems for the ones that
+    don't, so one malformed entry in a big batch doesn't cost every other
+    real result the same call found."""
+    sources = payload.get("sources") or []
+    valid: list[dict] = []
+    problems: list[str] = []
+    for i, s in enumerate(sources):
+        item_problems = validate_scout_source(s)
+        if item_problems:
+            problems.append(f"sources[{i}]: " + "; ".join(item_problems))
+        else:
+            valid.append(s)
+    return valid, problems
+
+
 # ---------------------------------------------------------------------------
 # Daily improvement
 # ---------------------------------------------------------------------------

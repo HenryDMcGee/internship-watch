@@ -1,4 +1,7 @@
+import pytest
+
 from job.agent.client import ClaudeStepResult
+from job.agent.schemas import ClaudeOutputError
 from job.agent.scout import (
     DEMOTE_AFTER_EMPTY_CHECKS,
     PROMOTE_AFTER_FOUND,
@@ -28,6 +31,35 @@ def test_run_scout_parses_mocked_response():
     found, result = run_scout([{"name": "Acme"}], model="sonnet", run_claude=fake_run_claude)
     assert found[0]["name"] == "Acme careers"
     assert result.step == "scout"
+
+
+def test_run_scout_keeps_valid_entries_when_some_fail_validation():
+    def fake_run_claude(step, prompt, *, model):
+        return ClaudeStepResult(
+            step=step, model=model,
+            text=(
+                '{"sources": ['
+                '{"company_name": "Acme", "name": "Acme careers", "url": "https://acme.example/careers"}, '
+                '{"url": "https://missing-name.example"}'
+                ']}'
+            ),
+        )
+
+    found, result = run_scout([{"name": "Acme"}], model="sonnet", run_claude=fake_run_claude)
+    assert [f["name"] for f in found] == ["Acme careers"]
+    assert result.step == "scout"
+
+
+def test_run_scout_raises_loudly_when_every_result_fails_validation():
+    def fake_run_claude(step, prompt, *, model):
+        return ClaudeStepResult(step=step, model=model, text='{"sources": [{"url": "https://missing-name.example"}]}')
+
+    with pytest.raises(ClaudeOutputError) as exc_info:
+        run_scout([{"name": "Acme"}], model="sonnet", run_claude=fake_run_claude)
+    # The call still spent real tokens/searches -- that usage must not be
+    # lost just because the reply couldn't be used (see `pipeline.guarded`).
+    assert exc_info.value.result is not None
+    assert exc_info.value.result.step == "scout"
 
 
 def test_new_source_row_starts_as_trial():

@@ -8,7 +8,12 @@ needs Henry's approval, so that goes to `proposals` instead (see
 from __future__ import annotations
 
 from job.agent.client import ClaudeStepResult, resolve_model, run_claude_step
-from job.agent.schemas import parse_and_validate, validate_scout_output
+from job.agent.schemas import (
+    ClaudeOutputError,
+    parse_and_validate,
+    split_scout_sources,
+    validate_scout_document,
+)
 
 DEFAULT_SEARCH_LIMIT_PER_RUN = 35
 PROMOTE_AFTER_FOUND = 1  # a trial source becomes active after this many real open postings
@@ -63,8 +68,20 @@ def run_scout(
         return [], None
     prompt = build_prompt(companies, search_limit_per_run=search_limit_per_run)
     result = run_claude("scout", prompt, model=resolve_model(model))
-    payload = parse_and_validate(result.text, validate_scout_output, result=result)
-    return payload["sources"], result
+    payload = parse_and_validate(result.text, validate_scout_document, result=result)
+    raw_sources = payload.get("sources") or []
+    sources, problems = split_scout_sources(payload)
+    print(
+        f"scout: Claude returned {len(raw_sources)} source(s), {len(sources)} passed validation"
+        + (f", {len(problems)} rejected ({'; '.join(problems)})" if problems else "")
+    )
+    if raw_sources and not sources:
+        # Every result this call found failed per-item validation -- that's
+        # the same "spent budget, produced nothing usable" failure as a
+        # step that can't be parsed at all, and must not look like a clean
+        # "found 0 sources" run (issue #20).
+        raise ClaudeOutputError("all sources failed validation: " + "; ".join(problems), result=result)
+    return sources, result
 
 
 def new_source_row(found: dict, *, now_iso: str) -> dict:

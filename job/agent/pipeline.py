@@ -26,6 +26,12 @@ from job.agent.usage import record_usage
 from job.config import load_search_plan, load_watchlist_setting
 from job.locations import location_match as compute_location_match
 
+# `job.config` (imported above) adds `api/src` to `sys.path`, which this
+# import needs -- see `job/feeds/detect.py`'s docstring for why company
+# logic lives in `api/src/companies.py` and is reused here rather than
+# reimplemented.
+from companies import detect_feed, normalize_company_name  # noqa: E402
+
 
 async def run_agent_steps(
     db, *, run_id: int, companies: list[dict], titles_doc: dict, locations_setting: dict,
@@ -128,7 +134,9 @@ async def run_agent_steps(
 
     if scout_batch:
         found_sources = await guarded("scout", do_scout) or []
-        outcome["scout_count"] = await _store_scout_sources(db, found_sources, now_iso=now_iso)
+        outcome["scout_count"] = await _store_scout_sources(
+            db, found_sources, now_iso=now_iso, companies=scout_batch
+        )
         if "scout" in steps_succeeded:
             await _mark_companies_scouted(db, scout_batch, now_iso=now_iso)
 
@@ -236,7 +244,7 @@ async def _apply_classification_decisions(db, decisions: list[dict], *, now_iso:
     return applied
 
 
-async def _store_scout_sources(db, found: list[dict], *, now_iso: str) -> int:
+async def _store_scout_sources(db, found: list[dict], *, now_iso: str, companies: list[dict]) -> int:
     # `scout.next_source_status` (trial -> active after a real open posting,
     # or -> demoted after repeated empty checks) needs a found/empty-check
     # count this step doesn't have -- Claude proposing a URL again isn't
@@ -244,22 +252,57 @@ async def _store_scout_sources(db, found: list[dict], *, now_iso: str) -> int:
     # whatever actually checks the source (a future increment); for now,
     # re-finding an already-known source just refreshes when it was last
     # seen, and status changes stay a later step's job.
+    companies_by_name = {
+        normalize_company_name(c["name"]): c for c in companies if c.get("name")
+    }
     stored = 0
+    companies_updated = 0
     for f in found:
         existing = await db.first("SELECT * FROM sources WHERE url = ?", f["url"])
         if existing:
             await db.run("UPDATE sources SET last_checked = ? WHERE id = ?", now_iso, existing["id"])
-            continue
-        row = scout.new_source_row(f, now_iso=now_iso)
-        await db.run(
-            """INSERT INTO sources (name, url, kind, covers, status, discovered_by, discovered_at,
-               found_count, last_checked)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            row["name"], row["url"], row["kind"], row["covers"], row["status"],
-            row["discovered_by"], row["discovered_at"], row["found_count"], row["last_checked"],
-        )
-        stored += 1
+        else:
+            row = scout.new_source_row(f, now_iso=now_iso)
+            await db.run(
+                """INSERT INTO sources (name, url, kind, covers, status, discovered_by, discovered_at,
+                   found_count, last_checked)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                row["name"], row["url"], row["kind"], row["covers"], row["status"],
+                row["discovered_by"], row["discovered_at"], row["found_count"], row["last_checked"],
+            )
+            stored += 1
+        if await _apply_scout_company_feed(db, f, companies_by_name):
+            companies_updated += 1
+    print(
+        f"scout: wrote {stored} new source(s) ({len(found) - stored} already known), "
+        f"set feed info on {companies_updated} compan{'y' if companies_updated == 1 else 'ies'}"
+    )
     return stored
+
+
+async def _apply_scout_company_feed(db, found: dict, companies_by_name: dict) -> bool:
+    """A scout result naming one of the companies it was sent to scout, on a
+    URL matching a known feed platform, is exactly the source that company
+    was missing -- attach it directly to that company's row so it stops
+    counting as "no source" next run. Without this, a scout result only
+    ever reaches the generic `sources` catalog, which nothing reads back
+    onto `companies.feed_type`/`careers_url` (issue #20): a company could
+    stay "no source" forever even after the scout found its careers page.
+    Skipped for companies that already have a feed_type, and for URLs
+    `detect_feed` doesn't recognize (that's not proof of a dead end, just
+    not something the daily fetchers can use automatically).
+    """
+    company = companies_by_name.get(normalize_company_name(found.get("company_name") or ""))
+    if not company or company.get("feed_type"):
+        return False
+    feed_type, feed_id = detect_feed(found.get("url"))
+    if not feed_type:
+        return False
+    await db.run(
+        "UPDATE companies SET careers_url = ?, feed_type = ?, feed_id = ? WHERE id = ?",
+        found["url"], feed_type, feed_id, company["id"],
+    )
+    return True
 
 
 async def _mark_companies_scouted(db, companies: list[dict], *, now_iso: str) -> None:
