@@ -36,6 +36,14 @@ def test_parse_and_validate_attaches_result_to_error_on_bad_json():
     assert exc_info.value.result is sentinel
 
 
+def test_parse_and_validate_logs_the_start_of_a_bad_reply(capsys):
+    bad_reply = "Sorry, I can't help with that. " * 30
+    with pytest.raises(ClaudeOutputError):
+        parse_and_validate(bad_reply, validate_discovery_output)
+    output = capsys.readouterr().out
+    assert bad_reply[:500] in output
+
+
 def test_parse_and_validate_attaches_result_to_error_on_invalid_shape():
     sentinel = object()
     with pytest.raises(ClaudeOutputError) as exc_info:

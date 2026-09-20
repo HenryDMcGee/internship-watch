@@ -134,15 +134,24 @@ def run_claude_step(
     ]
     tools = STEP_TOOLS[step]
     # `--tools` controls which tools exist at all for this call (CLAUDE.md:
-    # "no shell or file-editing tools"); `--allowedTools` pre-approves the
-    # ones that do, so they don't need a permission decision either.
-    args += ["--tools", ",".join(tools)]
+    # "no shell or file-editing tools"); `--allowedTools` pre-approves the ones
+    # that do, so they don't need a permission decision either -- confirmed
+    # necessary by testing the CLI directly: without `--allowedTools`, a
+    # headless call gets "permission for the WebSearch tool hasn't been
+    # granted in this session" instead of searching (issue #20). Both flags
+    # use the same comma-separated value; `--allowedTools` also accepts
+    # spaces, but comma is what was confirmed to work.
+    tools_value = ",".join(tools)
+    args += ["--tools", tools_value]
     if tools:
-        args += ["--allowedTools", " ".join(tools)]
+        args += ["--allowedTools", tools_value]
     if system_prompt:
         args += ["--append-system-prompt", system_prompt]
 
-    print(f"{step}: prompt is {len(prompt)} character(s); running `{shlex.join(args)}` (prompt sent on stdin)")
+    print(
+        f"{step}: prompt is {len(prompt)} character(s), starting `{prompt[:200]!r}`; "
+        f"running `{shlex.join(args)}` (prompt sent on stdin)"
+    )
 
     try:
         completed = runner(args, input=prompt, capture_output=True, text=True, timeout=timeout, check=False)
