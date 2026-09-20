@@ -3,10 +3,13 @@ import pytest
 from job.agent.schemas import (
     ClaudeOutputError,
     parse_and_validate,
+    split_scout_sources,
     validate_classification_output,
     validate_discovery_output,
     validate_improvement_output,
+    validate_scout_document,
     validate_scout_output,
+    validate_scout_source,
     validate_unclear_output,
 )
 
@@ -111,6 +114,37 @@ def test_scout_output_rejects_bad_kind():
 def test_scout_output_rejects_missing_name():
     payload = {"sources": [{"url": "https://x"}]}
     assert validate_scout_output(payload) != []
+
+
+def test_scout_document_only_checks_shape_not_items():
+    # A bad item is not this gate's job -- `split_scout_sources` handles
+    # per-item problems separately, so one bad entry doesn't fail the
+    # whole reply (issue #20).
+    payload = {"sources": [{"url": "https://x"}]}  # missing "name"
+    assert validate_scout_document(payload) == []
+
+
+def test_scout_document_rejects_non_list_sources():
+    assert validate_scout_document({"sources": "nope"}) != []
+
+
+def test_scout_source_rejects_bad_kind():
+    assert validate_scout_source({"name": "x", "url": "https://x", "kind": "Not a kind"}) != []
+
+
+def test_scout_source_accepts_a_valid_entry():
+    assert validate_scout_source({"name": "x", "url": "https://x", "kind": "Job boards"}) == []
+
+
+def test_split_scout_sources_keeps_good_entries_and_reports_bad_ones():
+    payload = {"sources": [
+        {"name": "Good", "url": "https://good.example"},
+        {"url": "https://bad.example"},  # missing "name"
+    ]}
+    valid, problems = split_scout_sources(payload)
+    assert [s["name"] for s in valid] == ["Good"]
+    assert len(problems) == 1
+    assert "sources[1]" in problems[0]
 
 
 # -- improvement --------------------------------------------------------

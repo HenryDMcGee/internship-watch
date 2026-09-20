@@ -159,6 +159,117 @@ def test_run_agent_steps_stores_discovery_results_and_classifies_them(empty_db):
     assert plans[0]["plan_date"] == "2026-09-21"
 
 
+def test_run_agent_steps_sets_company_feed_from_a_recognized_scout_url(empty_db):
+    """issue #20: a scout result naming one of the scouted companies, on a
+    URL a known feed platform (here Greenhouse), must update that
+    company's own careers_url/feed_type -- not just add a generic row to
+    `sources`, which is the only thing the old code did, so a company could
+    stay "no source" forever even after the scout found its careers page.
+    """
+    company_id = _insert_company(empty_db, feed_type=None)
+    run_id = run(empty_db.run("INSERT INTO runs (kind, started_at, status) VALUES ('daily', '2026-09-20T08:00:00', 'running')"))
+
+    fake = _fake_run_claude({
+        "scout": (
+            '{"sources": [{"company_name": "Acme", "name": "Acme careers", '
+            '"url": "https://boards.greenhouse.io/acme", "kind": "Company career sites", "covers": "Acme"}]}'
+        ),
+        "improvement": '{"search_plan": null, "proposals": [], "title_suggestions": []}',
+    })
+
+    run(run_agent_steps(
+        empty_db, run_id=run_id, companies=[{"id": company_id, "name": "Acme", "feed_type": None}],
+        titles_doc=TITLES_DOC, locations_setting=LOCATIONS, budget_settings=SETTINGS,
+        status=_open_status(), today="2026-09-20", now_iso="2026-09-20T08:00:00", run_claude=fake,
+    ))
+
+    company = run(empty_db.first("SELECT * FROM companies WHERE id = ?", company_id))
+    assert company["feed_type"] == "greenhouse"
+    assert company["careers_url"] == "https://boards.greenhouse.io/acme"
+    assert company["feed_id"] == "acme"
+
+
+def test_run_agent_steps_does_not_overwrite_an_existing_company_feed(empty_db):
+    company_id = _insert_company(empty_db, feed_type="lever", feed_id="acme", careers_url="https://jobs.lever.co/acme")
+    run_id = run(empty_db.run("INSERT INTO runs (kind, started_at, status) VALUES ('daily', '2026-09-20T08:00:00', 'running')"))
+
+    fake = _fake_run_claude({
+        "scout": (
+            '{"sources": [{"company_name": "Acme", "name": "Acme careers", '
+            '"url": "https://boards.greenhouse.io/acme", "kind": "Company career sites", "covers": "Acme"}]}'
+        ),
+        "improvement": '{"search_plan": null, "proposals": [], "title_suggestions": []}',
+    })
+
+    # Passing a company that already has a feed_type wouldn't happen in the
+    # real job (it's filtered to `no_feed_companies` before scouting), but
+    # the guard must hold regardless of how it's called.
+    run(run_agent_steps(
+        empty_db, run_id=run_id, companies=[{"id": company_id, "name": "Acme", "feed_type": "lever"}],
+        titles_doc=TITLES_DOC, locations_setting=LOCATIONS, budget_settings=SETTINGS,
+        status=_open_status(), today="2026-09-20", now_iso="2026-09-20T08:00:00", run_claude=fake,
+    ))
+
+    company = run(empty_db.first("SELECT * FROM companies WHERE id = ?", company_id))
+    assert company["feed_type"] == "lever"
+    assert company["careers_url"] == "https://jobs.lever.co/acme"
+
+
+def test_run_agent_steps_fails_the_scout_step_loudly_when_every_result_is_invalid(empty_db):
+    """A scout call that spent real tokens/searches but returned only
+    unusable entries must show up as a failed step (run summary + alert),
+    not look like a clean "found nothing" run (issue #20)."""
+    _insert_company(empty_db, feed_type=None)
+    run_id = run(empty_db.run("INSERT INTO runs (kind, started_at, status) VALUES ('daily', '2026-09-20T08:00:00', 'running')"))
+
+    fake = _fake_run_claude({
+        "scout": '{"sources": [{"company_name": "Acme", "url": "https://acme.example/careers"}]}',  # missing "name"
+        "improvement": '{"search_plan": null, "proposals": [], "title_suggestions": []}',
+    })
+
+    outcome = run(run_agent_steps(
+        empty_db, run_id=run_id, companies=[{"id": 1, "name": "Acme", "feed_type": None}],
+        titles_doc=TITLES_DOC, locations_setting=LOCATIONS, budget_settings=SETTINGS,
+        status=_open_status(), today="2026-09-20", now_iso="2026-09-20T08:00:00", run_claude=fake,
+    ))
+
+    assert "scout" not in outcome["steps_succeeded"]
+    assert any("scout" in e for e in outcome["errors"])
+    # The call still cost real tokens even though its reply was unusable --
+    # that spend must still be recorded (see `ClaudeOutputError.result`).
+    usage_rows = run(empty_db.all("SELECT step FROM usage"))
+    assert any(r["step"] == "scout" for r in usage_rows)
+    sources = run(empty_db.all("SELECT * FROM sources"))
+    assert sources == []
+
+
+def test_run_agent_steps_keeps_the_good_scout_results_when_only_some_are_invalid(empty_db):
+    _insert_company(empty_db, feed_type=None)
+    run_id = run(empty_db.run("INSERT INTO runs (kind, started_at, status) VALUES ('daily', '2026-09-20T08:00:00', 'running')"))
+
+    fake = _fake_run_claude({
+        "scout": (
+            '{"sources": ['
+            '{"name": "Acme careers", "url": "https://acme.example/careers", "kind": "Company career sites"}, '
+            '{"url": "https://bad.example"}'  # missing "name" -- must not sink the good entry above
+            ']}'
+        ),
+        "improvement": '{"search_plan": null, "proposals": [], "title_suggestions": []}',
+    })
+
+    outcome = run(run_agent_steps(
+        empty_db, run_id=run_id, companies=[{"id": 1, "name": "Acme", "feed_type": None}],
+        titles_doc=TITLES_DOC, locations_setting=LOCATIONS, budget_settings=SETTINGS,
+        status=_open_status(), today="2026-09-20", now_iso="2026-09-20T08:00:00", run_claude=fake,
+    ))
+
+    assert "scout" in outcome["steps_succeeded"]
+    assert outcome["scout_count"] == 1
+    sources = run(empty_db.all("SELECT * FROM sources"))
+    assert len(sources) == 1
+    assert sources[0]["url"] == "https://acme.example/careers"
+
+
 def test_run_agent_steps_records_last_scouted_at_for_the_batch_sent(empty_db):
     company_id = _insert_company(empty_db, feed_type=None, rank=1)
     run_id = run(empty_db.run("INSERT INTO runs (kind, started_at, status) VALUES ('daily', '2026-09-20T08:00:00', 'running')"))
