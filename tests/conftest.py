@@ -10,6 +10,11 @@ SCHEMA_SQL = (ROOT / "db" / "migrations" / "0001_init.sql").read_text(encoding="
 
 if str(API_DIR) not in sys.path:
     sys.path.insert(0, str(API_DIR))
+# api/src/main.py uses plain module imports (e.g. `import companies`) to match
+# how Cloudflare's Python Workers runtime loads it, so api/src must also be on
+# sys.path for those imports to resolve when pytest imports src.main.
+if str(API_DIR / "src") not in sys.path:
+    sys.path.insert(0, str(API_DIR / "src"))
 
 from src.db import SqliteDatabase  # noqa: E402
 
