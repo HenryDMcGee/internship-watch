@@ -108,6 +108,25 @@ def test_build_statements_imports_ranking_as_ranked_companies():
     assert len(ranked_inserts) == len(ranking_rows) == 100
 
 
+def test_map_ranked_company_detects_amazons_feed_from_ranking_csv():
+    # seed/ranking.csv's Amazon row carries a careers_url so seeding sets
+    # feed_type/feed_id from it, the same detection the "Add company" form
+    # uses, instead of leaving Amazon with no known feed.
+    ranking_rows = seed.load_ranking_csv()
+    amazon = next(r for r in ranking_rows if r["name"] == "Amazon")
+    mapped = seed.map_ranked_company(amazon)
+    assert mapped["careers_url"] == "https://www.amazon.jobs"
+    assert mapped["feed_type"] == "amazon_jobs"
+
+
+def test_build_statements_gives_amazon_a_working_feed(empty_db):
+    statements = seed.build_statements()
+    for sql, params in statements:
+        run(empty_db.run(sql, *params))
+    amazon = run(empty_db.first("SELECT * FROM companies WHERE name = 'Amazon'"))
+    assert amazon["feed_type"] == "amazon_jobs"
+
+
 def test_build_statements_flags_unranked_companies_for_review(empty_db):
     statements = seed.build_statements()
     for sql, params in statements:

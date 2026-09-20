@@ -70,3 +70,19 @@ def test_refresh_ranking_updates_and_preserves_pins(empty_db, tmp_path):
 
     snapshots = run(empty_db.all("SELECT * FROM ranking_snapshots"))
     assert len(snapshots) == 2
+
+
+def test_refresh_ranking_detects_feed_for_newly_inserted_company(empty_db, tmp_path):
+    csv_path = tmp_path / "ranking.csv"
+    csv_path.write_text(
+        "rank,name,market_cap_usd_billions,hq_country,as_of_date,source,careers_url\n"
+        "1,Acme,100,US,2027-01-01,manual snapshot,https://boards.greenhouse.io/acme\n",
+        encoding="utf-8",
+    )
+
+    run(refresh_ranking(empty_db, ranking_csv=csv_path, today="2027-01-01"))
+
+    acme = run(empty_db.first("SELECT * FROM companies WHERE name = 'Acme'"))
+    assert acme["careers_url"] == "https://boards.greenhouse.io/acme"
+    assert acme["feed_type"] == "greenhouse"
+    assert acme["feed_id"] == "acme"

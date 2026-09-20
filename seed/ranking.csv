@@ -1,7 +1,7 @@
 # Internship Watch: top 100 tech companies worldwide by market value.
 #
 # Format: one header row, then one row per company:
-#   rank,name,market_cap_usd_billions,hq_country,as_of_date,source
+#   rank,name,market_cap_usd_billions,hq_country,as_of_date,source,careers_url
 # - rank: 1 (largest) to 100, integer, unique.
 # - name: company name as Henry knows it. Matched against seed/companies.json
 #   and existing dashboard companies by a normalized form (lowercase, with
@@ -12,6 +12,17 @@
 # - hq_country: ISO 3166-1 alpha-2 code of the company's headquarters.
 # - as_of_date: ISO date the snapshot represents.
 # - source: short label for where the number came from.
+# - careers_url: optional. When the company's careers page is on a known
+#   feed (Greenhouse, Lever, Ashby, SmartRecruiters, Workday, or
+#   Amazon.jobs), scripts/seed.py and job/ranking.py run it through
+#   job/feeds/detect.py the same way the "Add company" dashboard form does,
+#   and store the resulting feed_type/feed_id so the daily job can read
+#   postings with no Claude involved. Blank for companies whose feed isn't
+#   known yet -- see issue #13: don't guess a board slug here, since a wrong
+#   one silently reads someone else's postings instead of failing loudly.
+#   Filling these in (from a real, confirmed careers link) is exactly what
+#   phase 3's source scout and the "Add company" form's own detection are
+#   for.
 #
 # This is a manually compiled snapshot (see the pull request description for
 # why: no ranking site we found both publishes a clean "top 100 tech
@@ -24,104 +35,104 @@
 #
 # scripts/seed.py loads every row here into the `companies` table with
 # status "ranked", and also stores a copy in `ranking_snapshots` for history.
-rank,name,market_cap_usd_billions,hq_country,as_of_date,source
-1,Apple,3500,US,2026-09-01,manual snapshot
-2,Microsoft,3400,US,2026-09-01,manual snapshot
-3,NVIDIA,3300,US,2026-09-01,manual snapshot
-4,Alphabet,2500,US,2026-09-01,manual snapshot
-5,Amazon,2300,US,2026-09-01,manual snapshot
-6,Meta Platforms,1600,US,2026-09-01,manual snapshot
-7,Broadcom,1300,US,2026-09-01,manual snapshot
-8,TSMC,1200,TW,2026-09-01,manual snapshot
-9,Tesla,1100,US,2026-09-01,manual snapshot
-10,Samsung Electronics,420,KR,2026-09-01,manual snapshot
-11,Oracle,600,US,2026-09-01,manual snapshot
-12,SAP,320,DE,2026-09-01,manual snapshot
-13,ASML,380,NL,2026-09-01,manual snapshot
-14,Tencent,500,CN,2026-09-01,manual snapshot
-15,Alibaba,260,CN,2026-09-01,manual snapshot
-16,Netflix,430,US,2026-09-01,manual snapshot
-17,Salesforce,300,US,2026-09-01,manual snapshot
-18,AMD,280,US,2026-09-01,manual snapshot
-19,Cisco,240,US,2026-09-01,manual snapshot
-20,IBM,230,US,2026-09-01,manual snapshot
-21,Adobe,220,US,2026-09-01,manual snapshot
-22,Intel,100,US,2026-09-01,manual snapshot
-23,Qualcomm,190,US,2026-09-01,manual snapshot
-24,Texas Instruments,180,US,2026-09-01,manual snapshot
-25,ServiceNow,190,US,2026-09-01,manual snapshot
-26,Intuit,180,US,2026-09-01,manual snapshot
-27,Uber,170,US,2026-09-01,manual snapshot
-28,Sony,150,JP,2026-09-01,manual snapshot
-29,Applied Materials,160,US,2026-09-01,manual snapshot
-30,SK Hynix,140,KR,2026-09-01,manual snapshot
-31,Micron,130,US,2026-09-01,manual snapshot
-32,Booking Holdings,150,US,2026-09-01,manual snapshot
-33,PayPal,80,US,2026-09-01,manual snapshot
-34,Shopify,140,CA,2026-09-01,manual snapshot
-35,Palantir,150,US,2026-09-01,manual snapshot
-36,Snowflake,60,US,2026-09-01,manual snapshot
-37,Workday,65,US,2026-09-01,manual snapshot
-38,Autodesk,60,US,2026-09-01,manual snapshot
-39,Dell Technologies,90,US,2026-09-01,manual snapshot
-40,HP Inc.,35,US,2026-09-01,manual snapshot
-41,Hewlett Packard Enterprise,30,US,2026-09-01,manual snapshot
-42,Lam Research,110,US,2026-09-01,manual snapshot
-43,KLA,100,US,2026-09-01,manual snapshot
-44,Arm Holdings,150,GB,2026-09-01,manual snapshot
-45,Infosys,80,IN,2026-09-01,manual snapshot
-46,Tata Consultancy Services,170,IN,2026-09-01,manual snapshot
-47,Xiaomi,100,CN,2026-09-01,manual snapshot
-48,MediaTek,80,TW,2026-09-01,manual snapshot
-49,Baidu,40,CN,2026-09-01,manual snapshot
-50,JD.com,50,CN,2026-09-01,manual snapshot
-51,Spotify,90,SE,2026-09-01,manual snapshot
-52,Block,45,US,2026-09-01,manual snapshot
-53,Stripe,70,US,2026-09-01,manual snapshot
-54,Databricks,60,US,2026-09-01,manual snapshot
-55,OpenAI,150,US,2026-09-01,manual snapshot
-56,Anthropic,60,US,2026-09-01,manual snapshot
-57,DoorDash,80,US,2026-09-01,manual snapshot
-58,Airbnb,85,US,2026-09-01,manual snapshot
-59,Lyft,7,US,2026-09-01,manual snapshot
-60,Pinterest,25,US,2026-09-01,manual snapshot
-61,Snap,18,US,2026-09-01,manual snapshot
-62,Reddit,30,US,2026-09-01,manual snapshot
-63,Atlassian,55,AU,2026-09-01,manual snapshot
-64,Zoom,22,US,2026-09-01,manual snapshot
-65,Dropbox,8,US,2026-09-01,manual snapshot
-66,DocuSign,13,US,2026-09-01,manual snapshot
-67,Twilio,15,US,2026-09-01,manual snapshot
-68,Okta,15,US,2026-09-01,manual snapshot
-69,CrowdStrike,80,US,2026-09-01,manual snapshot
-70,Palo Alto Networks,110,US,2026-09-01,manual snapshot
-71,Fortinet,60,US,2026-09-01,manual snapshot
-72,Zscaler,30,US,2026-09-01,manual snapshot
-73,Cloudflare,45,US,2026-09-01,manual snapshot
-74,Datadog,40,US,2026-09-01,manual snapshot
-75,MongoDB,20,US,2026-09-01,manual snapshot
-76,HubSpot,30,US,2026-09-01,manual snapshot
-77,Roblox,30,US,2026-09-01,manual snapshot
-78,Electronic Arts,40,US,2026-09-01,manual snapshot
-79,Take-Two Interactive,25,US,2026-09-01,manual snapshot
-80,Expedia,20,US,2026-09-01,manual snapshot
-81,eBay,32,US,2026-09-01,manual snapshot
-82,Etsy,6,US,2026-09-01,manual snapshot
-83,Instacart,8,US,2026-09-01,manual snapshot
-84,Coinbase,45,US,2026-09-01,manual snapshot
-85,Robinhood,20,US,2026-09-01,manual snapshot
-86,Visa,560,US,2026-09-01,manual snapshot
-87,Mastercard,450,US,2026-09-01,manual snapshot
-88,Capital One,60,US,2026-09-01,manual snapshot
-89,Walmart Global Tech,700,US,2026-09-01,manual snapshot
-90,Figma,20,US,2026-09-01,manual snapshot
-91,Canva,25,AU,2026-09-01,manual snapshot
-92,Notion,10,US,2026-09-01,manual snapshot
-93,Asana,3,US,2026-09-01,manual snapshot
-94,Rippling,13,US,2026-09-01,manual snapshot
-95,Samsara,20,US,2026-09-01,manual snapshot
-96,Scale AI,14,US,2026-09-01,manual snapshot
-97,Duolingo,10,US,2026-09-01,manual snapshot
-98,Zillow,15,US,2026-09-01,manual snapshot
-99,Indeed,12,US,2026-09-01,manual snapshot
-100,Waymo,45,US,2026-09-01,manual snapshot
+rank,name,market_cap_usd_billions,hq_country,as_of_date,source,careers_url
+1,Apple,3500,US,2026-09-01,manual snapshot,
+2,Microsoft,3400,US,2026-09-01,manual snapshot,
+3,NVIDIA,3300,US,2026-09-01,manual snapshot,
+4,Alphabet,2500,US,2026-09-01,manual snapshot,
+5,Amazon,2300,US,2026-09-01,manual snapshot,https://www.amazon.jobs
+6,Meta Platforms,1600,US,2026-09-01,manual snapshot,
+7,Broadcom,1300,US,2026-09-01,manual snapshot,
+8,TSMC,1200,TW,2026-09-01,manual snapshot,
+9,Tesla,1100,US,2026-09-01,manual snapshot,
+10,Samsung Electronics,420,KR,2026-09-01,manual snapshot,
+11,Oracle,600,US,2026-09-01,manual snapshot,
+12,SAP,320,DE,2026-09-01,manual snapshot,
+13,ASML,380,NL,2026-09-01,manual snapshot,
+14,Tencent,500,CN,2026-09-01,manual snapshot,
+15,Alibaba,260,CN,2026-09-01,manual snapshot,
+16,Netflix,430,US,2026-09-01,manual snapshot,
+17,Salesforce,300,US,2026-09-01,manual snapshot,
+18,AMD,280,US,2026-09-01,manual snapshot,
+19,Cisco,240,US,2026-09-01,manual snapshot,
+20,IBM,230,US,2026-09-01,manual snapshot,
+21,Adobe,220,US,2026-09-01,manual snapshot,
+22,Intel,100,US,2026-09-01,manual snapshot,
+23,Qualcomm,190,US,2026-09-01,manual snapshot,
+24,Texas Instruments,180,US,2026-09-01,manual snapshot,
+25,ServiceNow,190,US,2026-09-01,manual snapshot,
+26,Intuit,180,US,2026-09-01,manual snapshot,
+27,Uber,170,US,2026-09-01,manual snapshot,
+28,Sony,150,JP,2026-09-01,manual snapshot,
+29,Applied Materials,160,US,2026-09-01,manual snapshot,
+30,SK Hynix,140,KR,2026-09-01,manual snapshot,
+31,Micron,130,US,2026-09-01,manual snapshot,
+32,Booking Holdings,150,US,2026-09-01,manual snapshot,
+33,PayPal,80,US,2026-09-01,manual snapshot,
+34,Shopify,140,CA,2026-09-01,manual snapshot,
+35,Palantir,150,US,2026-09-01,manual snapshot,
+36,Snowflake,60,US,2026-09-01,manual snapshot,
+37,Workday,65,US,2026-09-01,manual snapshot,
+38,Autodesk,60,US,2026-09-01,manual snapshot,
+39,Dell Technologies,90,US,2026-09-01,manual snapshot,
+40,HP Inc.,35,US,2026-09-01,manual snapshot,
+41,Hewlett Packard Enterprise,30,US,2026-09-01,manual snapshot,
+42,Lam Research,110,US,2026-09-01,manual snapshot,
+43,KLA,100,US,2026-09-01,manual snapshot,
+44,Arm Holdings,150,GB,2026-09-01,manual snapshot,
+45,Infosys,80,IN,2026-09-01,manual snapshot,
+46,Tata Consultancy Services,170,IN,2026-09-01,manual snapshot,
+47,Xiaomi,100,CN,2026-09-01,manual snapshot,
+48,MediaTek,80,TW,2026-09-01,manual snapshot,
+49,Baidu,40,CN,2026-09-01,manual snapshot,
+50,JD.com,50,CN,2026-09-01,manual snapshot,
+51,Spotify,90,SE,2026-09-01,manual snapshot,
+52,Block,45,US,2026-09-01,manual snapshot,
+53,Stripe,70,US,2026-09-01,manual snapshot,
+54,Databricks,60,US,2026-09-01,manual snapshot,
+55,OpenAI,150,US,2026-09-01,manual snapshot,
+56,Anthropic,60,US,2026-09-01,manual snapshot,
+57,DoorDash,80,US,2026-09-01,manual snapshot,
+58,Airbnb,85,US,2026-09-01,manual snapshot,
+59,Lyft,7,US,2026-09-01,manual snapshot,
+60,Pinterest,25,US,2026-09-01,manual snapshot,
+61,Snap,18,US,2026-09-01,manual snapshot,
+62,Reddit,30,US,2026-09-01,manual snapshot,
+63,Atlassian,55,AU,2026-09-01,manual snapshot,
+64,Zoom,22,US,2026-09-01,manual snapshot,
+65,Dropbox,8,US,2026-09-01,manual snapshot,
+66,DocuSign,13,US,2026-09-01,manual snapshot,
+67,Twilio,15,US,2026-09-01,manual snapshot,
+68,Okta,15,US,2026-09-01,manual snapshot,
+69,CrowdStrike,80,US,2026-09-01,manual snapshot,
+70,Palo Alto Networks,110,US,2026-09-01,manual snapshot,
+71,Fortinet,60,US,2026-09-01,manual snapshot,
+72,Zscaler,30,US,2026-09-01,manual snapshot,
+73,Cloudflare,45,US,2026-09-01,manual snapshot,
+74,Datadog,40,US,2026-09-01,manual snapshot,
+75,MongoDB,20,US,2026-09-01,manual snapshot,
+76,HubSpot,30,US,2026-09-01,manual snapshot,
+77,Roblox,30,US,2026-09-01,manual snapshot,
+78,Electronic Arts,40,US,2026-09-01,manual snapshot,
+79,Take-Two Interactive,25,US,2026-09-01,manual snapshot,
+80,Expedia,20,US,2026-09-01,manual snapshot,
+81,eBay,32,US,2026-09-01,manual snapshot,
+82,Etsy,6,US,2026-09-01,manual snapshot,
+83,Instacart,8,US,2026-09-01,manual snapshot,
+84,Coinbase,45,US,2026-09-01,manual snapshot,
+85,Robinhood,20,US,2026-09-01,manual snapshot,
+86,Visa,560,US,2026-09-01,manual snapshot,
+87,Mastercard,450,US,2026-09-01,manual snapshot,
+88,Capital One,60,US,2026-09-01,manual snapshot,
+89,Walmart Global Tech,700,US,2026-09-01,manual snapshot,
+90,Figma,20,US,2026-09-01,manual snapshot,
+91,Canva,25,AU,2026-09-01,manual snapshot,
+92,Notion,10,US,2026-09-01,manual snapshot,
+93,Asana,3,US,2026-09-01,manual snapshot,
+94,Rippling,13,US,2026-09-01,manual snapshot,
+95,Samsara,20,US,2026-09-01,manual snapshot,
+96,Scale AI,14,US,2026-09-01,manual snapshot,
+97,Duolingo,10,US,2026-09-01,manual snapshot,
+98,Zillow,15,US,2026-09-01,manual snapshot,
+99,Indeed,12,US,2026-09-01,manual snapshot,
+100,Waymo,45,US,2026-09-01,manual snapshot,

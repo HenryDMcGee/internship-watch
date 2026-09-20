@@ -37,7 +37,8 @@ def test_run_stores_matching_posting_and_verifies_it_open(empty_db, monkeypatch)
     result = run(run_module.run(empty_db, kind="daily"))
     assert result["new_count"] == 1
     assert result["companies_checked"] == 1
-    assert result["failed_feeds"] == 0
+    assert result["feed_errors"] == 0
+    assert result["no_source_count"] == 0
 
     postings = run(empty_db.all("SELECT * FROM postings"))
     assert len(postings) == 1
@@ -209,6 +210,56 @@ def test_run_check_request_only_covers_its_companies(empty_db, monkeypatch):
     request = run(empty_db.first("SELECT * FROM check_requests WHERE id = ?", request_id))
     assert request["status"] == "completed"
     assert result["kind"] == "check_now"
+
+
+def test_run_counts_missing_feed_as_no_source_not_an_error(empty_db, monkeypatch):
+    # A company with no feed_type on file (the state every seeded company
+    # started in) has no known source yet -- it's phase 3's source scout's
+    # job, not a broken feed, and must not inflate the error count.
+    _insert_company(empty_db, feed_type=None, feed_id=None)
+
+    result = run(run_module.run(empty_db, kind="daily"))
+    assert result["feed_errors"] == 0
+    assert result["no_source_count"] == 1
+    assert "0 feed error(s)" in result["summary"]
+    assert "1 with no source yet" in result["summary"]
+
+    company = run(empty_db.first("SELECT * FROM companies"))
+    assert company["last_feed_status"] == "no_source"
+    assert company["last_feed_error"] is None
+
+
+def test_run_counts_real_fetch_failure_as_a_feed_error_and_stores_it(empty_db, monkeypatch):
+    _insert_company(empty_db)
+
+    def fake_run_fetcher(company, session=None):
+        return FetchResult(company_id=company["id"], company_name=company["name"], postings=[], error="boards-api.greenhouse.io returned HTTP 404")
+
+    monkeypatch.setattr(run_module, "run_fetcher", fake_run_fetcher)
+
+    result = run(run_module.run(empty_db, kind="daily"))
+    assert result["feed_errors"] == 1
+    assert result["no_source_count"] == 0
+    assert "1 feed error(s)" in result["summary"]
+    assert "0 with no source yet" in result["summary"]
+
+    company = run(empty_db.first("SELECT * FROM companies"))
+    assert company["last_feed_status"] == "error"
+    assert company["last_feed_error"] == "boards-api.greenhouse.io returned HTTP 404"
+
+
+def test_run_marks_successful_feed_check_ok(empty_db, monkeypatch):
+    _insert_company(empty_db)
+
+    def fake_run_fetcher(company, session=None):
+        return FetchResult(company_id=company["id"], company_name=company["name"], postings=[])
+
+    monkeypatch.setattr(run_module, "run_fetcher", fake_run_fetcher)
+    run(run_module.run(empty_db, kind="daily"))
+
+    company = run(empty_db.first("SELECT * FROM companies"))
+    assert company["last_feed_status"] == "ok"
+    assert company["last_feed_error"] is None
 
 
 def test_run_marks_run_row_failed_instead_of_leaving_it_running(empty_db, monkeypatch):

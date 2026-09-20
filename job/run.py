@@ -45,22 +45,43 @@ def today_central():
     return datetime.now(CENTRAL).date() if CENTRAL else datetime.utcnow().date()
 
 
-async def _fetch_and_store(db, companies: list[dict], titles_doc: dict, locations_setting: dict, run_id: int) -> tuple[int, dict[int, bool], dict[int, set[str]]]:
+async def _fetch_and_store(db, companies: list[dict], titles_doc: dict, locations_setting: dict, run_id: int) -> tuple[int, dict[int, bool], dict[int, set[str]], int, int]:
     new_count = 0
     feed_ok: dict[int, bool] = {}
     current_urls: dict[int, set[str]] = {}
+    no_source_count = 0
+    feed_error_count = 0
 
     for company in companies:
         result = run_fetcher(company)
         feed_ok[company["id"]] = result.error is None
         current_urls[company["id"]] = {p.url for p in result.postings if p.url}
 
+        # A company with no feed_type on file has no known source yet -- it's
+        # phase 3's source scout's job to find one, not a broken feed. Only
+        # count it as a real error once we knew where to look and that
+        # lookup failed.
+        if not company.get("feed_type"):
+            feed_status = "no_source"
+            feed_error_text = None
+            no_source_count += 1
+        elif result.error:
+            feed_status = "error"
+            feed_error_text = result.error
+            feed_error_count += 1
+        else:
+            feed_status = "ok"
+            feed_error_text = None
+
         run_stats_id = await db.run(
             """INSERT INTO run_stats (run_id, source_id, query, found, useful)
                VALUES (?, NULL, ?, ?, 0)""",
             run_id, f"{company['name']} ({company.get('feed_type') or 'no feed'})", len(result.postings),
         )
-        await db.run("UPDATE companies SET last_result_at = ? WHERE id = ?", now_iso(), company["id"])
+        await db.run(
+            "UPDATE companies SET last_result_at = ?, last_feed_status = ?, last_feed_error = ? WHERE id = ?",
+            now_iso(), feed_status, feed_error_text, company["id"],
+        )
 
         useful = 0
         for fetched in result.postings:
@@ -96,7 +117,7 @@ async def _fetch_and_store(db, companies: list[dict], titles_doc: dict, location
         if useful:
             await db.run("UPDATE run_stats SET useful = ? WHERE id = ?", useful, run_stats_id)
 
-    return new_count, feed_ok, current_urls
+    return new_count, feed_ok, current_urls, no_source_count, feed_error_count
 
 
 async def _verify_and_prune(db, companies: list[dict], feed_ok: dict[int, bool], current_urls: dict[int, set[str]], browser_budget: BrowserBudget) -> None:
@@ -167,11 +188,15 @@ async def _run_body(db, run_id: int, started_at: str, kind: str, company_ids: li
     else:
         companies = await config.load_companies(db)
 
-    new_count, feed_ok, current_urls = await _fetch_and_store(db, companies, titles_doc, locations_setting, run_id)
+    new_count, feed_ok, current_urls, no_source_count, feed_error_count = await _fetch_and_store(
+        db, companies, titles_doc, locations_setting, run_id
+    )
     await _verify_and_prune(db, companies, feed_ok, current_urls, browser_budget)
 
-    failed_feeds = sum(1 for ok in feed_ok.values() if not ok)
-    summary = f"Checked {len(companies)} companies, {new_count} new posting(s), {failed_feeds} feed error(s)."
+    summary = (
+        f"Checked {len(companies)} companies, {new_count} new posting(s), "
+        f"{feed_error_count} feed error(s), {no_source_count} with no source yet."
+    )
     finished_at = now_iso()
     await db.run(
         "UPDATE runs SET finished_at = ?, status = 'completed', new_count = ?, summary = ? WHERE id = ?",
@@ -185,7 +210,8 @@ async def _run_body(db, run_id: int, started_at: str, kind: str, company_ids: li
         "finished_at": finished_at,
         "new_count": new_count,
         "companies_checked": len(companies),
-        "failed_feeds": failed_feeds,
+        "feed_errors": feed_error_count,
+        "no_source_count": no_source_count,
         "ranking_refresh": ranking_summary,
         "summary": summary,
     }

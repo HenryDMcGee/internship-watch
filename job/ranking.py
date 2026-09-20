@@ -20,7 +20,7 @@ API_SRC = ROOT / "api" / "src"
 if str(API_SRC) not in sys.path:
     sys.path.insert(0, str(API_SRC))
 
-from companies import normalize_company_name  # noqa: E402
+from companies import detect_feed, normalize_company_name  # noqa: E402
 
 REFRESH_MONTHS = {1, 4, 7, 10}
 
@@ -46,6 +46,7 @@ class RankingRow:
     hq_country: str
     as_of_date: str
     source: str
+    careers_url: str | None = None
 
 
 def load_ranking_csv(path: Path = RANKING_CSV) -> list[RankingRow]:
@@ -61,6 +62,7 @@ def load_ranking_csv(path: Path = RANKING_CSV) -> list[RankingRow]:
                 hq_country=row["hq_country"].strip(),
                 as_of_date=row["as_of_date"].strip(),
                 source=row["source"].strip(),
+                careers_url=(row.get("careers_url") or "").strip() or None,
             )
         )
     return rows
@@ -83,11 +85,14 @@ async def refresh_ranking(db, *, ranking_csv: Path = RANKING_CSV, today: str | N
         key = normalize_company_name(row.name)
         existing_row = existing_by_normalized.get(key)
         if existing_row is None:
+            feed_type, feed_id = detect_feed(row.careers_url)
             await db.run(
                 """INSERT INTO companies
-                   (name, status, rank, market_cap_usd, ranking_date, ranking_source, hq_country, added_by, added_at)
-                   VALUES (?, 'ranked', ?, ?, ?, ?, ?, 'quarterly refresh', ?)""",
-                row.name, row.rank, row.market_cap_usd, row.as_of_date, row.source, row.hq_country, today,
+                   (name, status, rank, market_cap_usd, ranking_date, ranking_source, hq_country,
+                    careers_url, feed_type, feed_id, added_by, added_at)
+                   VALUES (?, 'ranked', ?, ?, ?, ?, ?, ?, ?, ?, 'quarterly refresh', ?)""",
+                row.name, row.rank, row.market_cap_usd, row.as_of_date, row.source, row.hq_country,
+                row.careers_url, feed_type, feed_id, today,
             )
             inserted += 1
         else:
