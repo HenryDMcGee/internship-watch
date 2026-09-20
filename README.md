@@ -5,6 +5,7 @@ Finds Summer 2027 MBA product internships every morning and shows them on a priv
 - The approved plan: `docs/plan.md`
 - The rules Claude Code follows here: `CLAUDE.md`
 - Your job titles: `config/titles.json`
+- Deploying to Cloudflare: `docs/deploy.md`
 
 ## Start the build
 
@@ -39,12 +40,22 @@ On a Mac, the `.github` folder and `.gitignore` are hidden in Finder. Press Cmd+
 
 In **Settings**, add a branch rule for `main` that requires a pull request before merging. From now on, nothing reaches `main` without your review.
 
-### 4. Start phase 1
+### 4. Build the four phases
 
-1. Open a new issue. Use the first line of `issues/phase-1.md` as the title and paste everything below the `---` line as the body.
+Each phase has its issue text in `issues/`. Do them in order, and start the next one only after you merge the previous phase's pull request.
+
+For each phase:
+1. Open a new issue. Use the first line of the phase file as the title, and paste everything below the `---` line as the body.
 2. The body ends with `@claude`, which starts Claude Code. Follow along in the **Actions** tab.
-3. Claude replies on the issue and opens a pull request when it's done.
-4. Review it. Comment `@claude` on the pull request to ask for changes. Merge when you're happy.
+3. Review the pull request Claude opens. Comment `@claude` on it to ask for changes, and merge when you're happy.
+4. Do the "after merging" steps listed in the pull request description, then deploy with `docs/deploy.md`.
+
+| Phase | File | Before you open it |
+| --- | --- | --- |
+| 1. Local version | `issues/phase-1.md` | Starter pack pushed, `main` protected |
+| 2. Daily job | `issues/phase-2.md` | Database ID, database token, and account ID saved in GitHub |
+| 3. Claude agent | `issues/phase-3.md` | Routine URL and token saved in GitHub |
+| 4. Automatic deploys | `issues/phase-4.md` | Deploy token saved in GitHub, with R2 permission |
 
 Only your own comments can start Claude. Mentions from anyone else are ignored.
 

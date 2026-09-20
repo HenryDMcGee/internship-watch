@@ -13,8 +13,7 @@ Every morning, find open Summer 2027 MBA internships that match Henry's titles a
 | Display name | Internship Watch |
 | Dashboard address | `https://internship-watch.mcgeehenry.com` (mcgeehenry.com is already in Henry's Cloudflare account, with his website on it) |
 | GitHub repository | `internship-watch` |
-| Cloudflare Pages project | `internship-watch` |
-| Cloudflare Worker | `internship-watch-api` |
+| Cloudflare Worker (dashboard and API) | `internship-watch`, configured in `api/wrangler.toml` |
 | Cloudflare D1 database | `internship-watch-db` |
 | Cloudflare R2 backup bucket | `internship-watch-backups` |
 
@@ -24,8 +23,8 @@ Every morning, find open Summer 2027 MBA internships that match Henry's titles a
 | --- | --- | --- |
 | Daily job | GitHub Actions, Python 3.12 | 08:00 America/Chicago. Scheduled at 13:00 and 14:00 UTC with a guard step. Can also be started by hand. |
 | Check now | GitHub Actions `check-now.yml` | Started by the Worker through GitHub's API. Checks specific companies only. Max 5 per day. |
-| API | Cloudflare Python Worker, FastAPI | Serves `/api/*`. Verifies the Cloudflare Access token on every request. |
-| Dashboard | Cloudflare Pages, static files | `internship-watch.mcgeehenry.com`, same hostname as the API. The subdomain's DNS record must stay proxied. Redirect the default `internship-watch.pages.dev` address to the subdomain. |
+| App | One Cloudflare Python Worker, FastAPI | Serves `/api/*` and the dashboard's static files from `frontend/` through the `ASSETS` binding (`run_worker_first = true`; unmatched paths go to `ASSETS`). Verifies the Cloudflare Access token on every API request. `workers_dev` and preview URLs are off. Developed and deployed with `pywrangler` (`uv run pywrangler dev`, `uv run pywrangler deploy`). Uses the Python version Cloudflare's runtime requires (3.13 at the time of writing). |
+| Address | Worker route | `internship-watch.mcgeehenry.com/*` on the mcgeehenry.com zone, with a proxied `AAAA internship-watch 100::` DNS record added once by Henry. |
 | Database | Cloudflare D1 | The daily job writes through Cloudflare's D1 HTTP API. The Worker uses its D1 binding. |
 | Backups | Cloudflare R2 | Nightly SQL export from the daily job. |
 | Login | Cloudflare Access | Self-hosted application for exactly `internship-watch.mcgeehenry.com`, one-time PIN, Henry's email only. Never on the root `mcgeehenry.com`, which hosts his website. |
@@ -117,16 +116,17 @@ Map the old field names (`firstSeen`, `statusNote`, and so on) to the new schema
    - discovery, classification, translation, and Claude's help on unclear pages
    - source scout and daily improvement
    - Analytics, Budgets, usage tracking, and the Claude routine summary and alerts
-4. **Launch:**
-   - Cloudflare Pages, Worker, and D1 in production at `internship-watch.mcgeehenry.com` behind Access. Henry connects the subdomain once under the Pages project's Custom domains, so the deploy token doesn't need DNS permissions.
-   - the deploy workflow and nightly R2 backups
+4. **Automatic deploys:**
+   - the deploy workflow (`deploy.yml`): on merge to `main`, apply D1 migrations and run `pywrangler deploy`
+   - nightly R2 backups
+   - Henry can deploy by hand any time after phase 1 using `docs/deploy.md`
 
 ## Secrets (never in git)
 
 | Secret | Stored in | Used by |
 | --- | --- | --- |
 | `CLAUDE_CODE_OAUTH_TOKEN` (or `ANTHROPIC_API_KEY`) | GitHub | Building with Claude Code, daily job, Check now |
-| `CLOUDFLARE_DEPLOY_TOKEN` (D1, Pages, and Workers Scripts edit; Workers Routes edit on the mcgeehenry.com zone) | GitHub | Deploys (phase 4) |
+| `CLOUDFLARE_DEPLOY_TOKEN` (D1 edit, Workers Scripts edit, Workers R2 Storage edit, and Workers Routes edit on the mcgeehenry.com zone) | GitHub | Automatic deploys and nightly backups (phase 4) |
 | `CLOUDFLARE_D1_TOKEN` | GitHub | Daily job, Check now (phase 2) |
 | `CLOUDFLARE_ACCOUNT_ID`, `D1_DATABASE_ID` | GitHub | Deploys and daily job |
 | Worker's GitHub token (Actions, Contents, and Pull requests read and write, this repository only) | Cloudflare Worker | Check now and title edits (phase 2). The Worker may only edit `config/titles.json`. |

@@ -8,10 +8,10 @@ Read `CLAUDE.md` and `docs/plan.md` first.
 
 ## Build
 
-- **Project setup:** `pyproject.toml` (Python 3.12), `requirements-dev.txt`, `wrangler.toml` with a D1 binding and Pages or static assets setup using the names in `docs/plan.md` (Worker `internship-watch-api`, database `internship-watch-db`), and a README section for local development.
+- **Project setup:** use the provided `api/wrangler.toml` as is, apart from code it points to. Add `api/pyproject.toml` with FastAPI and the dev dependencies `workers-py` and `workers-runtime-sdk`, the entry point `api/src/main.py`, and a root `requirements-dev.txt` for tests. Local development runs with `uv run pywrangler dev` from `api/`. Add a README section for local development, and keep `docs/deploy.md` accurate.
 - **Database:** `db/migrations/0001_init.sql` with every table in the plan's data model, so later phases don't need to reshape data.
-- **Seed:** `scripts/seed.py` loads everything in `seed/` into the local D1, mapping the old field names to the new schema. Use `seed/settings.json` for the Locations panel, which covers US and JP with remote off.
-- **API:** FastAPI in a Python Worker under `api/`. Endpoints for:
+- **Seed:** `scripts/seed.py` loads everything in `seed/` into the local D1, or into the real database with `--remote` (see `docs/deploy.md` step 5), mapping the old field names to the new schema. Use `seed/settings.json` for the Locations panel, which covers US and JP with remote off.
+- **API:** FastAPI in the Python Worker under `api/`, with a catch-all that passes non-`/api` paths to the `ASSETS` binding so the dashboard loads from `frontend/`. Verify the Cloudflare Access login token on every `/api` request, using `ACCESS_TEAM_DOMAIN` and `ACCESS_AUD`. Endpoints for:
   - postings: list by tab, mark applied, delete, restore
   - sources: list, add, remove
   - companies: list, pin, unpin, add one with an optional careers link, and paste a list with a preview step and a save step

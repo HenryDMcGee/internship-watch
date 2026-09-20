@@ -11,16 +11,17 @@ A private tool that finds Summer 2027 MBA product-type internships every morning
 
 ## Stack
 
-- Python 3.12 everywhere.
+- Python 3.12 for the daily job, scripts, and tests. The API uses the Python version Cloudflare's Python Workers runtime requires (3.13 at the time of writing).
 - Daily job: `job/`, runs on GitHub Actions at 08:00 America/Chicago. The workflow is scheduled at 13:00 and 14:00 UTC, and the first step exits unless it is 08:00 in Chicago.
-- API: FastAPI in a Cloudflare Python Worker, `api/`. Python Workers only support a subset of packages. If something needed won't run there, propose a small TypeScript Worker instead of working around it.
+- App: one Cloudflare Python Worker in `api/`, configured by `api/wrangler.toml` (keep its settings: `workers_dev = false`, `preview_urls = false`, the route, the `ASSETS` and `DB` bindings). FastAPI serves `/api/*` and passes every other path to the `ASSETS` binding. Use `pywrangler`: `uv run pywrangler dev` and `uv run pywrangler deploy`. Python Workers only support packages that run on Pyodide. If something needed won't run there, propose a small TypeScript Worker instead of working around it.
 - Database: Cloudflare D1 (SQLite). Migrations in `db/migrations/`, numbered `0001_*.sql`. Local development uses `wrangler` with a local D1.
-- Dashboard: static HTML, CSS, and JavaScript in `frontend/`, served by Cloudflare Pages. It calls the API at `/api/*` on the same domain. Keep the look of `docs/reference/current-dashboard.html`.
-- Names: repository and folders `internship-watch`; Cloudflare Pages project `internship-watch`, Worker `internship-watch-api`, D1 database `internship-watch-db`, R2 bucket `internship-watch-backups`. Display name "Internship Watch". Dashboard address `internship-watch.mcgeehenry.com`. Never change anything on the root `mcgeehenry.com`, which hosts Henry's website.
+- Dashboard: static HTML, CSS, and JavaScript in `frontend/`, served by the same Worker as static assets. It calls the API at `/api/*` on the same domain. Keep the look of `docs/reference/current-dashboard.html`.
+- Names: repository and folders `internship-watch`; Cloudflare Worker `internship-watch` (dashboard and API), D1 database `internship-watch-db`, R2 bucket `internship-watch-backups`. Display name "Internship Watch". Dashboard address `internship-watch.mcgeehenry.com`. Never change anything on the root `mcgeehenry.com`, which hosts Henry's website.
 - Titles: `config/titles.json`, validated by `config/titles.schema.json` and `scripts/validate_titles.py`. Titles change only through pull requests.
 
 ## Rules
 
+- Deployment steps live in `docs/deploy.md`. Keep it accurate when changing anything about deploys.
 - Never commit secrets, tokens, or keys. Local values go in `.dev.vars` or `.env`, which are gitignored. In code, read secrets from environment variables or Worker bindings.
 - Don't scrape LinkedIn. Prefer company job feeds (Greenhouse, Lever, Ashby, SmartRecruiters, Workday, Amazon.jobs) and public careers pages. Respect sites that block automated browsers; never try to get around a block or a CAPTCHA.
 - Postings are archived, never deleted, unless Henry deletes them.

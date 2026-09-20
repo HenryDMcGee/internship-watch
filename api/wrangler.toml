@@ -1,0 +1,42 @@
+# Cloudflare Worker for Internship Watch: serves the dashboard (static files in
+# ../frontend) and the FastAPI app (src/main.py) from one Worker.
+# Local development: uv run pywrangler dev
+# Deploy:            uv run pywrangler deploy
+# Full steps are in docs/deploy.md.
+
+name = "internship-watch"
+main = "src/main.py"
+compatibility_date = "2026-09-20"
+compatibility_flags = ["python_workers"]
+
+# Only serve on internship-watch.mcgeehenry.com, which Cloudflare Access protects.
+# The workers.dev and preview addresses are turned off because the login doesn't cover them.
+workers_dev = false
+preview_urls = false
+
+# Needs a proxied DNS record for "internship-watch" in the mcgeehenry.com zone
+# (AAAA record pointing to 100::). See docs/deploy.md, step 3.
+routes = [
+  { pattern = "internship-watch.mcgeehenry.com/*", zone_name = "mcgeehenry.com" }
+]
+
+# Dashboard files. Every request reaches FastAPI first, so /api/* routes win;
+# FastAPI hands everything else to the ASSETS binding.
+[assets]
+directory = "../frontend"
+binding = "ASSETS"
+run_worker_first = true
+
+[[d1_databases]]
+binding = "DB"
+database_name = "internship-watch-db"
+# The database ID is not a secret. Find it in Cloudflare under D1, or in the
+# output of: npx wrangler d1 create internship-watch-db
+database_id = "REPLACE_WITH_D1_DATABASE_ID"
+migrations_dir = "../db/migrations"
+
+# Used by the API to verify the Cloudflare Access login on every request.
+# These are not secrets. See docs/deploy.md, step 2.
+[vars]
+ACCESS_TEAM_DOMAIN = "REPLACE_WITH_TEAM_NAME.cloudflareaccess.com"
+ACCESS_AUD = "REPLACE_WITH_ACCESS_APPLICATION_AUD_TAG"
