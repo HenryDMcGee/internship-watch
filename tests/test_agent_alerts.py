@@ -6,10 +6,12 @@ from job.agent.alerts import (
     BUDGET_80,
     CLAUDE_LIMIT,
     CLAUDE_NOT_CONFIGURED,
+    CLAUDE_STEP_ISSUE,
     RUN_FAILED,
     USAGE_SPIKE,
     claude_limit_alert,
     claude_not_configured_alert,
+    claude_step_issue_alert,
     evaluate_budget_alerts,
     evaluate_spike_alert,
     record_alerts,
@@ -73,7 +75,22 @@ def test_claude_not_configured_alert_type_and_severity():
 
 
 def test_all_alert_types_registered():
-    assert ALERT_TYPES == {BUDGET_80, BUDGET_100, USAGE_SPIKE, CLAUDE_LIMIT, RUN_FAILED, CLAUDE_NOT_CONFIGURED}
+    assert ALERT_TYPES == {
+        BUDGET_80, BUDGET_100, USAGE_SPIKE, CLAUDE_LIMIT, RUN_FAILED, CLAUDE_NOT_CONFIGURED, CLAUDE_STEP_ISSUE,
+    }
+
+
+def test_claude_step_issue_alert_is_a_warning_when_something_still_ran():
+    alert = claude_step_issue_alert(["scout: not valid JSON"], no_claude_work_done=False)
+    assert alert.type == CLAUDE_STEP_ISSUE
+    assert alert.severity == "warning"
+    assert "scout: not valid JSON" in alert.message
+
+
+def test_claude_step_issue_alert_is_critical_when_nothing_ran():
+    alert = claude_step_issue_alert(["discovery: timed out", "scout: timed out"], no_claude_work_done=True)
+    assert alert.severity == "critical"
+    assert "No Claude step completed today" in alert.message
 
 
 # -- one per type per day ----------------------------------------------------

@@ -25,9 +25,11 @@ except ImportError:  # pragma: no cover - zoneinfo is stdlib on 3.9+
     ZoneInfo = None  # type: ignore
 
 from job import config
+from job.agent import client as agent_client
 from job.agent.alerts import (
     claude_limit_alert,
     claude_not_configured_alert,
+    claude_step_issue_alert,
     evaluate_budget_alerts,
     evaluate_spike_alert,
     record_alerts,
@@ -198,6 +200,16 @@ async def run(db, *, kind: str = "daily", company_ids: list[int] | None = None) 
     return result
 
 
+def _claude_step_issues(agent_outcome: dict) -> list[str]:
+    """Every skipped-or-failed Claude step in `agent_outcome`, as a
+    human-readable line -- used for both the run summary and the alert, so
+    the two always agree on what went wrong.
+    """
+    issues = [f"{s['step']} skipped ({s['reason']})" for s in agent_outcome.get("steps_skipped") or []]
+    issues += list(agent_outcome.get("errors") or [])
+    return issues
+
+
 async def _run_body(db, run_id: int, started_at: str, kind: str, company_ids: list[int] | None) -> dict:
     ranking_summary = None
     if kind == "daily" and is_quarterly_refresh_day(today_central()):
@@ -227,6 +239,17 @@ async def _run_body(db, run_id: int, started_at: str, kind: str, company_ids: li
         agent_outcome = await run_agent_steps(
             db, run_id=run_id, companies=companies, titles_doc=titles_doc, locations_setting=locations_setting,
             budget_settings=budget_settings, status=status, today=today_str, now_iso=now_iso(),
+            run_summary_so_far={
+                "summary": (
+                    f"Checked {len(companies)} companies, {new_count} new posting(s) so far, "
+                    f"{feed_error_count} feed error(s), {no_source_count} with no source yet."
+                ),
+            },
+            # Looked up on the module here (rather than relying on
+            # `run_agent_steps`'s own default) so tests can swap in a fake
+            # by patching `job.agent.client.run_claude_step` directly,
+            # matching how `run_fetcher` is mocked below.
+            run_claude=agent_client.run_claude_step,
         )
         new_count += agent_outcome["discovery_count"]
         unclear_reader = build_unclear_reader(
@@ -239,7 +262,7 @@ async def _run_body(db, run_id: int, started_at: str, kind: str, company_ids: li
             "discovery_count": 0, "classification_count": 0, "scout_count": 0,
             "steps_skipped": [{"step": "all", "reason": "Claude isn't configured (no "
                                                           "CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY)"}],
-            "claude_limit_hit": False, "errors": [], "title_pr": None,
+            "steps_succeeded": [], "claude_limit_hit": False, "errors": [], "title_pr": None,
         }
 
     await _verify_and_prune(db, companies, feed_ok, current_urls, browser_budget, unclear_reader=unclear_reader)
@@ -256,6 +279,14 @@ async def _run_body(db, run_id: int, started_at: str, kind: str, company_ids: li
         # credentials still completes, but discovery, classification, the
         # source scout, and daily improvement all silently did nothing.
         summary += " Claude steps skipped: no CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY is set."
+    elif kind == "daily" and agent_outcome:
+        # Same principle, for the case credentials ARE set but a step still
+        # didn't run (budget cut it) or ran and failed (a bad CLI call, a
+        # reply that didn't parse): issue #20 was three separate bugs like
+        # this hiding behind a summary that looked clean.
+        step_issues = _claude_step_issues(agent_outcome)
+        if step_issues:
+            summary += " Claude step issues: " + "; ".join(step_issues) + "."
     finished_at = now_iso()
     await db.run(
         "UPDATE runs SET finished_at = ?, status = 'completed', new_count = ?, summary = ? WHERE id = ?",
@@ -311,6 +342,17 @@ async def _finish_daily_run(db, *, run_status: str, run_reason: str | None, agen
             candidates.append(claude_limit_alert("; ".join(agent_outcome.get("errors") or []) or "usage limit reached"))
         if not claude_is_configured():
             candidates.append(claude_not_configured_alert())
+        elif agent_outcome and not agent_outcome.get("claude_limit_hit"):
+            # A limit hit already gets its own, clearer alert above; this
+            # covers everything else that skipped or failed -- budget cuts
+            # (also covered by the budget alerts above, but named here too)
+            # and a step that ran and failed outright. A run doing no Claude
+            # work at all must never look clean (issue #20).
+            step_issues = _claude_step_issues(agent_outcome)
+            if step_issues:
+                candidates.append(claude_step_issue_alert(
+                    step_issues, no_claude_work_done=not agent_outcome.get("steps_succeeded"),
+                ))
         if run_status == "failed":
             candidates.append(run_failed_alert(run_reason or "unknown error"))
 

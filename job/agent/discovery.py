@@ -73,5 +73,5 @@ def run_discovery(
         search_limit_per_run=search_limit_per_run, search_limit_per_company=search_limit_per_company,
     )
     result = run_claude("discovery", prompt, model=resolve_model(model))
-    payload = parse_and_validate(result.text, validate_discovery_output)
+    payload = parse_and_validate(result.text, validate_discovery_output, result=result)
     return payload["results"], result

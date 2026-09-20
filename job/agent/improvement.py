@@ -46,5 +46,5 @@ def run_improvement(
 ) -> tuple[dict, ClaudeStepResult]:
     prompt = build_prompt(run_summary, recent_run_stats, titles_doc)
     result = run_claude("improvement", prompt, model=resolve_model(model))
-    payload = parse_and_validate(result.text, validate_improvement_output)
+    payload = parse_and_validate(result.text, validate_improvement_output, result=result)
     return payload, result

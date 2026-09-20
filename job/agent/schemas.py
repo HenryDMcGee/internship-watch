@@ -11,17 +11,27 @@ import json
 
 
 class ClaudeOutputError(ValueError):
-    pass
+    """Claude's reply wasn't usable JSON. Carries the `ClaudeStepResult` the
+    CLI actually returned (when there was one), so a caller can still record
+    the tokens/searches that call spent even though the answer is being
+    thrown away -- otherwise a step that runs and burns budget but replies
+    with something we can't parse leaves no trace at all (see
+    `pipeline.guarded`).
+    """
+
+    def __init__(self, message: str, *, result=None):
+        super().__init__(message)
+        self.result = result
 
 
-def parse_and_validate(text: str, validator) -> dict:
+def parse_and_validate(text: str, validator, *, result=None) -> dict:
     try:
         payload = json.loads(text)
     except ValueError as exc:
-        raise ClaudeOutputError(f"not valid JSON: {exc}") from exc
+        raise ClaudeOutputError(f"not valid JSON: {exc}", result=result) from exc
     problems = validator(payload)
     if problems:
-        raise ClaudeOutputError("; ".join(problems))
+        raise ClaudeOutputError("; ".join(problems), result=result)
     return payload
 
 

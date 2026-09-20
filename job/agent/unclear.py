@@ -31,5 +31,5 @@ def read_unclear_page(
 ) -> tuple[VerifyDecision, ClaudeStepResult]:
     prompt = build_prompt(page_text)
     result = run_claude("unclear_page", prompt, model=resolve_model(model))
-    payload = parse_and_validate(result.text, validate_unclear_output)
+    payload = parse_and_validate(result.text, validate_unclear_output, result=result)
     return VerifyDecision(decision=payload["decision"], note=payload.get("note")), result

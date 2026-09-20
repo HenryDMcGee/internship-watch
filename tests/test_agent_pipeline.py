@@ -47,6 +47,79 @@ def _insert_company(db, **overrides):
     return run(db.run(f"INSERT INTO companies ({columns}) VALUES ({placeholders})", *row.values()))
 
 
+def test_run_agent_steps_tracks_which_steps_succeeded(empty_db):
+    _insert_company(empty_db, feed_type=None)
+    run_id = run(empty_db.run("INSERT INTO runs (kind, started_at, status) VALUES ('daily', '2026-09-20T08:00:00', 'running')"))
+
+    fake = _fake_run_claude({
+        "discovery": '{"results": []}',
+        "scout": '{"sources": []}',
+        "improvement": '{"search_plan": null, "proposals": [], "title_suggestions": []}',
+    })
+
+    outcome = run(run_agent_steps(
+        empty_db, run_id=run_id, companies=[{"id": 1, "name": "Acme", "feed_type": None}],
+        titles_doc=TITLES_DOC, locations_setting=LOCATIONS, budget_settings=SETTINGS,
+        status=_open_status(), today="2026-09-20", now_iso="2026-09-20T08:00:00", run_claude=fake,
+    ))
+
+    assert set(outcome["steps_succeeded"]) == {"discovery", "scout", "improvement"}
+
+
+def test_run_agent_steps_still_records_usage_when_discovery_reply_is_not_valid_json(empty_db):
+    # A step that ran (and spent real tokens/searches) but replied with
+    # something we can't parse must not vanish without a trace -- that's
+    # exactly what left issue #20's discovery and scout runs invisible.
+    _insert_company(empty_db, feed_type=None)
+    run_id = run(empty_db.run("INSERT INTO runs (kind, started_at, status) VALUES ('daily', '2026-09-20T08:00:00', 'running')"))
+
+    fake = _fake_run_claude({
+        "discovery": "not json at all",
+        "scout": '{"sources": []}',
+        "improvement": '{"search_plan": null, "proposals": [], "title_suggestions": []}',
+    })
+
+    outcome = run(run_agent_steps(
+        empty_db, run_id=run_id, companies=[{"id": 1, "name": "Acme", "feed_type": None}],
+        titles_doc=TITLES_DOC, locations_setting=LOCATIONS, budget_settings=SETTINGS,
+        status=_open_status(), today="2026-09-20", now_iso="2026-09-20T08:00:00", run_claude=fake,
+    ))
+
+    assert outcome["discovery_count"] == 0
+    assert any("discovery" in e for e in outcome["errors"])
+    assert "discovery" not in outcome["steps_succeeded"]
+
+    usage_rows = run(empty_db.all("SELECT step FROM usage ORDER BY id"))
+    assert "discovery" in [r["step"] for r in usage_rows]
+
+
+def test_run_agent_steps_uses_run_summary_so_far_for_improvement_prompt(empty_db):
+    # Querying the `runs` row for its own `summary` column always found
+    # NULL here -- job/run.py doesn't write that column until after every
+    # agent step (including this one) has already run. `run_summary_so_far`
+    # is the caller's own up-to-date description, passed in directly.
+    run_id = run(empty_db.run("INSERT INTO runs (kind, started_at, status) VALUES ('daily', '2026-09-20T08:00:00', 'running')"))
+    captured_prompts = {}
+
+    def fake(step, prompt, *, model):
+        captured_prompts[step] = prompt
+        if step == "improvement":
+            return ClaudeStepResult(
+                step=step, model=model,
+                text='{"search_plan": null, "proposals": [], "title_suggestions": []}',
+            )
+        raise AssertionError(f"unexpected step {step}")
+
+    run(run_agent_steps(
+        empty_db, run_id=run_id, companies=[], titles_doc=TITLES_DOC, locations_setting=LOCATIONS,
+        budget_settings=SETTINGS, status=_open_status(), today="2026-09-20", now_iso="2026-09-20T08:00:00",
+        run_summary_so_far={"summary": "Checked 100 companies, 0 new posting(s), 0 feed error(s), 100 with no source yet."},
+        run_claude=fake,
+    ))
+
+    assert "Checked 100 companies" in captured_prompts["improvement"]
+
+
 def test_run_agent_steps_stores_discovery_results_and_classifies_them(empty_db):
     _insert_company(empty_db, feed_type=None)  # no working feed -> eligible for discovery/scout
     run_id = run(empty_db.run("INSERT INTO runs (kind, started_at, status) VALUES ('daily', '2026-09-20T08:00:00', 'running')"))

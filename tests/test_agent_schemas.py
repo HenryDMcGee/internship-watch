@@ -26,6 +26,26 @@ def test_parse_and_validate_accepts_valid_document():
     assert doc == {"results": []}
 
 
+def test_parse_and_validate_attaches_result_to_error_on_bad_json():
+    sentinel = object()
+    with pytest.raises(ClaudeOutputError) as exc_info:
+        parse_and_validate("not json", validate_discovery_output, result=sentinel)
+    assert exc_info.value.result is sentinel
+
+
+def test_parse_and_validate_attaches_result_to_error_on_invalid_shape():
+    sentinel = object()
+    with pytest.raises(ClaudeOutputError) as exc_info:
+        parse_and_validate('{"nope": true}', validate_discovery_output, result=sentinel)
+    assert exc_info.value.result is sentinel
+
+
+def test_parse_and_validate_error_result_defaults_to_none():
+    with pytest.raises(ClaudeOutputError) as exc_info:
+        parse_and_validate("not json", validate_discovery_output)
+    assert exc_info.value.result is None
+
+
 # -- discovery ----------------------------------------------------------
 
 def test_discovery_output_valid():
