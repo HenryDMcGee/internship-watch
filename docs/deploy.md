@@ -45,6 +45,18 @@ npx wrangler secret put GITHUB_TOKEN
 ```
 Paste the token when prompted. If you skip this step, the dashboard still works, but Check now and title edits return an error until you add it.
 
+### 3b. GitHub Actions secrets for the daily job's Claude steps
+
+The daily job's Claude agent steps (`job/agent/`) run in GitHub Actions, not in the Worker, so these are repository secrets (**Settings**, **Secrets and variables**, **Actions**, **New repository secret**), not `wrangler secret put`:
+
+- **`CLAUDE_CODE_OAUTH_TOKEN`**: from `claude setup-token`, using your Claude subscription. This is the default; set only this one to start.
+- **`ANTHROPIC_API_KEY`**: set this instead (leave `CLAUDE_CODE_OAUTH_TOKEN` unset) to bill Claude calls to an API key instead of your subscription -- switching is just which of the two secrets is set, no code change. Also set the Budgets panel's billing mode to match.
+- **`CLAUDE_ROUTINE_URL`** and **`CLAUDE_ROUTINE_TOKEN`**: the Claude routine (research preview) that receives the daily summary and alerts after every run. Leave both unset to skip sending it; the job still runs and records usage either way.
+
+`GITHUB_TOKEN` for the daily improvement step's title-suggestion pull requests doesn't need setting up -- it's the default Actions token, already scoped by `contents: write` and `pull-requests: write` in `daily-search.yml`.
+
+Until at least one of `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY` is set, the daily job still runs (feeds, matching, verification, pruning) but skips every Claude step.
+
 ### 4. DNS record for the subdomain
 
 The Worker's route needs a proxied DNS record to answer on the subdomain. The record doesn't point at a real server.

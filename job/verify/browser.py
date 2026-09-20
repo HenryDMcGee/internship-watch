@@ -9,6 +9,7 @@ to be installed; only the real daily job does.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Callable
 
 from job.fetchers.base import USER_AGENT
 from job.verify.text_signals import VerifyDecision, classify_text
@@ -38,15 +39,27 @@ def _load_page_text(url: str) -> str:
             browser.close()
 
 
-def check_via_browser(url: str, *, page_text: str | None = None) -> VerifyDecision:
+def check_via_browser(
+    url: str, *, page_text: str | None = None, unclear_reader: Callable[[str], VerifyDecision | None] | None = None
+) -> VerifyDecision:
     """Check whether `url` still shows an open posting.
 
     `page_text` lets tests (and any caller that already has the rendered
-    text) skip launching a real browser.
+    text) skip launching a real browser. `unclear_reader`, if given, is
+    tried when the plain text-signal heuristics can't decide -- phase 3's
+    Claude unclear-page read (see `job/agent/unclear.py` and
+    `job/agent/pipeline.py`, which wraps it with budget gating and error
+    handling before passing it in here). A `None` return from it (skipped,
+    or failed) just keeps the original "unclear" decision.
     """
     if page_text is None:
         try:
             page_text = _load_page_text(url)
         except Exception as exc:  # noqa: BLE001 - blocked/unavailable sites must not stop the run
             return VerifyDecision(decision="unclear", note=f"Browser check failed: {exc}")
-    return classify_text(page_text)
+    decision = classify_text(page_text)
+    if decision.decision == "unclear" and unclear_reader is not None:
+        claude_decision = unclear_reader(page_text)
+        if claude_decision is not None:
+            return claude_decision
+    return decision

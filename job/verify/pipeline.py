@@ -32,6 +32,7 @@ def verify_posting(
     check_structured=check_structured_data,
     check_browser=check_via_browser,
     check_mirror_site=check_mirror,
+    unclear_reader=None,
 ) -> VerifyOutcome:
     user_status = posting.get("user_status")
     user_status_at = posting.get("user_status_at")
@@ -60,7 +61,15 @@ def verify_posting(
 
     # 3. Headless browser, budget permitting.
     if browser_budget.take():
-        browser_result = check_browser(posting["url"])
+        # Only pass `unclear_reader` through when there is one: callers
+        # (and tests) that inject their own `check_browser` don't all
+        # accept that keyword, and the real `check_via_browser` already
+        # defaults it to None.
+        browser_result = (
+            check_browser(posting["url"], unclear_reader=unclear_reader)
+            if unclear_reader is not None
+            else check_browser(posting["url"])
+        )
         if browser_result.decision != "unclear":
             return VerifyOutcome(status=browser_result.decision, verified_via="browser", verified_at=now_iso, note=browser_result.note)
 

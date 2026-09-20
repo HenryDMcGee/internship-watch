@@ -33,6 +33,18 @@ async def load_budget_settings(db) -> dict:
     return row or {}
 
 
+async def load_watchlist_setting(db) -> list[str]:
+    row = await db.first("SELECT value FROM settings WHERE key = 'watchlist'")
+    if not row:
+        return []
+    return json.loads(row["value"])
+
+
+async def load_search_plan(db, plan_date: str) -> dict | None:
+    row = await db.first("SELECT plan FROM search_plans WHERE plan_date = ?", plan_date)
+    return json.loads(row["plan"]) if row else None
+
+
 async def load_companies(db, statuses: tuple[str, ...] = ("ranked", "pinned")) -> list[dict]:
     placeholders = ", ".join("?" for _ in statuses)
     rows = await db.all(f"SELECT * FROM companies WHERE status IN ({placeholders})", *statuses)

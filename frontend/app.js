@@ -10,6 +10,8 @@
     postings: { today: [], earlier: [], archived: [] },
     sources: [],
     companies: [],
+    analytics: null,
+    proposals: [],
   };
 
   function $(id) { return document.getElementById(id); }
@@ -120,18 +122,13 @@
     $("list").hidden = !showList;
     $("filter").hidden = !showList;
     $("sourcesView").hidden = state.tab !== "sources";
-    $("placeholderView").hidden = state.tab !== "analytics" && state.tab !== "proposals";
+    $("analyticsView").hidden = state.tab !== "analytics";
+    $("proposalsView").hidden = state.tab !== "proposals";
 
     if (state.tab === "sources") { renderSources(); return; }
-    if (state.tab === "analytics" || state.tab === "proposals") { renderPlaceholder(); return; }
+    if (state.tab === "analytics") { renderAnalytics(); return; }
+    if (state.tab === "proposals") { renderProposals(); return; }
     renderPostingsList();
-  }
-
-  function renderPlaceholder() {
-    $("placeholderTitle").textContent = state.tab === "analytics" ? "Analytics is coming later" : "Proposals is coming later";
-    $("placeholderText").textContent = state.tab === "analytics"
-      ? "Coverage, source quality, and usage against budget arrive with the Claude agent phase."
-      : "Company and source changes that need your approval will show up here.";
   }
 
   function renderPostingsList() {
@@ -400,6 +397,213 @@
   });
 
   // -------------------------------------------------------------------
+  // Analytics
+  // -------------------------------------------------------------------
+
+  function fmtPct(n) { return Math.round((n || 0) * 100) + "%"; }
+  function fmtUsd(n) { return "$" + (n || 0).toFixed(2); }
+
+  async function loadAnalytics() {
+    try {
+      state.analytics = await apiGet("/analytics");
+    } catch (e) {
+      setStatus("Couldn't load analytics. " + e.message);
+    }
+    render();
+  }
+
+  function fillList(id, items, emptyText, formatItem) {
+    var ul = $(id);
+    ul.textContent = "";
+    if (!items.length) { ul.appendChild(el("li", null, emptyText)); return; }
+    items.forEach(function (item) { ul.appendChild(el("li", null, formatItem(item))); });
+  }
+
+  function renderAnalytics() {
+    var a = state.analytics;
+    var hasData = a && (a.coverage.length || a.usage_by_step.length);
+    $("analyticsEmpty").hidden = !!hasData;
+    $("analyticsBody").hidden = !hasData;
+    if (!a) return;
+
+    var settings = a.budgets || {};
+    var mode = settings.billing_mode === "api_key" ? "API key" : "subscription";
+    $("usageSummary").textContent = "Billing: " + mode + ". Forecast this week: " +
+      (a.forecast.weekly_tokens || 0).toLocaleString() + " tokens. Forecast this month: " + fmtUsd(a.forecast.monthly_usd) + ".";
+    fillList("usageByStep", a.usage_by_step, "No Claude calls recorded yet.", function (u) {
+      return (u.step || "") + " (" + (u.model || "") + "): " + (u.tokens || 0).toLocaleString() + " tokens, " +
+        (u.searches || 0) + " searches, " + fmtUsd(u.usd);
+    });
+
+    fillList("coverageList", a.coverage, "No companies yet.", function (c) {
+      return c.name + ": " + c.posting_count + (c.posting_count === 1 ? " posting" : " postings") +
+        (c.last_feed_status === "no_source" ? " (no source yet)" : "");
+    });
+
+    fillList("sourceQualityList", a.sources, "No sources yet.", function (s) {
+      return s.name + " (" + s.status + "): " + s.found_count + " found, " + fmtPct(s.dead_link_rate) + " dead links";
+    });
+
+    fillList("firstToFindList", a.first_to_find, "No postings found yet.", function (f) {
+      return (f.source_name || "Unknown source") + ": " + f.n + (f.n === 1 ? " posting" : " postings");
+    });
+
+    fillList("perTitleList", a.postings_per_title, "No postings yet.", function (t) {
+      return (t.matched_title || "Unmatched") + ": " + t.n;
+    });
+
+    $("unconfirmedSummary").textContent = a.unconfirmed_count + (a.unconfirmed_count === 1 ? " posting" : " postings") + " not yet confirmed.";
+    fillList("verificationList", a.verification_methods, "Nothing verified yet.", function (v) {
+      return (v.verified_via || "not yet checked") + ": " + v.n;
+    });
+
+    fillList("prunedList", a.pruned, "Nothing archived yet.", function (p) {
+      return (p.archive_reason || "No reason given") + ": " + p.n;
+    });
+
+    fillList("alertHistoryList", a.alerts, "No alerts.", function (al) {
+      return al.type + " (" + al.severity + "): " + al.message + " — " + fmtDate((al.created_at || "").slice(0, 10));
+    });
+  }
+
+  // -------------------------------------------------------------------
+  // Proposals
+  // -------------------------------------------------------------------
+
+  async function loadProposals() {
+    try {
+      var body = await apiGet("/proposals?status=pending");
+      state.proposals = body.proposals;
+    } catch (e) {
+      setStatus("Couldn't load proposals. " + e.message);
+    }
+    render();
+  }
+
+  function proposalSummary(p) {
+    var payload = p.payload || {};
+    if (p.kind === "company") return "Company: " + (payload.action || "change") + " — " + (payload.name || "");
+    if (p.kind === "source") return "New source: " + (payload.name || "") + (payload.url ? " (" + payload.url + ")" : "");
+    if (p.kind === "source_retire") return "Retire source #" + payload.source_id;
+    return p.kind;
+  }
+
+  function renderProposals() {
+    var pending = state.proposals;
+    $("proposalsEmpty").hidden = !!pending.length;
+    var list = $("proposalsList");
+    list.textContent = "";
+    pending.forEach(function (p) {
+      var row = el("div", "row-item");
+      var name = el("div", "name");
+      name.appendChild(document.createTextNode(proposalSummary(p)));
+      if (p.payload && p.payload.reason) name.appendChild(el("span", null, p.payload.reason));
+      row.appendChild(name);
+      var approve = el("button", "btn primary", "Approve");
+      approve.type = "button";
+      approve.addEventListener("click", function () { decideProposal(p, "approve", approve); });
+      row.appendChild(approve);
+      var reject = el("button", "btn del", "Reject");
+      reject.type = "button";
+      reject.addEventListener("click", function () { decideProposal(p, "reject", reject); });
+      row.appendChild(reject);
+      list.appendChild(row);
+    });
+  }
+
+  async function decideProposal(p, action, btn) {
+    btn.disabled = true;
+    try {
+      await apiPost("/proposals/" + p.id + "/" + action);
+      setStatus(action === "approve" ? "Approved." : "Rejected.");
+      await loadProposals();
+    } catch (e) {
+      btn.disabled = false;
+      setStatus("Couldn't " + action + " that proposal. " + e.message);
+    }
+  }
+
+  // -------------------------------------------------------------------
+  // Budgets
+  // -------------------------------------------------------------------
+
+  var BUDGET_FIELDS = {
+    bBillingMode: "billing_mode", bDailyTokens: "daily_token_budget", bDailySearches: "daily_search_budget",
+    bWeeklyTokens: "weekly_token_budget", bDailyUsd: "daily_usd_budget", bMonthlyUsd: "monthly_usd_budget",
+    bSearchPerRun: "search_limit_per_run", bSearchPerCompany: "search_limit_per_company",
+    bBrowserChecks: "browser_checks_per_run", bShareDiscovery: "share_discovery", bShareScout: "share_scout",
+    bShareClassification: "share_classification", bShareImprovement: "share_improvement",
+    bModelDiscovery: "model_discovery", bModelScout: "model_scout",
+    bModelClassification: "model_classification", bModelImprovement: "model_improvement",
+  };
+  var NUMERIC_BUDGET_FIELDS = [
+    "daily_token_budget", "daily_search_budget", "weekly_token_budget", "daily_usd_budget", "monthly_usd_budget",
+    "search_limit_per_run", "search_limit_per_company", "browser_checks_per_run",
+    "share_discovery", "share_scout", "share_classification", "share_improvement",
+  ];
+
+  function fillBudgetsForm(settings) {
+    Object.keys(BUDGET_FIELDS).forEach(function (id) {
+      var field = BUDGET_FIELDS[id];
+      if (settings[field] !== undefined && settings[field] !== null) $(id).value = settings[field];
+    });
+  }
+
+  function readBudgetsForm() {
+    var doc = {};
+    Object.keys(BUDGET_FIELDS).forEach(function (id) {
+      var field = BUDGET_FIELDS[id];
+      var raw = $(id).value;
+      doc[field] = NUMERIC_BUDGET_FIELDS.indexOf(field) !== -1 ? Number(raw) : raw;
+    });
+    return doc;
+  }
+
+  function renderBudgetsHistory(changes) {
+    var ul = $("budgetsHistory");
+    ul.textContent = "";
+    if (!changes.length) { ul.appendChild(el("li", null, "No changes yet.")); return; }
+    changes.forEach(function (c) {
+      ul.appendChild(el("li", null, fmtDate((c.changed_at || "").slice(0, 10)) + ": " + c.field + " " + c.old_value + " → " + c.new_value));
+    });
+  }
+
+  async function loadBudgets() {
+    $("budgetsMsg").textContent = "";
+    try {
+      var body = await apiGet("/budgets");
+      fillBudgetsForm(body.settings || {});
+      $("budgetsForecast").textContent = "Forecast this week: " + (body.forecast.weekly_tokens || 0).toLocaleString() +
+        " tokens. Forecast this month: " + fmtUsd(body.forecast.monthly_usd) + ".";
+      renderBudgetsHistory(body.changes || []);
+    } catch (e) {
+      $("budgetsMsg").textContent = "Couldn't load budgets. " + e.message;
+    }
+  }
+
+  $("openBudgets").addEventListener("click", function () {
+    var dialog = $("budgetsDialog");
+    if (dialog.showModal) dialog.showModal(); else dialog.setAttribute("open", "");
+    loadBudgets();
+  });
+  $("budgetsClose").addEventListener("click", function () { closeDialog($("budgetsDialog")); });
+  $("budgetsSave").addEventListener("click", async function () {
+    $("budgetsSave").disabled = true;
+    $("budgetsMsg").textContent = "Saving…";
+    try {
+      var body = await apiPut("/budgets", { doc: readBudgetsForm() });
+      fillBudgetsForm(body.settings || {});
+      $("budgetsForecast").textContent = "Forecast this week: " + (body.forecast.weekly_tokens || 0).toLocaleString() +
+        " tokens. Forecast this month: " + fmtUsd(body.forecast.monthly_usd) + ".";
+      renderBudgetsHistory(body.changes || []);
+      $("budgetsMsg").textContent = "Saved.";
+    } catch (e) {
+      $("budgetsMsg").textContent = "Couldn't save. " + e.message;
+    }
+    $("budgetsSave").disabled = false;
+  });
+
+  // -------------------------------------------------------------------
   // Tabs and filter
   // -------------------------------------------------------------------
 
@@ -410,6 +614,8 @@
     });
     setStatus("");
     if (t === "sources" && !state.sources.length) loadSources();
+    if (t === "analytics") loadAnalytics();
+    if (t === "proposals") loadProposals();
     render();
   }
   $("tabToday").addEventListener("click", function () { selectTab("today"); });
