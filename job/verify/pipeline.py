@@ -38,10 +38,8 @@ def verify_posting(
     posting_disappeared = feed_checked_ok and not found_in_current_feed
 
     # Henry's Mark open/closed answer sticks unless the posting disappears
-    # from the company's own feed. A user_status without a user_status_at
-    # isn't a real Mark open/closed answer (the API always writes both
-    # together), so it doesn't get sticky protection from the feed check.
-    if user_status in ("open", "closed") and (not posting_disappeared or user_status_at):
+    # from the company's own feed.
+    if user_status in ("open", "closed") and not posting_disappeared:
         return VerifyOutcome(
             status=user_status, verified_via="user", verified_at=user_status_at or now_iso
         )

@@ -101,6 +101,61 @@ def test_run_archives_posting_missing_from_next_feed_check(empty_db, monkeypatch
     assert posting["archive_reason"] == "No longer listed in the company's feed."
 
 
+def test_run_keeps_user_mark_open_status_while_still_in_feed(empty_db, monkeypatch):
+    # A posting Henry marked open must keep that status on later runs as long
+    # as it's still listed in the company's own feed.
+    company_id = _insert_company(empty_db)
+    posting_id = run(empty_db.run(
+        """INSERT INTO postings (company_id, company_name, title, matched_title, url, locations,
+           location_match, first_seen, status, user_status, user_status_at)
+           VALUES (?, 'Acme', 'MBA Product Manager Intern', 'MBA Product Manager Intern',
+                   'https://boards.greenhouse.io/acme/jobs/1', '[]', 'match', '2026-09-19', 'closed',
+                   'open', '2026-09-19T08:00:00')""",
+        company_id,
+    ))
+
+    def fake_run_fetcher(company, session=None):
+        return FetchResult(
+            company_id=company["id"], company_name=company["name"],
+            postings=[FetchedPosting(
+                company_name="Acme", title="MBA Product Manager Intern",
+                url="https://boards.greenhouse.io/acme/jobs/1", location_text="San Francisco, CA",
+            )],
+        )
+
+    monkeypatch.setattr(run_module, "run_fetcher", fake_run_fetcher)
+    run(run_module.run(empty_db, kind="daily"))
+
+    posting = run(empty_db.first("SELECT * FROM postings WHERE id = ?", posting_id))
+    assert posting["status"] == "open"
+    assert posting["verified_via"] == "user"
+
+
+def test_run_overrides_user_mark_open_once_posting_leaves_feed(empty_db, monkeypatch):
+    # The one exception: a Mark open answer stops sticking once the posting
+    # actually disappears from the company's own feed.
+    company_id = _insert_company(empty_db)
+    posting_id = run(empty_db.run(
+        """INSERT INTO postings (company_id, company_name, title, matched_title, url, locations,
+           location_match, first_seen, status, user_status, user_status_at)
+           VALUES (?, 'Acme', 'MBA Product Manager Intern', 'MBA Product Manager Intern',
+                   'https://boards.greenhouse.io/acme/jobs/1', '[]', 'match', '2026-09-19', 'open',
+                   'open', '2026-09-19T08:00:00')""",
+        company_id,
+    ))
+
+    def fake_run_fetcher(company, session=None):
+        return FetchResult(company_id=company["id"], company_name=company["name"], postings=[])
+
+    monkeypatch.setattr(run_module, "run_fetcher", fake_run_fetcher)
+    run(run_module.run(empty_db, kind="daily"))
+
+    posting = run(empty_db.first("SELECT * FROM postings WHERE id = ?", posting_id))
+    assert posting["status"] == "closed"
+    assert posting["verified_via"] == "feed"
+    assert posting["archived_at"] is not None
+
+
 def test_run_prunes_wrong_cycle_posting_even_when_still_open(empty_db, monkeypatch):
     # Old seed data (phase 1) never applied the Summer 2027 cycle rule, so
     # the daily job is what catches wrong-cycle postings already in D1.
