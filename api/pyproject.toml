@@ -1,0 +1,16 @@
+[project]
+name = "internship-watch-api"
+version = "0.1.0"
+description = "Internship Watch: FastAPI app for the Cloudflare Python Worker"
+requires-python = ">=3.13"
+dependencies = [
+    "fastapi",
+    "tzdata",
+]
+
+[tool.uv]
+package = false
+dev-dependencies = [
+    "workers-py",
+    "workers-runtime-sdk",
+]

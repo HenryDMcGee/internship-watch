@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Internship Watch</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<div class="wrap">
+  <div class="top">
+    <div class="brand">Internship Watch</div>
+    <div class="tools">
+      <button class="ghost" id="openTitles" type="button">Titles</button>
+      <button class="ghost" id="openCompanies" type="button">Companies</button>
+      <button class="ghost" id="openLocations" type="button">Locations</button>
+    </div>
+  </div>
+
+  <header class="hero">
+    <h1><span class="dim" id="dateLine"></span><span id="headline">Loading postings</span></h1>
+    <p id="subline"></p>
+  </header>
+
+  <div class="tabs" role="tablist" aria-label="Postings">
+    <button class="tab" role="tab" id="tabToday" aria-selected="true" type="button">New today<span class="n" id="nToday"></span></button>
+    <button class="tab" role="tab" id="tabEarlier" aria-selected="false" type="button">Earlier<span class="n" id="nEarlier"></span></button>
+    <button class="tab" role="tab" id="tabSources" aria-selected="false" type="button">Sources<span class="n" id="nSources"></span></button>
+    <button class="tab" role="tab" id="tabArchived" aria-selected="false" type="button">Archived<span class="n" id="nArchived"></span></button>
+    <button class="tab" role="tab" id="tabAnalytics" aria-selected="false" type="button">Analytics</button>
+    <button class="tab" role="tab" id="tabProposals" aria-selected="false" type="button">Proposals</button>
+  </div>
+  <input class="filter" id="filter" type="search" placeholder="Filter by company, title, or location" aria-label="Filter postings">
+
+  <ul class="list" id="list" aria-live="polite"></ul>
+
+  <section id="sourcesView" hidden>
+    <div id="srcGroups"></div>
+    <div class="panel">
+      <h2>Add a site</h2>
+      <p class="sub" style="margin:0 0 10px;color:var(--muted);font-size:14px">It's included in the next search.</p>
+      <div class="addform">
+        <input id="addName" type="text" placeholder="Site name" aria-label="Site name">
+        <input id="addUrl" type="url" placeholder="https://" aria-label="Site address">
+        <button class="btn primary" id="addBtn" type="button">Add site</button>
+      </div>
+    </div>
+  </section>
+
+  <section id="placeholderView" hidden>
+    <div class="empty">
+      <strong id="placeholderTitle">Coming later</strong>
+      <span id="placeholderText"></span>
+    </div>
+  </section>
+
+  <div class="status" id="status"></div>
+
+  <div class="foot">
+    <p>Postings stay here until you delete them. Deleted postings move to Archived and can be restored. Closed postings are hidden, not deleted.</p>
+  </div>
+</div>
+
+<dialog id="titlesDialog" aria-labelledby="titlesTitle">
+  <div class="sheet">
+    <h2 id="titlesTitle">Titles</h2>
+    <p>Read only for now. Titles change through <code>config/titles.json</code> and a pull request.</p>
+    <div id="titlesBody"></div>
+    <div class="row">
+      <span class="spacer"></span>
+      <button class="btn" id="titlesClose" type="button">Close</button>
+    </div>
+  </div>
+</dialog>
+
+<dialog id="companiesDialog" aria-labelledby="companiesTitle">
+  <div class="sheet">
+    <h2 id="companiesTitle">Companies</h2>
+    <p>The top 100 tech companies worldwide by market value, plus anything you've pinned.</p>
+
+    <div id="reviewSection" hidden>
+      <h3>Needs a decision</h3>
+      <p style="margin-top:-4px">Not in the current ranking. Pin to keep watching, or remove.</p>
+      <div id="reviewList"></div>
+    </div>
+
+    <h3>On the list</h3>
+    <div id="activeList"></div>
+
+    <div id="removedSection" hidden>
+      <button class="btn" id="toggleRemoved" type="button">Show removed companies</button>
+      <div id="removedList" hidden></div>
+    </div>
+
+    <h3>Add a company</h3>
+    <div class="addform">
+      <input id="companyName" type="text" placeholder="Company name" aria-label="Company name">
+      <input id="companyUrl" type="url" placeholder="Careers link (optional)" aria-label="Careers link">
+      <button class="btn primary" id="companyAddBtn" type="button">Add</button>
+    </div>
+
+    <h3>Paste a list</h3>
+    <p style="margin-top:-4px">One company per line. Add a careers link after a comma to detect its feed.</p>
+    <textarea id="pasteText" spellcheck="false" style="min-height:16vh"></textarea>
+    <div class="row">
+      <button class="btn" id="pastePreviewBtn" type="button">Preview</button>
+    </div>
+    <div id="pastePreviewResult"></div>
+
+    <div class="row">
+      <span class="spacer"></span>
+      <button class="btn" id="companiesClose" type="button">Close</button>
+    </div>
+    <div class="msg" id="companiesMsg"></div>
+  </div>
+</dialog>
+
+<dialog id="locationsDialog" aria-labelledby="locationsTitle">
+  <div class="sheet">
+    <h2 id="locationsTitle">Locations</h2>
+    <p>Postings outside these locations are saved but hidden.</p>
+    <div class="checkrow locked">
+      <input type="checkbox" id="locUS" checked disabled>
+      <label for="locUS">United States (always on)</label>
+    </div>
+    <div class="checkrow">
+      <input type="checkbox" id="locJP">
+      <label for="locJP">Japan</label>
+    </div>
+    <div class="checkrow">
+      <input type="checkbox" id="locRemote">
+      <label for="locRemote">Include remote postings</label>
+    </div>
+    <div class="row">
+      <button class="btn primary" id="locationsSave" type="button">Save</button>
+      <span class="spacer"></span>
+      <button class="btn" id="locationsClose" type="button">Close</button>
+    </div>
+    <div class="msg" id="locationsMsg"></div>
+  </div>
+</dialog>
+
+<script src="/app.js"></script>
+</body>
+</html>

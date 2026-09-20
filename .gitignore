@@ -13,3 +13,6 @@ __pycache__/
 .pytest_cache/
 dist/
 .DS_Store
+
+# Generated at dev/deploy time by scripts/bundle_titles.py
+api/src/titles.json

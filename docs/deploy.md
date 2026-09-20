@@ -64,7 +64,13 @@ cd api
 ```
 
 ### 6. Deploy the Worker
+
+The Worker only ships files under `api/`, so refresh its copy of the titles
+first (`/api/titles` reads that copy, never the repository root):
 ```powershell
+cd ..
+python scripts/bundle_titles.py
+cd api
 uv run pywrangler deploy
 ```
 
@@ -77,7 +83,8 @@ uv run pywrangler deploy
 
 After merging a pull request:
 1. If it added files in `db/migrations/`, run step 4.
-2. Run step 6.
+2. If it changed `config/titles.json`, or you're not sure, run `python scripts/bundle_titles.py` from the repository root before step 6.
+3. Run step 6.
 
 To go back to the previous version:
 ```powershell

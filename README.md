@@ -66,3 +66,33 @@ Building a phase is a long Claude Code session on your Claude subscription. It c
 ## Seed data
 
 `seed/` holds a snapshot of the dashboard you use today, taken September 19, 2026: 9 postings, 30 sources, 2 search log entries, 100 companies, and your settings (US and Japan). Phase 1 loads it into the local database.
+
+## Local development
+
+Requires **Node.js** (current LTS, for `wrangler`) and **uv** (for Python Workers; see `docs/deploy.md`'s "Before you start" for the install command). Sign in to Cloudflare once with `npx wrangler login` from `api/`.
+
+From the repository root:
+
+```bash
+cd api
+npx wrangler d1 migrations apply internship-watch-db --local
+cd ..
+python scripts/bundle_titles.py
+python scripts/seed.py
+cd api
+uv run pywrangler dev
+```
+
+This creates the local D1 tables, copies `config/titles.json` for the API to serve, loads the seed data (9 postings with 3 closed and hidden, 30 sources, 2 search log entries, the ranked companies, and the locations panel), and starts the dashboard and API. Open the address `pywrangler` prints.
+
+Cloudflare Access isn't in front of a local server, so there's no login token to check there. The API skips the check when `ACCESS_TEAM_DOMAIN` or `ACCESS_AUD` is empty; leave `api/.dev.vars` (gitignored) unset, or set both to empty strings there, for local development. `api/wrangler.toml`'s committed `[vars]` values are for the real deployment and always take effect once deployed.
+
+To re-seed from scratch, delete `api/.wrangler/` (the local D1 state) and repeat the steps above.
+
+### Running tests
+
+```bash
+pip install -r requirements-dev.txt
+pytest
+python scripts/validate_titles.py
+```
