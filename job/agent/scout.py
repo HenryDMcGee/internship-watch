@@ -63,7 +63,7 @@ def run_scout(
         return [], None
     prompt = build_prompt(companies, search_limit_per_run=search_limit_per_run)
     result = run_claude("scout", prompt, model=resolve_model(model))
-    payload = parse_and_validate(result.text, validate_scout_output)
+    payload = parse_and_validate(result.text, validate_scout_output, result=result)
     return payload["sources"], result
 
 

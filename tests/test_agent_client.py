@@ -3,6 +3,8 @@ import subprocess
 import pytest
 
 from job.agent.client import (
+    DEFAULT_TIMEOUT_SECONDS,
+    STEP_TIMEOUT_SECONDS,
     ClaudeCallError,
     ClaudeLimitError,
     STEP_TOOLS,
@@ -106,6 +108,40 @@ def test_run_claude_step_times_out():
 
     with pytest.raises(ClaudeCallError):
         run_claude_step("classification", "prompt", model="haiku", runner=runner, timeout=1)
+
+
+def test_run_claude_step_gives_web_search_steps_a_longer_timeout_by_default():
+    captured = {}
+
+    def runner(args, **kwargs):
+        captured["timeout"] = kwargs.get("timeout")
+        return subprocess.CompletedProcess(args, 0, stdout=_json_result("{}"), stderr="")
+
+    run_claude_step("discovery", "prompt", model="sonnet", runner=runner)
+    assert captured["timeout"] == STEP_TIMEOUT_SECONDS["discovery"]
+    assert captured["timeout"] > DEFAULT_TIMEOUT_SECONDS
+
+
+def test_run_claude_step_uses_default_timeout_for_text_only_steps():
+    captured = {}
+
+    def runner(args, **kwargs):
+        captured["timeout"] = kwargs.get("timeout")
+        return subprocess.CompletedProcess(args, 0, stdout=_json_result("{}"), stderr="")
+
+    run_claude_step("classification", "prompt", model="haiku", runner=runner)
+    assert captured["timeout"] == DEFAULT_TIMEOUT_SECONDS
+
+
+def test_run_claude_step_explicit_timeout_overrides_the_per_step_default():
+    captured = {}
+
+    def runner(args, **kwargs):
+        captured["timeout"] = kwargs.get("timeout")
+        return subprocess.CompletedProcess(args, 0, stdout=_json_result("{}"), stderr="")
+
+    run_claude_step("discovery", "prompt", model="sonnet", runner=runner, timeout=42)
+    assert captured["timeout"] == 42
 
 
 def test_resolve_model_accepts_sonnet_and_haiku():

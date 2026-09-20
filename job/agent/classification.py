@@ -57,5 +57,5 @@ def run_classification(
         return [], None
     prompt = build_prompt(postings, titles_doc, locations_setting)
     result = run_claude("classification", prompt, model=resolve_model(model))
-    payload = parse_and_validate(result.text, validate_classification_output)
+    payload = parse_and_validate(result.text, validate_classification_output, result=result)
     return payload["decisions"], result

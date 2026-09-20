@@ -20,6 +20,7 @@ from job.agent.budgets import BudgetStatus
 from job.agent.client import ClaudeLimitError
 from job.agent.client import run_claude_step as _default_run_claude
 from job.agent.github_pr import github_client_from_env
+from job.agent.schemas import ClaudeOutputError
 from job.agent.titles_pr import open_title_suggestions_pr
 from job.agent.usage import record_usage
 from job.config import load_search_plan, load_watchlist_setting
@@ -29,11 +30,12 @@ from job.locations import location_match as compute_location_match
 async def run_agent_steps(
     db, *, run_id: int, companies: list[dict], titles_doc: dict, locations_setting: dict,
     budget_settings: dict, status: BudgetStatus, today: str, now_iso: str,
+    run_summary_so_far: dict | None = None,
     run_claude=_default_run_claude,
 ) -> dict:
     outcome = {
         "discovery_count": 0, "classification_count": 0, "scout_count": 0,
-        "steps_skipped": [], "claude_limit_hit": False, "errors": [], "title_pr": None,
+        "steps_skipped": [], "steps_succeeded": [], "claude_limit_hit": False, "errors": [], "title_pr": None,
     }
 
     async def record(step: str, result) -> None:
@@ -53,9 +55,19 @@ async def run_agent_steps(
         try:
             value = await fn()
             steps_succeeded.add(step)
+            outcome["steps_succeeded"].append(step)
             return value
         except ClaudeLimitError as exc:
             outcome["claude_limit_hit"] = True
+            outcome["errors"].append(f"{step}: {exc}")
+            return None
+        except ClaudeOutputError as exc:
+            # The CLI call itself worked and spent real tokens/searches --
+            # only the reply it came back with couldn't be used. Record that
+            # spend before giving up, or a step that ran (and cost budget)
+            # leaves no trace anywhere the usage table is read from.
+            if exc.result is not None:
+                await record(step, exc.result)
             outcome["errors"].append(f"{step}: {exc}")
             return None
         except Exception as exc:  # noqa: BLE001 - a broken Claude call (bad JSON, missing CLI, a
@@ -121,10 +133,15 @@ async def run_agent_steps(
             await _mark_companies_scouted(db, scout_batch, now_iso=now_iso)
 
     async def do_improvement():
-        run_row = await db.first("SELECT * FROM runs WHERE id = ?", run_id)
+        # Not `SELECT * FROM runs WHERE id = ?` -- at this point in the daily
+        # job the run row's own `summary` column is still NULL (job/run.py
+        # only writes it after this whole function returns), so that query
+        # always fed the model a "(no summary)" placeholder instead of what
+        # actually happened today. `run_summary_so_far` is what the caller
+        # already knows (feed results, mostly) before Claude gets involved.
         recent_stats = await db.all("SELECT * FROM run_stats WHERE run_id = ?", run_id)
         payload, result = improvement.run_improvement(
-            dict(run_row or {}), recent_stats, titles_doc,
+            dict(run_summary_so_far or {}), recent_stats, titles_doc,
             model=budget_settings.get("model_improvement", "sonnet"),
             run_claude=run_claude,
         )
@@ -158,6 +175,13 @@ def build_unclear_reader(*, status: BudgetStatus, model: str, on_usage, on_error
             return None
         try:
             decision, result = unclear_mod.read_unclear_page(page_text, model=model, run_claude=run_claude)
+        except ClaudeOutputError as exc:
+            # Same reasoning as `guarded`: the call spent tokens even though
+            # its reply couldn't be used, so still report that usage.
+            if exc.result is not None:
+                on_usage(exc.result)
+            on_error(exc)
+            return None
         except Exception as exc:  # noqa: BLE001 - a failed read must fall back to "unclear", not crash verification
             on_error(exc)
             return None

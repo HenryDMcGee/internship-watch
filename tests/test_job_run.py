@@ -3,6 +3,8 @@ import asyncio
 import pytest
 
 import job.run as run_module
+from job.agent import client as agent_client
+from job.agent.client import ClaudeStepResult
 from job.fetchers import FetchResult
 from job.models import FetchedPosting
 
@@ -312,6 +314,79 @@ def test_check_now_run_without_claude_credentials_does_not_alert(empty_db, monke
     run(run_module.run_check_request(empty_db, request_id))
 
     assert run(empty_db.all("SELECT * FROM alerts")) == []
+
+
+def test_daily_run_actually_calls_discovery_and_scout_for_no_source_companies(empty_db, monkeypatch):
+    # Confirms discovery and the scout run (and record their usage and
+    # results) end to end through job.run.run(), not just through
+    # job.agent.pipeline directly -- issue #20's bug was only visible at
+    # this level, since job.run.run() is what the daily workflow calls.
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "test-token")
+    _insert_company(empty_db, feed_type=None, feed_id=None)
+
+    def fake_run_fetcher(company, session=None):
+        return FetchResult(company_id=company["id"], company_name=company["name"], postings=[])
+
+    monkeypatch.setattr(run_module, "run_fetcher", fake_run_fetcher)
+
+    def fake_run_claude_step(step, prompt, *, model, **kwargs):
+        text = {
+            "discovery": '{"results": []}',
+            "scout": '{"sources": [{"company_name": "Acme", "name": "Acme careers", '
+                     '"url": "https://acme.example/careers", "kind": "Company career sites", "covers": "Acme"}]}',
+            "improvement": '{"search_plan": null, "proposals": [], "title_suggestions": []}',
+        }[step]
+        return ClaudeStepResult(step=step, model=model, text=text)
+
+    monkeypatch.setattr(agent_client, "run_claude_step", fake_run_claude_step)
+
+    result = run(run_module.run(empty_db, kind="daily"))
+
+    usage_steps = [r["step"] for r in run(empty_db.all("SELECT step FROM usage ORDER BY id"))]
+    assert "discovery" in usage_steps
+    assert "scout" in usage_steps
+
+    sources = run(empty_db.all("SELECT * FROM sources"))
+    assert len(sources) == 1
+
+    assert "Claude step issues" not in result["summary"]
+    assert run(empty_db.all("SELECT * FROM alerts")) == []
+
+
+def test_daily_run_flags_it_when_discovery_and_scout_do_not_actually_run(empty_db, monkeypatch):
+    # Regression for issue #20: Henry's run 8 recorded a single Claude call
+    # (improvement) even though all 100 companies had no source yet --
+    # discovery and the scout had failed, but the run summary still read
+    # "0 with no source yet" ... clean, and nothing alerted. A daily run
+    # that does no discovery/scout work must never look clean.
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "test-token")
+    _insert_company(empty_db, feed_type=None, feed_id=None)
+
+    def fake_run_fetcher(company, session=None):
+        return FetchResult(company_id=company["id"], company_name=company["name"], postings=[])
+
+    monkeypatch.setattr(run_module, "run_fetcher", fake_run_fetcher)
+
+    def fake_run_claude_step(step, prompt, *, model, **kwargs):
+        if step in ("discovery", "scout"):
+            raise RuntimeError(f"{step} step timed out after 900s")
+        return ClaudeStepResult(
+            step=step, model=model, text='{"search_plan": null, "proposals": [], "title_suggestions": []}',
+        )
+
+    monkeypatch.setattr(agent_client, "run_claude_step", fake_run_claude_step)
+
+    result = run(run_module.run(empty_db, kind="daily"))
+
+    usage_steps = [r["step"] for r in run(empty_db.all("SELECT step FROM usage ORDER BY id"))]
+    assert "discovery" not in usage_steps
+    assert "scout" not in usage_steps
+
+    assert "discovery" in result["summary"]
+    assert "scout" in result["summary"]
+
+    alerts = run(empty_db.all("SELECT * FROM alerts"))
+    assert any(a["type"] == "claude_step_issue" for a in alerts)
 
 
 def test_run_marks_run_row_failed_instead_of_leaving_it_running(empty_db, monkeypatch):

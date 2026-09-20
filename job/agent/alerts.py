@@ -16,8 +16,11 @@ USAGE_SPIKE = "usage_spike"
 CLAUDE_LIMIT = "claude_limit"
 RUN_FAILED = "run_failed"
 CLAUDE_NOT_CONFIGURED = "claude_not_configured"
+CLAUDE_STEP_ISSUE = "claude_step_issue"
 
-ALERT_TYPES = frozenset({BUDGET_80, BUDGET_100, USAGE_SPIKE, CLAUDE_LIMIT, RUN_FAILED, CLAUDE_NOT_CONFIGURED})
+ALERT_TYPES = frozenset({
+    BUDGET_80, BUDGET_100, USAGE_SPIKE, CLAUDE_LIMIT, RUN_FAILED, CLAUDE_NOT_CONFIGURED, CLAUDE_STEP_ISSUE,
+})
 
 
 @dataclass
@@ -52,6 +55,22 @@ def claude_limit_alert(message: str) -> AlertCandidate:
 
 def run_failed_alert(message: str) -> AlertCandidate:
     return AlertCandidate(RUN_FAILED, "critical", f"The daily run failed: {message}")
+
+
+def claude_step_issue_alert(details: list[str], *, no_claude_work_done: bool) -> AlertCandidate:
+    """A Claude step was skipped or failed today, even though Claude is
+    configured and budget isn't the reason. Fires whenever `agent_outcome`
+    (see `pipeline.run_agent_steps`) has anything in `errors` or
+    `steps_skipped` -- three separate bugs hid behind those two lists going
+    unreported (issue #20): a skipped or failed step must never look like a
+    clean run. Critical when nothing at all succeeded that day (discovery,
+    classification, the scout, and daily improvement all skipped or failed),
+    since that's a run that did no Claude work while looking otherwise
+    normal; a warning when it's a partial issue among steps that did run.
+    """
+    severity = "critical" if no_claude_work_done else "warning"
+    lead = "No Claude step completed today" if no_claude_work_done else "A Claude step was skipped or failed today"
+    return AlertCandidate(CLAUDE_STEP_ISSUE, severity, f"{lead}: {'; '.join(details)}")
 
 
 def claude_not_configured_alert() -> AlertCandidate:

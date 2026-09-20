@@ -30,6 +30,19 @@ STEP_TOOLS: dict[str, tuple[str, ...]] = {
     "improvement": (),
 }
 
+# Discovery and the scout can each spend a whole run's search budget (up to
+# `search_limit_per_run` searches, each with its own page fetches), which
+# routinely takes much longer than a single text-in/JSON-out call. The old
+# one-size-fits-all 300s timeout meant those two steps reliably timed out
+# before finishing while the tool-free steps never came close -- silently,
+# since a timeout is caught the same as any other Claude error (see
+# `pipeline.guarded`). Steps not listed here fall back to
+# `DEFAULT_TIMEOUT_SECONDS`.
+STEP_TIMEOUT_SECONDS: dict[str, int] = {
+    "discovery": 900,
+    "scout": 900,
+}
+
 # Substrings that mark a CLI failure as an account/rate limit rather than a
 # bug, so the caller can raise a usage-limit alert instead of a plain error.
 _LIMIT_PHRASES = ("usage limit", "rate limit", "quota", "usage cap")
@@ -82,11 +95,13 @@ def run_claude_step(
     *,
     model: str,
     system_prompt: str | None = None,
-    timeout: int = DEFAULT_TIMEOUT_SECONDS,
+    timeout: int | None = None,
     runner: Runner = subprocess.run,
 ) -> ClaudeStepResult:
     if step not in STEP_TOOLS:
         raise ValueError(f"unknown agent step {step!r}")
+    if timeout is None:
+        timeout = STEP_TIMEOUT_SECONDS.get(step, DEFAULT_TIMEOUT_SECONDS)
 
     args = [
         CLAUDE_BIN, "-p", prompt, "--output-format", "json", "--model", model,
