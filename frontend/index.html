@@ -17,6 +17,7 @@
       <button class="ghost" id="openTitles" type="button">Titles</button>
       <button class="ghost" id="openCompanies" type="button">Companies</button>
       <button class="ghost" id="openLocations" type="button">Locations</button>
+      <button class="ghost" id="openBudgets" type="button">Budgets</button>
     </div>
   </div>
 
@@ -50,11 +51,55 @@
     </div>
   </section>
 
-  <section id="placeholderView" hidden>
-    <div class="empty">
-      <strong id="placeholderTitle">Coming later</strong>
-      <span id="placeholderText"></span>
+  <section id="analyticsView" hidden>
+    <div id="analyticsEmpty" class="empty" hidden>
+      <strong>Nothing to show yet</strong>
+      <span>Analytics fill in once the daily search has run.</span>
     </div>
+    <div id="analyticsBody" hidden>
+      <div class="panel">
+        <h2>Usage against budget</h2>
+        <p class="sub" id="usageSummary"></p>
+        <ul id="usageByStep"></ul>
+      </div>
+      <div class="panel">
+        <h2>Coverage per company</h2>
+        <ul id="coverageList"></ul>
+      </div>
+      <div class="panel">
+        <h2>Source quality</h2>
+        <ul id="sourceQualityList"></ul>
+      </div>
+      <div class="panel">
+        <h2>First to find</h2>
+        <ul id="firstToFindList"></ul>
+      </div>
+      <div class="panel">
+        <h2>Postings per title</h2>
+        <ul id="perTitleList"></ul>
+      </div>
+      <div class="panel">
+        <h2>Verification methods</h2>
+        <p class="sub" id="unconfirmedSummary"></p>
+        <ul id="verificationList"></ul>
+      </div>
+      <div class="panel">
+        <h2>Pruned postings</h2>
+        <ul id="prunedList"></ul>
+      </div>
+      <div class="panel">
+        <h2>Alert history</h2>
+        <ul id="alertHistoryList"></ul>
+      </div>
+    </div>
+  </section>
+
+  <section id="proposalsView" hidden>
+    <div id="proposalsEmpty" class="empty" hidden>
+      <strong>Nothing pending</strong>
+      <span>Company and source changes Claude suggests will show up here for you to approve or reject.</span>
+    </div>
+    <div id="proposalsList"></div>
   </section>
 
   <div class="status" id="status"></div>
@@ -121,6 +166,72 @@
       <button class="btn" id="companiesClose" type="button">Close</button>
     </div>
     <div class="msg" id="companiesMsg"></div>
+  </div>
+</dialog>
+
+<dialog id="budgetsDialog" aria-labelledby="budgetsTitle">
+  <div class="sheet">
+    <h2 id="budgetsTitle">Budgets</h2>
+    <p>Daily, weekly, and monthly limits for Claude calls, and how each day's budget splits across steps. Step shares must add up to 100%.</p>
+
+    <h3>Billing</h3>
+    <div class="addform" style="grid-template-columns:1fr">
+      <label>Billing mode
+        <select id="bBillingMode">
+          <option value="subscription">Subscription (tokens and searches)</option>
+          <option value="api_key">API key (dollars)</option>
+        </select>
+      </label>
+    </div>
+
+    <h3>Daily, weekly, and monthly limits</h3>
+    <div class="addform">
+      <label>Daily tokens <input id="bDailyTokens" type="number" min="0"></label>
+      <label>Daily searches <input id="bDailySearches" type="number" min="0"></label>
+      <label>Weekly tokens <input id="bWeeklyTokens" type="number" min="0"></label>
+      <label>Daily $ <input id="bDailyUsd" type="number" min="0" step="0.01"></label>
+      <label>Monthly $ <input id="bMonthlyUsd" type="number" min="0" step="0.01"></label>
+    </div>
+
+    <h3>Search and browser limits</h3>
+    <div class="addform">
+      <label>Searches per run <input id="bSearchPerRun" type="number" min="0"></label>
+      <label>Searches per company <input id="bSearchPerCompany" type="number" min="0"></label>
+      <label>Browser checks per run <input id="bBrowserChecks" type="number" min="0"></label>
+    </div>
+
+    <h3>Step shares and models</h3>
+    <div class="addform">
+      <label>Discovery share <input id="bShareDiscovery" type="number" min="0" max="1" step="0.01"></label>
+      <label>Discovery model
+        <select id="bModelDiscovery"><option value="sonnet">Sonnet</option><option value="haiku">Haiku</option></select>
+      </label>
+      <label>Scout share <input id="bShareScout" type="number" min="0" max="1" step="0.01"></label>
+      <label>Scout model
+        <select id="bModelScout"><option value="sonnet">Sonnet</option><option value="haiku">Haiku</option></select>
+      </label>
+      <label>Classification share <input id="bShareClassification" type="number" min="0" max="1" step="0.01"></label>
+      <label>Classification model
+        <select id="bModelClassification"><option value="sonnet">Sonnet</option><option value="haiku">Haiku</option></select>
+      </label>
+      <label>Improvement share <input id="bShareImprovement" type="number" min="0" max="1" step="0.01"></label>
+      <label>Improvement model
+        <select id="bModelImprovement"><option value="sonnet">Sonnet</option><option value="haiku">Haiku</option></select>
+      </label>
+    </div>
+
+    <h3>Forecast</h3>
+    <p id="budgetsForecast" class="sub"></p>
+
+    <h3>Change history</h3>
+    <ul id="budgetsHistory"></ul>
+
+    <div class="row">
+      <button class="btn primary" id="budgetsSave" type="button">Save</button>
+      <span class="spacer"></span>
+      <button class="btn" id="budgetsClose" type="button">Close</button>
+    </div>
+    <div class="msg" id="budgetsMsg"></div>
   </div>
 </dialog>
 

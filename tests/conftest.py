@@ -38,3 +38,15 @@ def fresh_schema_connection() -> sqlite3.Connection:
 @pytest.fixture
 def empty_db() -> SqliteDatabase:
     return SqliteDatabase(fresh_schema_connection())
+
+
+@pytest.fixture(autouse=True)
+def _no_ambient_claude_credentials(monkeypatch):
+    # Every Claude call must be mocked in this suite (see CLAUDE.md and
+    # docs/plan.md's phase 3 tests). Clearing these here means a test
+    # environment that happens to have real Claude credentials set (e.g. a
+    # developer's own shell) can never make job/run.py's `is_configured()`
+    # gate open the door to a real `claude` subprocess call during a test
+    # that forgot to mock one.
+    monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)

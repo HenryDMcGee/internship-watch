@@ -58,6 +58,35 @@ def test_check_via_browser_uses_given_page_text():
     assert result.decision == "closed"
 
 
+def test_check_via_browser_skips_unclear_reader_when_text_signals_decide():
+    calls = []
+    result = check_via_browser(
+        "https://example.com/job", page_text="Apply now!",
+        unclear_reader=lambda text: calls.append(text) or None,
+    )
+    assert result.decision == "open"
+    assert calls == []  # a clear text signal never needs Claude
+
+
+def test_check_via_browser_uses_unclear_reader_when_text_signals_cant_decide():
+    from job.verify.text_signals import VerifyDecision
+
+    result = check_via_browser(
+        "https://example.com/job", page_text="Welcome to our careers page.",
+        unclear_reader=lambda text: VerifyDecision(decision="closed", note="Claude read the page"),
+    )
+    assert result.decision == "closed"
+    assert result.note == "Claude read the page"
+
+
+def test_check_via_browser_keeps_unclear_when_reader_returns_none():
+    result = check_via_browser(
+        "https://example.com/job", page_text="Welcome to our careers page.",
+        unclear_reader=lambda text: None,
+    )
+    assert result.decision == "unclear"
+
+
 def test_check_mirror_uses_given_page_text():
     result = check_mirror("https://dreamwork.example/job", page_text="Apply now for this role.")
     assert result.decision == "open"
@@ -189,6 +218,25 @@ def test_verify_user_answer_overridden_when_posting_disappears_from_feed():
     )
     assert outcome.status == "closed"
     assert outcome.verified_via == "feed"
+
+
+def test_verify_passes_unclear_reader_through_to_default_browser_check():
+    # verify_posting must forward `unclear_reader` when the caller supplies
+    # one, using the default `check_via_browser` (which accepts it) rather
+    # than crashing on an unexpected keyword.
+    from job.verify.text_signals import VerifyDecision
+
+    outcome = verify_posting(
+        _posting(), feed_checked_ok=False, found_in_current_feed=False,
+        browser_budget=BrowserBudget(remaining=5), now_iso="2026-09-20T08:00:00",
+        check_structured=lambda url, session=None: VerifyDecision("unclear"),
+        unclear_reader=lambda text: VerifyDecision("open", "Claude"),
+    )
+    # _load_page_text isn't mocked here, so the real browser launch fails
+    # and check_via_browser returns "unclear" before ever reaching text
+    # signals or the unclear_reader -- this just proves the call doesn't
+    # raise a TypeError over the extra keyword.
+    assert outcome.status == "unverified"
 
 
 def test_verify_everything_unclear_keeps_previous_status():

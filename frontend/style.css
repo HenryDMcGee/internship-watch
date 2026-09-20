@@ -93,6 +93,8 @@ button,input,textarea{font:inherit; color:inherit}
 .addform{display:grid; grid-template-columns:1fr 1fr auto; gap:8px}
 .addform input{border:1px solid var(--line); background:var(--bg); border-radius:8px; padding:8px 10px; min-width:0}
 @media (max-width:520px){ .addform{grid-template-columns:1fr} }
+.addform label{display:flex; flex-direction:column; gap:4px; font-size:13px; color:var(--muted)}
+.addform label input, .addform label select{border:1px solid var(--line); background:var(--bg); border-radius:8px; padding:8px 10px; min-width:0; color:var(--ink)}
 .run{border-top:1px solid var(--line); padding:10px 0}
 .run:first-of-type{border-top:0; padding-top:0}
 .run .d{font-weight:700}

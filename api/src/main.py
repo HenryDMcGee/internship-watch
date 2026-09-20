@@ -13,7 +13,7 @@ from __future__ import annotations
 import json
 import os
 import time
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -27,6 +27,7 @@ except ImportError:  # pragma: no cover - zoneinfo is stdlib on 3.9+
 
 import companies as companies_logic
 from access import ACCESS_HEADER, AccessTokenError, fetch_jwks, verify_access_token
+from budgets import MODEL_FIELDS, NUMERIC_FIELDS, SHARE_FIELDS, linear_forecast, validate_budget_settings
 from db import Database
 from github_client import GitHubApiError, GitHubClient
 from titles import open_or_update_titles_pr, validate_titles_doc, TITLES_BRANCH
@@ -483,6 +484,230 @@ async def update_titles(body: TitlesUpdate, request: Request):
     except GitHubApiError as exc:
         raise HTTPException(status_code=502, detail=f"Could not open the pull request: {exc}") from exc
     return {"pending": pr}
+
+
+# ---------------------------------------------------------------------------
+# Budgets
+# ---------------------------------------------------------------------------
+
+_BUDGET_FIELDS = (*NUMERIC_FIELDS, *MODEL_FIELDS, *SHARE_FIELDS, "billing_mode")
+
+
+async def _budget_forecast(db: Database, settings: dict) -> dict:
+    today = central_today()
+    today_date = date.fromisoformat(today)
+    week_start = (today_date - timedelta(days=today_date.weekday())).isoformat()
+    month_start = today_date.replace(day=1).isoformat()
+    days_in_month = (
+        31 if today_date.month == 12
+        else (date(today_date.year, today_date.month + 1, 1) - date(today_date.year, today_date.month, 1)).days
+    )
+
+    week_row = await db.first(
+        "SELECT SUM(input_tokens + output_tokens + cache_read_tokens + cache_write_tokens) AS tokens "
+        "FROM usage WHERE substr(at, 1, 10) >= ? AND substr(at, 1, 10) <= ?",
+        week_start, today,
+    )
+    month_row = await db.first(
+        "SELECT SUM(est_cost_usd) AS usd FROM usage WHERE substr(at, 1, 10) >= ? AND substr(at, 1, 10) <= ?",
+        month_start, today,
+    )
+    weekly_tokens = linear_forecast((week_row or {}).get("tokens") or 0, today_date.isoweekday(), 7)
+    monthly_usd = linear_forecast((month_row or {}).get("usd") or 0, today_date.day, days_in_month)
+    return {"weekly_tokens": round(weekly_tokens, 2), "monthly_usd": round(monthly_usd, 2)}
+
+
+class BudgetsUpdate(BaseModel):
+    doc: dict[str, Any]
+
+
+@router.get("/budgets")
+async def get_budgets(db: Database = Depends(get_db)):
+    settings = await db.first("SELECT * FROM budget_settings WHERE id = 1")
+    changes = await db.all("SELECT * FROM budget_changes ORDER BY id DESC LIMIT 50")
+    forecast = await _budget_forecast(db, settings or {})
+    return {"settings": settings, "changes": changes, "forecast": forecast}
+
+
+@router.put("/budgets")
+async def update_budgets(body: BudgetsUpdate, db: Database = Depends(get_db)):
+    problems = validate_budget_settings(body.doc)
+    if problems:
+        raise HTTPException(status_code=422, detail={"problems": problems})
+
+    existing = await db.first("SELECT * FROM budget_settings WHERE id = 1") or {}
+    at = now_iso()
+    for field in _BUDGET_FIELDS:
+        old_value = existing.get(field)
+        new_value = body.doc.get(field)
+        if old_value != new_value:
+            await db.run(
+                "INSERT INTO budget_changes (changed_at, field, old_value, new_value) VALUES (?, ?, ?, ?)",
+                at, field, str(old_value), str(new_value),
+            )
+
+    set_clause = ", ".join(f"{field} = ?" for field in _BUDGET_FIELDS)
+    await db.run(
+        f"UPDATE budget_settings SET {set_clause}, updated_at = ? WHERE id = 1",
+        *[body.doc[field] for field in _BUDGET_FIELDS], at,
+    )
+    settings = await db.first("SELECT * FROM budget_settings WHERE id = 1")
+    changes = await db.all("SELECT * FROM budget_changes ORDER BY id DESC LIMIT 50")
+    forecast = await _budget_forecast(db, settings or {})
+    return {"settings": settings, "changes": changes, "forecast": forecast}
+
+
+# ---------------------------------------------------------------------------
+# Analytics
+# ---------------------------------------------------------------------------
+
+@router.get("/analytics")
+async def get_analytics(db: Database = Depends(get_db)):
+    coverage = await db.all(
+        """SELECT c.id, c.name, c.status, c.last_feed_status, c.last_result_at,
+                  COUNT(p.id) AS posting_count
+           FROM companies c LEFT JOIN postings p ON p.company_id = c.id AND p.archived_at IS NULL
+           WHERE c.status IN ('ranked', 'pinned')
+           GROUP BY c.id ORDER BY posting_count DESC, c.name ASC"""
+    )
+    sources = await db.all(
+        "SELECT id, name, kind, status, found_count, dead_link_rate, last_checked "
+        "FROM sources ORDER BY found_count DESC, name ASC"
+    )
+    first_to_find = await db.all(
+        "SELECT source_name, COUNT(*) AS n FROM postings WHERE source_name IS NOT NULL "
+        "GROUP BY source_name ORDER BY n DESC"
+    )
+    postings_per_title = await db.all(
+        "SELECT matched_title, COUNT(*) AS n FROM postings WHERE archived_at IS NULL "
+        "GROUP BY matched_title ORDER BY n DESC"
+    )
+    verification_methods = await db.all(
+        "SELECT verified_via, COUNT(*) AS n FROM postings WHERE archived_at IS NULL GROUP BY verified_via"
+    )
+    unconfirmed_row = await db.first(
+        "SELECT COUNT(*) AS n FROM postings WHERE archived_at IS NULL AND status = 'unverified'"
+    )
+    pruned = await db.all(
+        "SELECT archive_reason, COUNT(*) AS n FROM postings WHERE archived_at IS NOT NULL "
+        "GROUP BY archive_reason ORDER BY n DESC"
+    )
+    usage_by_step = await db.all(
+        "SELECT step, model, SUM(input_tokens + output_tokens + cache_read_tokens + cache_write_tokens) AS tokens, "
+        "SUM(web_searches) AS searches, SUM(est_cost_usd) AS usd FROM usage GROUP BY step, model"
+    )
+    alerts = await db.all("SELECT * FROM alerts ORDER BY id DESC LIMIT 50")
+    settings = await db.first("SELECT * FROM budget_settings WHERE id = 1")
+    forecast = await _budget_forecast(db, settings or {})
+
+    return {
+        "coverage": coverage,
+        "sources": sources,
+        "first_to_find": first_to_find,
+        "postings_per_title": postings_per_title,
+        "verification_methods": verification_methods,
+        "unconfirmed_count": (unconfirmed_row or {}).get("n") or 0,
+        "pruned": pruned,
+        "usage_by_step": usage_by_step,
+        "budgets": settings,
+        "forecast": forecast,
+        "alerts": alerts,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Proposals
+# ---------------------------------------------------------------------------
+
+def _proposal_out(row: dict) -> dict:
+    row = dict(row)
+    row["payload"] = json.loads(row["payload"]) if row.get("payload") else {}
+    return row
+
+
+async def _apply_company_proposal(db: Database, payload: dict, at: str) -> None:
+    action = payload.get("action")
+    if action == "add":
+        name = (payload.get("name") or "").strip()
+        if not name:
+            return
+        existing_rows = await db.all("SELECT name FROM companies")
+        normalized = companies_logic.normalize_company_name(name)
+        if any(companies_logic.normalize_company_name(r["name"]) == normalized for r in existing_rows):
+            return
+        feed_type, feed_id = companies_logic.detect_feed(payload.get("careers_url"))
+        await db.run(
+            """INSERT INTO companies (name, aliases, status, careers_url, feed_type, feed_id, added_by, added_at)
+               VALUES (?, '[]', 'pinned', ?, ?, ?, 'claude', ?)""",
+            name, payload.get("careers_url"), feed_type, feed_id, at,
+        )
+    elif action == "remove" and payload.get("company_id"):
+        await db.run("UPDATE companies SET status = 'removed' WHERE id = ?", payload["company_id"])
+
+
+async def _apply_source_proposal(db: Database, payload: dict, at: str) -> None:
+    name = (payload.get("name") or "").strip()
+    url = (payload.get("url") or "").strip()
+    if not name or not url:
+        return
+    await db.run(
+        """INSERT INTO sources (name, url, kind, covers, status, discovered_by, discovered_at, found_count)
+           VALUES (?, ?, ?, ?, 'trial', 'claude', ?, 0)""",
+        name, url, payload.get("kind") or "Job boards", payload.get("covers") or "", at,
+    )
+
+
+async def _apply_source_retire_proposal(db: Database, payload: dict) -> None:
+    source_id = payload.get("source_id")
+    if source_id:
+        await db.run("DELETE FROM sources WHERE id = ?", source_id)
+
+
+_PROPOSAL_APPLIERS = {
+    "company": _apply_company_proposal,
+    "source": _apply_source_proposal,
+}
+
+
+@router.get("/proposals")
+async def list_proposals(status: str | None = None, db: Database = Depends(get_db)):
+    if status:
+        rows = await db.all("SELECT * FROM proposals WHERE status = ? ORDER BY id DESC", status)
+    else:
+        rows = await db.all("SELECT * FROM proposals ORDER BY id DESC")
+    return {"proposals": [_proposal_out(r) for r in rows]}
+
+
+@router.post("/proposals/{proposal_id}/approve")
+async def approve_proposal(proposal_id: int, db: Database = Depends(get_db)):
+    row = await db.first("SELECT * FROM proposals WHERE id = ?", proposal_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Proposal not found")
+    if row["status"] != "pending":
+        raise HTTPException(status_code=409, detail="This proposal was already decided")
+
+    at = now_iso()
+    payload = json.loads(row["payload"]) if row.get("payload") else {}
+    if row["kind"] == "source_retire":
+        await _apply_source_retire_proposal(db, payload)
+    else:
+        applier = _PROPOSAL_APPLIERS.get(row["kind"])
+        if applier:
+            await applier(db, payload, at)
+
+    await db.run("UPDATE proposals SET status = 'approved', decided_at = ? WHERE id = ?", at, proposal_id)
+    return _proposal_out(await db.first("SELECT * FROM proposals WHERE id = ?", proposal_id))
+
+
+@router.post("/proposals/{proposal_id}/reject")
+async def reject_proposal(proposal_id: int, db: Database = Depends(get_db)):
+    row = await db.first("SELECT * FROM proposals WHERE id = ?", proposal_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Proposal not found")
+    if row["status"] != "pending":
+        raise HTTPException(status_code=409, detail="This proposal was already decided")
+    await db.run("UPDATE proposals SET status = 'rejected', decided_at = ? WHERE id = ?", now_iso(), proposal_id)
+    return _proposal_out(await db.first("SELECT * FROM proposals WHERE id = ?", proposal_id))
 
 
 app.include_router(router)

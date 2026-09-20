@@ -19,7 +19,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:
-      contents: read
+      contents: write
+      pull-requests: write
     steps:
       - uses: actions/checkout@v4
 
@@ -48,10 +49,31 @@ jobs:
         if: steps.guard.outputs.should_run == 'true'
         run: python -m playwright install --with-deps chromium
 
+      # Node.js ships preinstalled on GitHub's ubuntu-latest runners; this
+      # just adds the `claude` CLI the daily job's Claude agent steps
+      # (job/agent/) shell out to. See CLAUDE.md: switching billing from
+      # CLAUDE_CODE_OAUTH_TOKEN to ANTHROPIC_API_KEY is a single setting --
+      # only whichever secret below is non-empty needs to be set.
+      - name: Install Claude Code
+        if: steps.guard.outputs.should_run == 'true'
+        run: npm install -g @anthropic-ai/claude-code
+
       - name: Run the daily job
         if: steps.guard.outputs.should_run == 'true'
         env:
           CLOUDFLARE_D1_TOKEN: ${{ secrets.CLOUDFLARE_D1_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           D1_DATABASE_ID: ${{ secrets.D1_DATABASE_ID }}
+          # Set only one of these two -- whichever is set is what the
+          # `claude` CLI authenticates with (see job/agent/client.py).
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          # For the daily improvement step's title-suggestion pull requests
+          # (job/agent/titles_pr.py). The default Actions token, scoped by
+          # the `permissions:` block above.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Daily summary and alerts, sent to the Claude routine (research
+          # preview; see job/agent/summary.py). Leave unset to skip it.
+          CLAUDE_ROUTINE_URL: ${{ secrets.CLAUDE_ROUTINE_URL }}
+          CLAUDE_ROUTINE_TOKEN: ${{ secrets.CLAUDE_ROUTINE_TOKEN }}
         run: python -m job.run
