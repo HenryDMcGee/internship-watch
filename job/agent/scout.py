@@ -68,6 +68,15 @@ def run_scout(
         return [], None
     prompt = build_prompt(companies, search_limit_per_run=search_limit_per_run)
     result = run_claude("scout", prompt, model=resolve_model(model))
+    if result.web_searches == 0:
+        # Same reasoning as discovery: WebSearch/WebFetch are enabled and there were
+        # real companies to look for, so zero searches means Claude answered from
+        # memory -- any source it reports would be invented, not found (issue #20).
+        raise ClaudeOutputError(
+            f"scout made 0 web searches while checking {len(companies)} compan"
+            f"{'y' if len(companies) == 1 else 'ies'} -- results would be unverifiable",
+            result=result,
+        )
     payload = parse_and_validate(result.text, validate_scout_document, result=result)
     raw_sources = payload.get("sources") or []
     sources, problems = split_scout_sources(payload)

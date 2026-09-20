@@ -336,7 +336,11 @@ def test_daily_run_actually_calls_discovery_and_scout_for_no_source_companies(em
                      '"url": "https://acme.example/careers", "kind": "Company career sites", "covers": "Acme"}]}',
             "improvement": '{"search_plan": null, "proposals": [], "title_suggestions": []}',
         }[step]
-        return ClaudeStepResult(step=step, model=model, text=text)
+        # A real discovery/scout call with tools enabled always searches at least
+        # once -- zero would now fail the step loudly (issue #20), which this test
+        # isn't about; see test_daily_run_flags_it_when_discovery_and_scout_make_zero_web_searches.
+        web_searches = 3 if step in ("discovery", "scout") else 0
+        return ClaudeStepResult(step=step, model=model, text=text, web_searches=web_searches)
 
     monkeypatch.setattr(agent_client, "run_claude_step", fake_run_claude_step)
 
@@ -381,6 +385,42 @@ def test_daily_run_flags_it_when_discovery_and_scout_do_not_actually_run(empty_d
     usage_steps = [r["step"] for r in run(empty_db.all("SELECT step FROM usage ORDER BY id"))]
     assert "discovery" not in usage_steps
     assert "scout" not in usage_steps
+
+    assert "discovery" in result["summary"]
+    assert "scout" in result["summary"]
+
+    alerts = run(empty_db.all("SELECT * FROM alerts"))
+    assert any(a["type"] == "claude_step_issue" for a in alerts)
+
+
+def test_daily_run_flags_it_when_discovery_and_scout_make_zero_web_searches(empty_db, monkeypatch):
+    # A second way run 8's failure could hide: discovery/scout replying with valid,
+    # well-formed JSON but having made zero actual web searches -- Claude answering
+    # from memory instead of using its tools. That must fail loudly too, not read as
+    # a clean "found nothing" run (issue #20).
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "test-token")
+    _insert_company(empty_db, feed_type=None, feed_id=None)
+
+    def fake_run_fetcher(company, session=None):
+        return FetchResult(company_id=company["id"], company_name=company["name"], postings=[])
+
+    monkeypatch.setattr(run_module, "run_fetcher", fake_run_fetcher)
+
+    def fake_run_claude_step(step, prompt, *, model, **kwargs):
+        text = {
+            "discovery": '{"results": []}',
+            "scout": '{"sources": []}',
+            "improvement": '{"search_plan": null, "proposals": [], "title_suggestions": []}',
+        }[step]
+        return ClaudeStepResult(step=step, model=model, text=text, web_searches=0)
+
+    monkeypatch.setattr(agent_client, "run_claude_step", fake_run_claude_step)
+
+    result = run(run_module.run(empty_db, kind="daily"))
+
+    usage_steps = [r["step"] for r in run(empty_db.all("SELECT step FROM usage ORDER BY id"))]
+    assert "discovery" in usage_steps  # the call happened and spent real budget
+    assert "scout" in usage_steps
 
     assert "discovery" in result["summary"]
     assert "scout" in result["summary"]

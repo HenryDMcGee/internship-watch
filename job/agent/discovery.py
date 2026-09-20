@@ -4,7 +4,7 @@ feed, starting with the watch list and today's search plan.
 from __future__ import annotations
 
 from job.agent.client import ClaudeStepResult, resolve_model, run_claude_step
-from job.agent.schemas import parse_and_validate, validate_discovery_output
+from job.agent.schemas import ClaudeOutputError, parse_and_validate, validate_discovery_output
 
 DEFAULT_SEARCH_LIMIT_PER_RUN = 35
 DEFAULT_SEARCH_LIMIT_PER_COMPANY = 5
@@ -73,5 +73,16 @@ def run_discovery(
         search_limit_per_run=search_limit_per_run, search_limit_per_company=search_limit_per_company,
     )
     result = run_claude("discovery", prompt, model=resolve_model(model))
+    if result.web_searches == 0:
+        # WebSearch/WebFetch are enabled for this step (see `client.STEP_TOOLS`) and it
+        # was sent real companies to search for -- zero searches means Claude answered
+        # from memory instead of actually using its tools, so any URL it reports would
+        # be invented, not found (issue #20). That must fail loudly, not look like a
+        # clean "found nothing" run.
+        raise ClaudeOutputError(
+            f"discovery made 0 web searches while checking {len(companies)} compan"
+            f"{'y' if len(companies) == 1 else 'ies'} -- results would be unverifiable",
+            result=result,
+        )
     payload = parse_and_validate(result.text, validate_discovery_output, result=result)
     return payload["results"], result

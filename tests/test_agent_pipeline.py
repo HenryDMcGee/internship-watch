@@ -28,12 +28,18 @@ def _closed_status():
 
 
 def _fake_run_claude(responses):
-    """`run_claude` stand-in: `responses` maps step name to a JSON text reply."""
+    """`run_claude` stand-in: `responses` maps step name to a JSON text reply.
+
+    Discovery and the scout default to a nonzero `web_searches` -- a real call with
+    those tools enabled always searches at least once, and a zero count now fails the
+    step loudly (issue #20), which most of these tests aren't about.
+    """
     calls = []
 
     def fake(step, prompt, *, model):
         calls.append(step)
-        return ClaudeStepResult(step=step, model=model, text=responses[step])
+        web_searches = 3 if step in ("discovery", "scout") else 0
+        return ClaudeStepResult(step=step, model=model, text=responses[step], web_searches=web_searches)
 
     fake.calls = calls
     return fake
