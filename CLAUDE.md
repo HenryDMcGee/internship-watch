@@ -1,0 +1,30 @@
+# Internship Watch
+
+A private tool that finds Summer 2027 MBA product-type internships every morning. Owner: Henry (the repository owner). Read `docs/plan.md` before any work; it is the approved plan and the source of truth for scope.
+
+## How work gets approved
+
+- Henry's rule: before changing the dashboard, code, files, or data, post a proposal and wait for his approval.
+- A proposal has exactly three sections: **Functionality** (what he sees and can do), **Technical code changes** (files, modules, endpoints, schema), and **Architecture** (data flow, services, permissions, cost). If a section has no changes, say so.
+- An issue that says its proposal is already approved can be built directly. Anything outside that approved scope needs a new proposal as a comment first. Stop and wait for his reply.
+- Never merge. Open a pull request and let Henry review it.
+
+## Stack
+
+- Python 3.12 everywhere.
+- Daily job: `job/`, runs on GitHub Actions at 08:00 America/Chicago. The workflow is scheduled at 13:00 and 14:00 UTC, and the first step exits unless it is 08:00 in Chicago.
+- API: FastAPI in a Cloudflare Python Worker, `api/`. Python Workers only support a subset of packages. If something needed won't run there, propose a small TypeScript Worker instead of working around it.
+- Database: Cloudflare D1 (SQLite). Migrations in `db/migrations/`, numbered `0001_*.sql`. Local development uses `wrangler` with a local D1.
+- Dashboard: static HTML, CSS, and JavaScript in `frontend/`, served by Cloudflare Pages. It calls the API at `/api/*` on the same domain. Keep the look of `docs/reference/current-dashboard.html`.
+- Names: repository and folders `internship-watch`; Cloudflare Pages project `internship-watch`, Worker `internship-watch-api`, D1 database `internship-watch-db`, R2 bucket `internship-watch-backups`. Display name "Internship Watch".
+- Titles: `config/titles.json`, validated by `config/titles.schema.json` and `scripts/validate_titles.py`. Titles change only through pull requests.
+
+## Rules
+
+- Never commit secrets, tokens, or keys. Local values go in `.dev.vars` or `.env`, which are gitignored. In code, read secrets from environment variables or Worker bindings.
+- Don't scrape LinkedIn. Prefer company job feeds (Greenhouse, Lever, Ashby, SmartRecruiters, Workday, Amazon.jobs) and public careers pages. Respect sites that block automated browsers; never try to get around a block or a CAPTCHA.
+- Postings are archived, never deleted, unless Henry deletes them.
+- Anything Claude-powered must record its usage (tokens, web searches, model, step) and respect the budget settings.
+- Keep pull requests focused on one phase or one change. Every pull request description includes: what changed, how to run or test it locally, anything deferred, and any decision Henry needs to make.
+- Write tests with pytest for new logic. CI must pass.
+- Dashboard text is plain and short. Use "Summer 2027", US and Japan locations by default, and Central time for display.

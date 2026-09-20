@@ -1,0 +1,15 @@
+# Secrets never go in git
+.env
+.env.*
+.dev.vars
+*.pem
+
+# Local tools and builds
+.wrangler/
+node_modules/
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+dist/
+.DS_Store

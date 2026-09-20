@@ -1,0 +1,42 @@
+{
+  "locations": {
+    "countries": [
+      "US",
+      "JP"
+    ],
+    "include_remote": false
+  },
+  "timezone": "America/Chicago",
+  "daily_run_local_time": "08:00",
+  "watchlist": [
+    {
+      "company": "ServiceNow",
+      "note": "Posted its 2026 MBA PM internships on Sep 25, 2025, so 2027 roles are likely close."
+    },
+    {
+      "company": "Capital One",
+      "note": "Posted its 2026 MBA Product Intern on Sep 26, 2025."
+    },
+    {
+      "company": "Google",
+      "note": "APM internship window opened in late September to early October last cycle."
+    },
+    {
+      "company": "Microsoft",
+      "note": "No summer 2027 MBA PM posting seen yet."
+    },
+    {
+      "company": "Adobe",
+      "note": "Only the 2026-cycle MBA PM posting found so far."
+    },
+    {
+      "company": "Meta",
+      "note": "Rotational PM program expected to open this fall."
+    },
+    {
+      "company": "Walmart",
+      "note": "Says new roles open in September."
+    }
+  ],
+  "last_run": "2026-09-19"
+}

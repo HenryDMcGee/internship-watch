@@ -1,0 +1,622 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Internship watch</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#F2F0F7; --surface:#FFFFFF; --ink:#221E33; --muted:#6E6883; --line:#DCD7E8;
+  --accent:#5B3FD6; --accent-soft:#E7E1FF; --ok:#0E7A5E; --ok-soft:#DDF3EA; --danger:#B3261E;
+  --display:"Bricolage Grotesque", "Avenir Next", "Segoe UI", system-ui, sans-serif;
+  --body:"Atkinson Hyperlegible", "Segoe UI", system-ui, -apple-system, sans-serif;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#17141F; --surface:#211D2C; --ink:#ECE8F5; --muted:#A39DB8; --line:#342E44;
+    --accent:#A08CFF; --accent-soft:#2E2650; --ok:#4CCB9F; --ok-soft:#173A30; --danger:#FF8A80;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#17141F; --surface:#211D2C; --ink:#ECE8F5; --muted:#A39DB8; --line:#342E44;
+  --accent:#A08CFF; --accent-soft:#2E2650; --ok:#4CCB9F; --ok-soft:#173A30; --danger:#FF8A80;
+}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{background:var(--bg); color:var(--ink); font:16px/1.5 var(--body); -webkit-font-smoothing:antialiased}
+a{color:inherit}
+button,input,textarea{font:inherit; color:inherit}
+:focus-visible{outline:3px solid var(--accent); outline-offset:2px}
+.wrap{max-width:760px; margin:0 auto; padding:20px 16px 48px}
+
+.top{display:flex; align-items:center; justify-content:space-between; gap:12px}
+.brand{font:700 15px/1 var(--display); letter-spacing:-.01em; color:var(--muted)}
+.tools{display:flex; gap:6px}
+.ghost{background:transparent; border:1px solid var(--line); border-radius:999px; padding:6px 12px; font-size:14px; cursor:pointer}
+.ghost:hover{border-color:var(--ink)}
+
+.hero{margin:28px 0 20px}
+.hero h1{font:800 clamp(40px, 11vw, 72px)/.95 var(--display); letter-spacing:-.035em; margin:0}
+.hero h1 .dim{display:block; color:var(--muted); font-weight:500; font-size:.42em; letter-spacing:-.01em; margin-bottom:10px}
+.hero p{margin:14px 0 0; color:var(--muted); max-width:56ch}
+
+.tabs{display:flex; gap:4px; background:var(--surface); border:1px solid var(--line); border-radius:14px; padding:4px}
+.tab{flex:1; border:0; background:transparent; border-radius:10px; padding:10px 8px; cursor:pointer; font-weight:700; color:var(--muted)}
+.tab[aria-selected="true"]{background:var(--ink); color:var(--bg)}
+.tab .n{font-weight:400; opacity:.8; margin-left:4px}
+
+.filter{margin:12px 0 4px; width:100%; border:1px solid var(--line); background:var(--surface); border-radius:10px; padding:10px 12px}
+
+.list{list-style:none; margin:8px 0 0; padding:0}
+.item{position:relative; background:var(--surface); border-bottom:1px solid var(--line); padding:16px 16px 14px 20px}
+.item:first-child{border-top-left-radius:14px; border-top-right-radius:14px}
+.item:last-child{border-bottom:0; border-bottom-left-radius:14px; border-bottom-right-radius:14px}
+.item.new::before{content:""; position:absolute; left:0; top:14px; bottom:14px; width:4px; border-radius:0 4px 4px 0; background:var(--accent)}
+.co{font:700 19px/1.2 var(--display); letter-spacing:-.015em; margin:0}
+.ti{margin:2px 0 6px}
+.meta{font-size:14px; color:var(--muted); display:flex; flex-wrap:wrap; gap:4px 14px}
+.note{font-size:14px; margin:8px 0 0; padding:8px 10px; background:var(--accent-soft); border-radius:8px}
+.actions{display:flex; flex-wrap:wrap; gap:8px; margin-top:12px}
+.btn{border:1px solid var(--line); background:transparent; border-radius:8px; padding:7px 12px; font-size:14px; cursor:pointer; text-decoration:none; display:inline-flex; align-items:center}
+.btn.primary{background:var(--accent); border-color:var(--accent); color:#fff}
+:root[data-theme="dark"] .btn.primary{color:#17141F}
+@media (prefers-color-scheme: dark){ :root:not([data-theme="light"]) .btn.primary{color:#17141F} }
+.btn[aria-pressed="true"]{background:var(--ok-soft); border-color:var(--ok); color:var(--ok); font-weight:700}
+.btn.del{color:var(--danger); margin-left:auto}
+.btn.del.armed{background:var(--danger); border-color:var(--danger); color:#fff}
+
+.empty{background:var(--surface); border:1px dashed var(--line); border-radius:14px; padding:24px 20px; color:var(--muted)}
+.empty strong{display:block; color:var(--ink); font:700 18px/1.3 var(--display); margin-bottom:4px}
+
+.badge{display:inline-block; font-size:13px; font-weight:700; border-radius:999px; padding:2px 10px; margin:0 0 8px}
+.badge.closed{background:var(--line); color:var(--muted)}
+.badge.closing{background:var(--accent-soft); color:var(--accent)}
+.badge.unverified{background:transparent; border:1px dashed var(--line); color:var(--muted); font-weight:400}
+.item.closed .co, .item.closed .ti{color:var(--muted)}
+.item.closed .co{text-decoration:line-through; text-decoration-thickness:1px}
+.item.closed::before{display:none}
+.toggle-row{list-style:none; margin-top:10px}
+.toggle-row .btn{width:100%; justify-content:center}
+.src-group{margin:18px 0 0}
+.src-group h2, .panel h2{font:800 22px/1.15 var(--display); letter-spacing:-.02em; margin:0 0 8px}
+.src-group .sub{margin:-4px 0 10px; color:var(--muted); font-size:14px}
+.src{background:var(--surface); border-bottom:1px solid var(--line); padding:12px 16px}
+.src:first-of-type{border-top-left-radius:14px; border-top-right-radius:14px}
+.src:last-of-type{border-bottom:0; border-bottom-left-radius:14px; border-bottom-right-radius:14px}
+.src-head{display:flex; align-items:baseline; gap:10px; flex-wrap:wrap}
+.src-name{font-weight:700}
+.src-name a{text-decoration-thickness:1px; text-underline-offset:3px}
+.src-count{margin-left:auto; font-size:13px; color:var(--muted); white-space:nowrap}
+.src-count b{color:var(--ink)}
+.src p{margin:4px 0 0; font-size:14px; color:var(--muted)}
+.src .btn{margin-top:8px; padding:4px 10px; font-size:13px}
+.panel{background:var(--surface); border-radius:14px; padding:16px; margin-top:18px}
+.panel ul{margin:0; padding-left:18px}
+.panel li{margin:6px 0}
+.panel li b{font-weight:700}
+.addform{display:grid; grid-template-columns:1fr 1fr auto; gap:8px}
+.addform input{border:1px solid var(--line); background:var(--bg); border-radius:8px; padding:8px 10px; min-width:0}
+@media (max-width:520px){ .addform{grid-template-columns:1fr} }
+.run{border-top:1px solid var(--line); padding:10px 0}
+.run:first-of-type{border-top:0; padding-top:0}
+.run .d{font-weight:700}
+.run p{margin:2px 0 0; font-size:14px}
+.run .next{color:var(--muted)}
+[hidden]{display:none !important}
+.foot{margin-top:28px; font-size:14px; color:var(--muted)}
+.foot code{font-family:var(--body); background:var(--surface); border:1px solid var(--line); border-radius:6px; padding:1px 6px; color:var(--ink)}
+.status{min-height:1.5em; font-size:14px; color:var(--muted); margin-top:8px}
+
+dialog{border:0; border-radius:16px; padding:0; width:min(560px, calc(100vw - 24px)); background:var(--surface); color:var(--ink)}
+dialog::backdrop{background:rgba(20,16,30,.55)}
+.sheet{padding:20px}
+.sheet h2{font:800 26px/1.1 var(--display); letter-spacing:-.02em; margin:0 0 4px}
+.sheet p{margin:0 0 12px; color:var(--muted); font-size:14px}
+.sheet textarea{width:100%; min-height:48vh; border:1px solid var(--line); border-radius:10px; padding:10px 12px; background:var(--bg); line-height:1.55; resize:vertical}
+.sheet .row{display:flex; flex-wrap:wrap; gap:8px; margin-top:12px; align-items:center}
+.sheet .row .spacer{flex:1}
+.sheet .msg{font-size:14px; color:var(--muted); margin-top:8px; min-height:1.4em}
+
+@media (prefers-reduced-motion: no-preference){
+  .item.flash{animation:flash 1.2s ease-out 1}
+  @keyframes flash{from{background:var(--accent-soft)} to{background:var(--surface)}}
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="top">
+    <div class="brand">Internship watch</div>
+    <div class="tools">
+      <button class="ghost" id="openTitles" type="button">Titles</button>
+      <button class="ghost" id="openCompanies" type="button">Companies</button>
+    </div>
+  </div>
+
+  <header class="hero">
+    <h1><span class="dim" id="dateLine"></span><span id="headline">Loading postings</span></h1>
+    <p id="subline"></p>
+  </header>
+
+  <div class="tabs" role="tablist" aria-label="Postings">
+    <button class="tab" role="tab" id="tabToday" aria-selected="true" type="button">New today<span class="n" id="nToday"></span></button>
+    <button class="tab" role="tab" id="tabEarlier" aria-selected="false" type="button">Earlier<span class="n" id="nEarlier"></span></button>
+    <button class="tab" role="tab" id="tabSources" aria-selected="false" type="button">Sources<span class="n" id="nSources"></span></button>
+  </div>
+  <input class="filter" id="filter" type="search" placeholder="Filter by company, title, or location" aria-label="Filter postings">
+
+  <ul class="list" id="list" aria-live="polite"></ul>
+  <section id="sourcesView" hidden>
+    <div id="srcGroups"></div>
+    <div class="panel">
+      <h2>Add a site</h2>
+      <p class="sub" style="margin:0 0 10px;color:var(--muted);font-size:14px">Claude will include it in the next search.</p>
+      <div class="addform">
+        <input id="addName" type="text" placeholder="Site name" aria-label="Site name">
+        <input id="addUrl" type="url" placeholder="https://" aria-label="Site address">
+        <button class="btn primary" id="addBtn" type="button">Add site</button>
+      </div>
+    </div>
+    <div class="panel" id="watchPanel">
+      <h2>Watching for</h2>
+      <p class="sub" style="margin:0 0 8px;color:var(--muted);font-size:14px">Roles that haven't posted for summer 2027 yet, based on last year's timing.</p>
+      <ul id="watchList"></ul>
+    </div>
+    <div class="panel">
+      <h2>Search log</h2>
+      <div id="runList"></div>
+    </div>
+  </section>
+  <div class="status" id="status"></div>
+
+  <div class="foot">
+    <p>Postings stay here until you delete them. Anything found today moves to Earlier tomorrow. Closed postings are hidden, not deleted.</p>
+    <p>To run a new search, tell Claude <code>run today's internship search</code>. It reads your titles, companies, and sources from this page, adds anything new, and logs what to try next time.</p>
+  </div>
+</div>
+
+<dialog id="editor" aria-labelledby="edTitle">
+  <div class="sheet">
+    <h2 id="edTitle">Titles</h2>
+    <p id="edHelp">One per line. Claude searches for these every run.</p>
+    <textarea id="edText" spellcheck="false"></textarea>
+    <div class="row">
+      <button class="btn primary" id="edSave" type="button">Save</button>
+      <button class="btn" id="edDownload" type="button">Download .txt</button>
+      <span class="spacer"></span>
+      <button class="btn" id="edClose" type="button">Close</button>
+    </div>
+    <div class="msg" id="edMsg"></div>
+  </div>
+</dialog>
+
+<script>
+(function(){
+  var db = null, downloads = null;
+  var postings = [];
+  var sources = [];
+  var runs = [];
+  var settings = { titles: "", companies: "", lastRun: "", lastRunSummary: "", watchlist: [] };
+  var KIND_ORDER = ["Company career sites", "Job boards", "Trackers and aggregators", "School job boards", "Timing guides", "Added by you"];
+  var KIND_HELP = {
+    "Company career sites": "Official postings. The most reliable links to apply from.",
+    "Job boards": "Public listings, including LinkedIn pages that show without signing in.",
+    "Trackers and aggregators": "Community and automated lists of MBA and PM internships.",
+    "School job boards": "Public MBA career-office boards that repost employer listings.",
+    "Timing guides": "Used to predict when roles open, not as posting sources.",
+    "Added by you": "Sites you added. Claude checks these on the next search."
+  };
+  var tab = "today";
+  var showClosed = false;
+  var query = "";
+  var editing = null;
+
+  function $(id){ return document.getElementById(id); }
+  function todayStr(){
+    var d = new Date();
+    return d.getFullYear() + "-" + String(d.getMonth()+1).padStart(2,"0") + "-" + String(d.getDate()).padStart(2,"0");
+  }
+  function fmtDate(s){
+    if(!s) return "";
+    var p = String(s).split("-");
+    if(p.length !== 3) return String(s);
+    var d = new Date(+p[0], +p[1]-1, +p[2]);
+    return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  }
+  function lines(t){ return String(t || "").split("\n").map(function(x){ return x.trim(); }).filter(Boolean); }
+  function el(tag, cls, text){
+    var e = document.createElement(tag);
+    if(cls) e.className = cls;
+    if(text != null) e.textContent = text;
+    return e;
+  }
+  function safeUrl(u){
+    try { var x = new URL(String(u)); return (x.protocol === "https:" || x.protocol === "http:") ? x.href : null; }
+    catch(e){ return null; }
+  }
+
+  $("dateLine").textContent = new Date().toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" });
+
+  function render(){
+    var today = todayStr();
+    var q = query.toLowerCase();
+    var match = function(p){
+      if(!q) return true;
+      return [p.company, p.title, p.location, p.source].join(" ").toLowerCase().indexOf(q) !== -1;
+    };
+    var newToday = postings.filter(function(p){ return p.firstSeen === today; });
+    var earlier = postings.filter(function(p){ return p.firstSeen !== today; });
+    earlier.sort(function(a,b){ return String(b.firstSeen).localeCompare(String(a.firstSeen)) || String(a.company).localeCompare(String(b.company)); });
+    newToday.sort(function(a,b){ return String(a.company).localeCompare(String(b.company)); });
+
+    var isOpen = function(p){ return p.status !== "closed"; };
+    var openToday = newToday.filter(isOpen);
+    var openEarlier = earlier.filter(isOpen);
+    var closedTotal = postings.length - postings.filter(isOpen).length;
+    $("nToday").textContent = openToday.length;
+    $("nEarlier").textContent = openEarlier.length;
+    $("nSources").textContent = sources.length;
+    $("headline").textContent = openToday.length === 1 ? "1 new posting" : openToday.length + " new postings";
+
+    var appliedCount = postings.filter(function(p){ return p.applied; }).length;
+    var parts = [];
+    parts.push(openEarlier.length + " open from earlier searches");
+    parts.push(appliedCount + " marked applied");
+    if(closedTotal) parts.push(closedTotal + " closed and hidden");
+    if(settings.lastRun) parts.push("last search " + fmtDate(settings.lastRun));
+    $("subline").textContent = parts.join(", ") + ". Watching " + lines(settings.titles).length + " titles across " + lines(settings.companies).length + " companies.";
+
+    if(tab === "sources"){ renderSources(); return; }
+    var list = $("list");
+    list.textContent = "";
+    var all = (tab === "today" ? newToday : earlier).filter(match);
+    var closedHere = all.filter(function(p){ return !isOpen(p); }).length;
+    var rows = showClosed ? all : all.filter(isOpen);
+    rows.sort(function(a,b){ return (isOpen(b) ? 1 : 0) - (isOpen(a) ? 1 : 0); });
+
+    function addToggle(){
+      if(!closedHere) return;
+      var li = el("li", "toggle-row");
+      var b = el("button", "btn", showClosed
+        ? "Hide closed postings"
+        : (closedHere === 1 ? "Show 1 closed posting" : "Show " + closedHere + " closed postings"));
+      b.type = "button";
+      b.addEventListener("click", function(){ showClosed = !showClosed; render(); });
+      li.appendChild(b);
+      list.appendChild(li);
+    }
+
+    if(!rows.length){
+      var li = el("li");
+      var box = el("div", "empty");
+      if(q){
+        box.appendChild(el("strong", null, "No postings match that filter"));
+        box.appendChild(document.createTextNode("Clear the filter to see everything in this list."));
+      } else if(closedHere){
+        box.appendChild(el("strong", null, "No open postings here"));
+        box.appendChild(document.createTextNode("Everything in this list has stopped taking applications."));
+      } else if(tab === "today"){
+        box.appendChild(el("strong", null, "Nothing new yet today"));
+        box.appendChild(document.createTextNode("Ask Claude to run today's internship search, and new finds will land here."));
+      } else {
+        box.appendChild(el("strong", null, "No earlier postings"));
+        box.appendChild(document.createTextNode("Today's finds move here tomorrow and stay until you delete them."));
+      }
+      li.appendChild(box);
+      list.appendChild(li);
+      addToggle();
+      return;
+    }
+
+    rows.forEach(function(p){
+      var closed = !isOpen(p);
+      var li = el("li", "item" + (p.firstSeen === today ? " new" : "") + (closed ? " closed" : ""));
+      if(closed) li.appendChild(el("span", "badge closed", "Closed"));
+      else if(p.status === "closing") li.appendChild(el("span", "badge closing", "Closing soon"));
+      else if(p.status === "unverified") li.appendChild(el("span", "badge unverified", "Status not confirmed"));
+      li.appendChild(el("h3", "co", p.company || "Unknown company"));
+      li.appendChild(el("div", "ti", p.title || ""));
+      var meta = el("div", "meta");
+      if(p.location) meta.appendChild(el("span", null, p.location));
+      if(p.source) meta.appendChild(el("span", null, "via " + p.source));
+      if(p.postedDate) meta.appendChild(el("span", null, "posted " + fmtDate(p.postedDate)));
+      meta.appendChild(el("span", null, "found " + fmtDate(p.firstSeen)));
+      li.appendChild(meta);
+      if(p.statusNote) li.appendChild(el("p", "note", p.statusNote + (p.statusChecked ? " Checked " + fmtDate(p.statusChecked) + "." : "")));
+      if(p.note && !closed) li.appendChild(el("p", "note", p.note));
+
+      var actions = el("div", "actions");
+      var href = safeUrl(p.url);
+      if(href){
+        var a = el("a", closed ? "btn" : "btn primary", closed ? "View posting" : "Open posting");
+        a.href = href; a.target = "_blank"; a.rel = "noopener noreferrer";
+        actions.appendChild(a);
+      }
+      var ap = el("button", "btn", p.applied ? "Applied" : "Mark applied");
+      ap.type = "button";
+      ap.setAttribute("aria-pressed", p.applied ? "true" : "false");
+      ap.addEventListener("click", function(){ toggleApplied(p, ap); });
+      actions.appendChild(ap);
+
+      var del = el("button", "btn del", "Delete");
+      del.type = "button";
+      var timer = null;
+      del.addEventListener("click", function(){
+        if(!del.classList.contains("armed")){
+          del.classList.add("armed"); del.textContent = "Confirm delete";
+          timer = setTimeout(function(){ del.classList.remove("armed"); del.textContent = "Delete"; }, 4000);
+          return;
+        }
+        clearTimeout(timer);
+        removePosting(p, del);
+      });
+      actions.appendChild(del);
+      li.appendChild(actions);
+      list.appendChild(li);
+    });
+    addToggle();
+  }
+
+  function renderSources(){
+    var wrap = $("srcGroups");
+    wrap.textContent = "";
+    if(!sources.length){
+      var box = el("div", "empty");
+      box.appendChild(el("strong", null, "No sources listed yet"));
+      box.appendChild(document.createTextNode("Sources appear here after Claude runs a search."));
+      wrap.appendChild(box);
+    }
+    var groups = {};
+    sources.forEach(function(x){ var k = KIND_ORDER.indexOf(x.kind) === -1 ? "Job boards" : x.kind; (groups[k] = groups[k] || []).push(x); });
+    KIND_ORDER.forEach(function(kind){
+      var items = groups[kind];
+      if(!items || !items.length) return;
+      items.sort(function(a,b){ return (b.found - a.found) || a.name.localeCompare(b.name); });
+      var g = el("section", "src-group");
+      g.appendChild(el("h2", null, kind));
+      g.appendChild(el("p", "sub", KIND_HELP[kind] || ""));
+      items.forEach(function(x){
+        var row = el("div", "src");
+        var head = el("div", "src-head");
+        var name = el("span", "src-name");
+        var href = safeUrl(x.url);
+        if(href){ var a = el("a", null, x.name); a.href = href; a.target = "_blank"; a.rel = "noopener noreferrer"; name.appendChild(a); }
+        else name.textContent = x.name;
+        head.appendChild(name);
+        var c = el("span", "src-count");
+        var b = el("b", null, String(x.found));
+        c.appendChild(b);
+        c.appendChild(document.createTextNode(x.found === 1 ? " posting found" : " postings found"));
+        head.appendChild(c);
+        row.appendChild(head);
+        if(x.covers) row.appendChild(el("p", null, x.covers));
+        var tail = [];
+        if(x.lastChecked) tail.push("Last checked " + fmtDate(x.lastChecked) + ".");
+        if(x.notes) tail.push(x.notes);
+        if(tail.length) row.appendChild(el("p", null, tail.join(" ")));
+        var del = el("button", "btn del", "Remove");
+        del.type = "button";
+        var t = null;
+        del.addEventListener("click", function(){
+          if(!del.classList.contains("armed")){
+            del.classList.add("armed"); del.textContent = "Confirm remove";
+            t = setTimeout(function(){ del.classList.remove("armed"); del.textContent = "Remove"; }, 4000);
+            return;
+          }
+          clearTimeout(t);
+          removeSource(x, del);
+        });
+        row.appendChild(del);
+        g.appendChild(row);
+      });
+      wrap.appendChild(g);
+    });
+
+    var wl = $("watchList");
+    wl.textContent = "";
+    var watch = Array.isArray(settings.watchlist) ? settings.watchlist : [];
+    $("watchPanel").hidden = !watch.length;
+    watch.forEach(function(w){
+      var li = el("li");
+      li.appendChild(el("b", null, w.company));
+      if(w.note) li.appendChild(document.createTextNode(": " + w.note));
+      wl.appendChild(li);
+    });
+
+    var rl = $("runList");
+    rl.textContent = "";
+    if(!runs.length){ rl.appendChild(el("p", null, "No searches logged yet.")); }
+    runs.slice().sort(function(a,b){ return String(b.date).localeCompare(String(a.date)); }).forEach(function(r){
+      var d = el("div", "run");
+      d.appendChild(el("div", "d", fmtDate(r.date) + ": " + r.newCount + (r.newCount === 1 ? " new posting" : " new postings")));
+      if(r.summary) d.appendChild(el("p", null, r.summary));
+      if(r.next) d.appendChild(el("p", "next", "Next time: " + r.next));
+      rl.appendChild(d);
+    });
+  }
+
+  async function removeSource(x, btn){
+    if(!db){ setStatus("Open this page in Claude to change sources."); return; }
+    btn.disabled = true;
+    try { await db.doc("sources/" + x.id).delete(); setStatus("Removed " + x.name + "."); }
+    catch(e){ btn.disabled = false; setStatus("Couldn't remove that site. Try again in a moment."); }
+  }
+
+  $("addBtn").addEventListener("click", async function(){
+    var name = $("addName").value.trim();
+    var url = safeUrl($("addUrl").value.trim());
+    if(!name || !url){ setStatus("Enter a site name and a full address starting with https://."); return; }
+    if(!db){ setStatus("Open this page in Claude to add sites."); return; }
+    $("addBtn").disabled = true;
+    try {
+      await db.collection("sources").add({ name: name, url: url, kind: "Added by you", covers: "", lastChecked: "", found: 0, notes: "Added " + fmtDate(todayStr()) + "." });
+      $("addName").value = ""; $("addUrl").value = "";
+      setStatus("Added " + name + ".");
+    } catch(e){ setStatus("Couldn't add that site. Try again in a moment."); }
+    $("addBtn").disabled = false;
+  });
+
+  function setStatus(t){ $("status").textContent = t || ""; }
+
+  async function toggleApplied(p, btn){
+    if(!db){ setStatus("Open this page in Claude to save changes."); return; }
+    btn.disabled = true;
+    try { await db.doc("postings/" + p.id).update({ applied: !p.applied }); setStatus(""); }
+    catch(e){ setStatus("Couldn't save that change. Try again in a moment."); }
+    btn.disabled = false;
+  }
+  async function removePosting(p, btn){
+    if(!db){ setStatus("Open this page in Claude to delete postings."); return; }
+    btn.disabled = true;
+    try { await db.doc("postings/" + p.id).delete(); setStatus("Deleted " + p.company + ", " + p.title + "."); }
+    catch(e){ btn.disabled = false; setStatus("Couldn't delete that posting. Try again in a moment."); }
+  }
+
+  function selectTab(t){
+    tab = t;
+    $("tabToday").setAttribute("aria-selected", t === "today" ? "true" : "false");
+    $("tabEarlier").setAttribute("aria-selected", t === "earlier" ? "true" : "false");
+    $("tabSources").setAttribute("aria-selected", t === "sources" ? "true" : "false");
+    $("list").hidden = t === "sources";
+    $("filter").hidden = t === "sources";
+    $("sourcesView").hidden = t !== "sources";
+    setStatus("");
+    render();
+  }
+  $("tabToday").addEventListener("click", function(){ selectTab("today"); });
+  $("tabEarlier").addEventListener("click", function(){ selectTab("earlier"); });
+  $("tabSources").addEventListener("click", function(){ selectTab("sources"); });
+  $("filter").addEventListener("input", function(e){ query = e.target.value.trim(); render(); });
+
+  function openEditor(kind){
+    editing = kind;
+    $("edTitle").textContent = kind === "titles" ? "Titles" : "Companies";
+    $("edHelp").textContent = kind === "titles"
+      ? "One title per line. Claude searches for these every run."
+      : "One company per line. Claude checks these companies' career sites and job boards.";
+    $("edText").value = settings[kind] || "";
+    $("edMsg").textContent = db ? "" : "Open this page in Claude to save edits.";
+    $("edSave").disabled = !db;
+    $("edDownload").hidden = !downloads;
+    var d = $("editor");
+    if(typeof d.showModal === "function") d.showModal(); else d.setAttribute("open", "");
+    $("edText").focus();
+  }
+  $("openTitles").addEventListener("click", function(){ openEditor("titles"); });
+  $("openCompanies").addEventListener("click", function(){ openEditor("companies"); });
+  $("edClose").addEventListener("click", function(){ var d = $("editor"); if(d.close) d.close(); else d.removeAttribute("open"); });
+
+  $("edSave").addEventListener("click", async function(){
+    if(!db || !editing) return;
+    var cleaned = lines($("edText").value).join("\n");
+    var patch = {}; patch[editing] = cleaned;
+    $("edSave").disabled = true;
+    try {
+      var ref = db.doc("config/settings");
+      var snap = await ref.get();
+      if(snap.exists) await ref.update(patch); else await ref.set(Object.assign({}, settings, patch));
+      $("edText").value = cleaned;
+      $("edMsg").textContent = "Saved " + lines(cleaned).length + (editing === "titles" ? " titles." : " companies.");
+    } catch(e){
+      $("edMsg").textContent = "Couldn't save. Try again in a moment.";
+    }
+    $("edSave").disabled = false;
+  });
+
+  $("edDownload").addEventListener("click", async function(){
+    if(!downloads || !editing) return;
+    var text = lines($("edText").value).join("\n") + "\n";
+    var name = editing === "titles" ? "mba_pm_internship_titles.txt" : "internship_companies.txt";
+    try { await downloads.save({ filename: name, data: text }); $("edMsg").textContent = "Downloaded " + name + "."; }
+    catch(e){ if(e && e.code !== "declined") $("edMsg").textContent = "Download isn't available here."; }
+  });
+
+  render();
+
+  var claudeApi = window.claude && typeof window.claude.use === "function" ? window.claude : null;
+  if(!claudeApi){
+    $("headline").textContent = "Open in Claude";
+    setStatus("This page loads your saved postings when it's opened in Claude.");
+    return;
+  }
+
+  claudeApi.use("downloads").then(function(d){ downloads = d; }).catch(function(){ downloads = null; });
+
+  claudeApi.use("db").then(function(handle){
+    db = handle;
+    if(!db){
+      $("headline").textContent = "Postings unavailable";
+      setStatus("Saved postings can't load in this view. Open the page from Claude to see them.");
+      return;
+    }
+    db.doc("config/settings").onSnapshot(function(snap){
+      var d = snap.exists ? snap.data() : null;
+      settings = {
+        titles: d && typeof d.titles === "string" ? d.titles : "",
+        companies: d && typeof d.companies === "string" ? d.companies : "",
+        lastRun: d && typeof d.lastRun === "string" ? d.lastRun : "",
+        lastRunSummary: d && typeof d.lastRunSummary === "string" ? d.lastRunSummary : "",
+        watchlist: d && Array.isArray(d.watchlist) ? d.watchlist.filter(function(w){ return w && typeof w.company === "string"; }).map(function(w){ return { company: w.company, note: typeof w.note === "string" ? w.note : "" }; }) : []
+      };
+      render();
+    }, function(){ setStatus("Settings stopped syncing. Reload the page to reconnect."); });
+
+    db.collection("postings").limit(1000).onSnapshot(function(snap){
+      postings = snap.docs.map(function(doc){
+        var d = doc.data() || {};
+        return {
+          id: doc.id,
+          company: typeof d.company === "string" ? d.company : "",
+          title: typeof d.title === "string" ? d.title : "",
+          location: typeof d.location === "string" ? d.location : "",
+          url: typeof d.url === "string" ? d.url : "",
+          source: typeof d.source === "string" ? d.source : "",
+          postedDate: typeof d.postedDate === "string" ? d.postedDate : "",
+          firstSeen: typeof d.firstSeen === "string" ? d.firstSeen : "",
+          note: typeof d.note === "string" ? d.note : "",
+          status: ["open","closing","closed","unverified"].indexOf(d.status) !== -1 ? d.status : "open",
+          statusNote: typeof d.statusNote === "string" ? d.statusNote : "",
+          statusChecked: typeof d.statusChecked === "string" ? d.statusChecked : "",
+          applied: d.applied === true
+        };
+      });
+      render();
+    }, function(){ setStatus("Postings stopped syncing. Reload the page to reconnect."); });
+
+    db.collection("sources").limit(500).onSnapshot(function(snap){
+      sources = snap.docs.map(function(doc){
+        var d = doc.data() || {};
+        return {
+          id: doc.id,
+          name: typeof d.name === "string" ? d.name : doc.id,
+          url: typeof d.url === "string" ? d.url : "",
+          kind: typeof d.kind === "string" ? d.kind : "Job boards",
+          covers: typeof d.covers === "string" ? d.covers : "",
+          lastChecked: typeof d.lastChecked === "string" ? d.lastChecked : "",
+          found: typeof d.found === "number" ? d.found : 0,
+          notes: typeof d.notes === "string" ? d.notes : ""
+        };
+      });
+      render();
+    }, function(){ setStatus("Sources stopped syncing. Reload the page to reconnect."); });
+
+    db.collection("runs").limit(500).onSnapshot(function(snap){
+      runs = snap.docs.map(function(doc){
+        var d = doc.data() || {};
+        return {
+          date: typeof d.date === "string" ? d.date : doc.id,
+          newCount: typeof d.newCount === "number" ? d.newCount : 0,
+          summary: typeof d.summary === "string" ? d.summary : "",
+          next: typeof d.next === "string" ? d.next : ""
+        };
+      });
+      render();
+    }, function(){ setStatus("Search log stopped syncing. Reload the page to reconnect."); });
+  });
+})();
+</script>
+</body>
+</html>

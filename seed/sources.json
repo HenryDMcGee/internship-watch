@@ -1,0 +1,302 @@
+[
+  {
+    "id": "adobe-careers",
+    "covers": "Adobe MBA internships.",
+    "found": 0,
+    "kind": "Company career sites",
+    "lastChecked": "2026-09-18",
+    "name": "Adobe Careers",
+    "notes": "Only the 2026-cycle posting so far.",
+    "url": "https://careers.adobe.com"
+  },
+  {
+    "id": "amazon-jobs",
+    "covers": "Amazon and AWS MBA internships.",
+    "found": 2,
+    "kind": "Company career sites",
+    "lastChecked": "2026-09-18",
+    "name": "Amazon.jobs",
+    "notes": "",
+    "url": "https://www.amazon.jobs"
+  },
+  {
+    "id": "apmlist",
+    "covers": "APM programs and when their windows open.",
+    "found": 0,
+    "kind": "Trackers and aggregators",
+    "lastChecked": "2026-09-19",
+    "name": "APM List",
+    "notes": "",
+    "url": "https://apmlist.org"
+  },
+  {
+    "id": "apple-jobs",
+    "covers": "Apple student and MBA internships.",
+    "found": 1,
+    "kind": "Company career sites",
+    "lastChecked": "2026-09-18",
+    "name": "Apple Careers",
+    "notes": "",
+    "url": "https://jobs.apple.com"
+  },
+  {
+    "id": "builtin",
+    "covers": "Tech company listings, including Austin.",
+    "found": 1,
+    "kind": "Job boards",
+    "lastChecked": "2026-09-19",
+    "name": "Built In",
+    "notes": "",
+    "url": "https://builtin.com"
+  },
+  {
+    "id": "capitalone-careers",
+    "covers": "Capital One MBA product internships.",
+    "found": 0,
+    "kind": "Company career sites",
+    "lastChecked": "2026-09-19",
+    "name": "Capital One Careers",
+    "notes": "2027 MBA Product Intern not posted yet.",
+    "url": "https://www.capitalonecareers.com"
+  },
+  {
+    "id": "cisco-jobs",
+    "covers": "Cisco MBA internships.",
+    "found": 1,
+    "kind": "Company career sites",
+    "lastChecked": "2026-09-18",
+    "name": "Cisco Careers",
+    "notes": "Posting dates aren't always shown.",
+    "url": "https://jobs.cisco.com"
+  },
+  {
+    "id": "dell-jobs",
+    "covers": "Dell internships, including Austin and Round Rock.",
+    "found": 0,
+    "kind": "Company career sites",
+    "lastChecked": "2026-09-19",
+    "name": "Dell Careers",
+    "notes": "",
+    "url": "https://jobs.dell.com/en/internships"
+  },
+  {
+    "id": "dreamwork",
+    "covers": "Mirrors live tech roles with deadlines and pay.",
+    "found": 3,
+    "kind": "Job boards",
+    "lastChecked": "2026-09-18",
+    "name": "Dreamwork",
+    "notes": "",
+    "url": "https://www.dreamworkhq.com"
+  },
+  {
+    "id": "extern",
+    "covers": "When each company's summer 2027 internships open.",
+    "found": 0,
+    "kind": "Timing guides",
+    "lastChecked": "2026-09-19",
+    "name": "Extern guides",
+    "notes": "",
+    "url": "https://www.extern.com"
+  },
+  {
+    "id": "gh-jobright-pm",
+    "covers": "Daily list of product management internships.",
+    "found": 0,
+    "kind": "Trackers and aggregators",
+    "lastChecked": "2026-09-18",
+    "name": "PM internship list (GitHub)",
+    "notes": "",
+    "url": "https://github.com/jobright-ai/2026-Product-Management-Internship"
+  },
+  {
+    "id": "gh-mba-engine",
+    "covers": "Auto-posts new MBA 2027 tech internships as GitHub issues.",
+    "found": 0,
+    "kind": "Trackers and aggregators",
+    "lastChecked": "2026-09-18",
+    "name": "MBA Internship Engine (GitHub)",
+    "notes": "",
+    "url": "https://github.com/rameshtarini/mba-internship-engine"
+  },
+  {
+    "id": "glassdoor",
+    "covers": "Company listings with pay ranges.",
+    "found": 0,
+    "kind": "Job boards",
+    "lastChecked": "2026-09-18",
+    "name": "Glassdoor",
+    "notes": "",
+    "url": "https://www.glassdoor.com"
+  },
+  {
+    "id": "hpe-careers",
+    "covers": "HPE Master's and MBA internships.",
+    "found": 0,
+    "kind": "Company career sites",
+    "lastChecked": "2026-09-18",
+    "name": "HPE Careers",
+    "notes": "",
+    "url": "https://careers.hpe.com"
+  },
+  {
+    "id": "indeed",
+    "covers": "Broad internship listings.",
+    "found": 0,
+    "kind": "Job boards",
+    "lastChecked": "2026-09-19",
+    "name": "Indeed",
+    "notes": "",
+    "url": "https://www.indeed.com"
+  },
+  {
+    "id": "interninsider",
+    "covers": "Summer 2027 internship listings.",
+    "found": 0,
+    "kind": "Job boards",
+    "lastChecked": "2026-09-18",
+    "name": "Intern Insider",
+    "notes": "",
+    "url": "https://interninsider.me"
+  },
+  {
+    "id": "intuit-jobs",
+    "covers": "Intuit summer 2027 internships.",
+    "found": 1,
+    "kind": "Company career sites",
+    "lastChecked": "2026-09-18",
+    "name": "Intuit Careers",
+    "notes": "",
+    "url": "https://jobs.intuit.com"
+  },
+  {
+    "id": "jobright",
+    "covers": "Aggregated tech and MBA roles.",
+    "found": 0,
+    "kind": "Job boards",
+    "lastChecked": "2026-09-18",
+    "name": "Jobright.ai",
+    "notes": "",
+    "url": "https://jobright.ai"
+  },
+  {
+    "id": "linkedin",
+    "covers": "Public LinkedIn listings.",
+    "found": 0,
+    "kind": "Job boards",
+    "lastChecked": "2026-09-19",
+    "name": "LinkedIn Jobs",
+    "notes": "Many job pages need sign-in, so only public listings are read.",
+    "url": "https://www.linkedin.com/jobs"
+  },
+  {
+    "id": "microsoft-careers",
+    "covers": "Microsoft university and MBA internships.",
+    "found": 0,
+    "kind": "Company career sites",
+    "lastChecked": "2026-09-19",
+    "name": "Microsoft Careers",
+    "notes": "No summer 2027 MBA PM role yet.",
+    "url": "https://careers.microsoft.com"
+  },
+  {
+    "id": "mit-cdo",
+    "covers": "Public reposts of MBA listings.",
+    "found": 0,
+    "kind": "School job boards",
+    "lastChecked": "2026-09-18",
+    "name": "MIT career board",
+    "notes": "",
+    "url": "https://cdo.mit.edu"
+  },
+  {
+    "id": "nvidia-careers",
+    "covers": "NVIDIA MBA internships on Workday.",
+    "found": 0,
+    "kind": "Company career sites",
+    "lastChecked": "2026-09-18",
+    "name": "NVIDIA Careers",
+    "notes": "",
+    "url": "https://nvidia.wd5.myworkdayjobs.com/en-US/NVIDIAExternalCareerSite"
+  },
+  {
+    "id": "salesforce-careers",
+    "covers": "Futureforce internships, including APM.",
+    "found": 1,
+    "kind": "Company career sites",
+    "lastChecked": "2026-09-18",
+    "name": "Salesforce Careers",
+    "notes": "",
+    "url": "https://www.salesforce.com/company/careers/"
+  },
+  {
+    "id": "servicenow-careers",
+    "covers": "ServiceNow Master's and MBA PM internships.",
+    "found": 0,
+    "kind": "Company career sites",
+    "lastChecked": "2026-09-19",
+    "name": "ServiceNow Careers",
+    "notes": "2027 roles not posted yet.",
+    "url": "https://careers.servicenow.com"
+  },
+  {
+    "id": "simplify",
+    "covers": "Internship listings with deadlines and pay.",
+    "found": 0,
+    "kind": "Job boards",
+    "lastChecked": "2026-09-19",
+    "name": "Simplify",
+    "notes": "Shows application deadlines, useful for status checks.",
+    "url": "https://simplify.jobs"
+  },
+  {
+    "id": "themuse",
+    "covers": "Company listings, including TikTok MBA roles.",
+    "found": 0,
+    "kind": "Job boards",
+    "lastChecked": "2026-09-19",
+    "name": "The Muse",
+    "notes": "",
+    "url": "https://www.themuse.com"
+  },
+  {
+    "id": "tiktok-careers",
+    "covers": "TikTok MBA internships.",
+    "found": 0,
+    "kind": "Company career sites",
+    "lastChecked": "2026-09-19",
+    "name": "Life at TikTok",
+    "notes": "Titles use \"2027 Summer (MBA)\".",
+    "url": "https://lifeattiktok.com"
+  },
+  {
+    "id": "wayup",
+    "covers": "Student and MBA internship listings.",
+    "found": 0,
+    "kind": "Job boards",
+    "lastChecked": "2026-09-18",
+    "name": "WayUp",
+    "notes": "",
+    "url": "https://www.wayup.com"
+  },
+  {
+    "id": "yale-cdo",
+    "covers": "Public reposts of MBA listings.",
+    "found": 0,
+    "kind": "School job boards",
+    "lastChecked": "2026-09-19",
+    "name": "Yale SOM career board",
+    "notes": "Used to confirm Amazon and Apple postings.",
+    "url": "https://cdo.som.yale.edu"
+  },
+  {
+    "id": "zapply",
+    "covers": "Internship board with MBA roles.",
+    "found": 0,
+    "kind": "Job boards",
+    "lastChecked": "2026-09-18",
+    "name": "Zapply",
+    "notes": "",
+    "url": "https://zapply.jobs"
+  }
+]

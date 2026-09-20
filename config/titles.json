@@ -1,0 +1,214 @@
+{
+  "$schema": "./titles.schema.json",
+  "version": 1,
+  "exclude_words": [
+    "marketing"
+  ],
+  "titles": [
+    {
+      "title": "MBA Product Manager Intern",
+      "group": "Core PM",
+      "aliases": [],
+      "active": true
+    },
+    {
+      "title": "Associate Product Manager Intern",
+      "group": "Core PM",
+      "aliases": [
+        "APM Intern"
+      ],
+      "active": true
+    },
+    {
+      "title": "Product Management Intern, MBA",
+      "group": "Core PM",
+      "aliases": [],
+      "active": true
+    },
+    {
+      "title": "Senior Product Manager Intern",
+      "group": "Core PM",
+      "aliases": [],
+      "active": true
+    },
+    {
+      "title": "Product Owner Intern",
+      "group": "Core PM",
+      "aliases": [],
+      "active": true
+    },
+    {
+      "title": "Technical Product Manager Intern",
+      "group": "Core PM",
+      "aliases": [],
+      "active": true
+    },
+    {
+      "title": "Group Product Manager Intern",
+      "group": "Core PM",
+      "aliases": [],
+      "active": true
+    },
+    {
+      "title": "Platform Product Manager Intern",
+      "group": "Core PM",
+      "aliases": [],
+      "active": true
+    },
+    {
+      "title": "Growth Product Manager Intern",
+      "group": "Core PM",
+      "aliases": [],
+      "active": true
+    },
+    {
+      "title": "Program Manager Intern",
+      "group": "Company-specific names",
+      "aliases": [],
+      "active": true
+    },
+    {
+      "title": "Product Manager, Technical Intern",
+      "group": "Company-specific names",
+      "aliases": [
+        "PMT Intern",
+        "PM-T Intern"
+      ],
+      "active": true
+    },
+    {
+      "title": "Product Operations Manager Intern",
+      "group": "Company-specific names",
+      "aliases": [],
+      "active": true
+    },
+    {
+      "title": "Product Lead Intern",
+      "group": "Company-specific names",
+      "aliases": [],
+      "active": true
+    },
+    {
+      "title": "Product Strategy Intern",
+      "group": "Strategy and business-side",
+      "aliases": [],
+      "active": true
+    },
+    {
+      "title": "Product & Business Operations Intern",
+      "group": "Strategy and business-side",
+      "aliases": [],
+      "active": true
+    },
+    {
+      "title": "Business Development Intern",
+      "group": "Strategy and business-side",
+      "aliases": [],
+      "active": true
+    },
+    {
+      "title": "Partnerships Intern",
+      "group": "Strategy and business-side",
+      "aliases": [],
+      "active": true
+    },
+    {
+      "title": "Strategy & Operations Intern",
+      "group": "Strategy and business-side",
+      "aliases": [
+        "S&O Intern"
+      ],
+      "active": true
+    },
+    {
+      "title": "BizOps Intern",
+      "group": "Strategy and business-side",
+      "aliases": [],
+      "active": true
+    },
+    {
+      "title": "Innovation Strategy Intern",
+      "group": "Strategy and business-side",
+      "aliases": [],
+      "active": true
+    },
+    {
+      "title": "Digital Product Strategy Intern",
+      "group": "Strategy and business-side",
+      "aliases": [],
+      "active": true
+    },
+    {
+      "title": "Technical Program Manager Intern",
+      "group": "Technical and data-adjacent",
+      "aliases": [],
+      "active": true
+    },
+    {
+      "title": "Product Analytics Intern",
+      "group": "Technical and data-adjacent",
+      "aliases": [],
+      "active": true
+    },
+    {
+      "title": "Data Product Manager Intern",
+      "group": "Technical and data-adjacent",
+      "aliases": [],
+      "active": true
+    },
+    {
+      "title": "AI/ML Product Manager Intern",
+      "group": "Technical and data-adjacent",
+      "aliases": [],
+      "active": true
+    },
+    {
+      "title": "Solutions Product Manager Intern",
+      "group": "Technical and data-adjacent",
+      "aliases": [],
+      "active": true
+    },
+    {
+      "title": "Digital Product Manager Intern",
+      "group": "Industry-specific",
+      "aliases": [],
+      "active": true
+    },
+    {
+      "title": "Product Development Associate Intern",
+      "group": "Industry-specific",
+      "aliases": [],
+      "active": true
+    },
+    {
+      "title": "Merchandising Intern",
+      "group": "Industry-specific",
+      "aliases": [],
+      "active": true
+    },
+    {
+      "title": "Product Development Intern",
+      "group": "Industry-specific",
+      "aliases": [],
+      "active": true
+    },
+    {
+      "title": "Portfolio Manager Intern",
+      "group": "Industry-specific",
+      "aliases": [],
+      "active": true
+    },
+    {
+      "title": "Offering Manager Intern",
+      "group": "Industry-specific",
+      "aliases": [],
+      "active": true
+    },
+    {
+      "title": "Platform Manager Intern",
+      "group": "Industry-specific",
+      "aliases": [],
+      "active": true
+    }
+  ]
+}
