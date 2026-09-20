@@ -262,6 +262,58 @@ def test_run_marks_successful_feed_check_ok(empty_db, monkeypatch):
     assert company["last_feed_error"] is None
 
 
+def test_daily_run_without_claude_credentials_says_so_in_the_summary_and_alerts(empty_db, monkeypatch):
+    # tests/conftest.py's autouse fixture already clears both credential env
+    # vars, so this is the default state every test runs in -- issue #16:
+    # a run without them must never look identical to one where the Claude
+    # steps ran, silently.
+    _insert_company(empty_db)
+
+    def fake_run_fetcher(company, session=None):
+        return FetchResult(company_id=company["id"], company_name=company["name"], postings=[])
+
+    monkeypatch.setattr(run_module, "run_fetcher", fake_run_fetcher)
+    result = run(run_module.run(empty_db, kind="daily"))
+
+    assert "Claude steps skipped" in result["summary"]
+    assert "CLAUDE_CODE_OAUTH_TOKEN" in result["summary"]
+
+    alerts = run(empty_db.all("SELECT * FROM alerts"))
+    assert [a["type"] for a in alerts] == ["claude_not_configured"]
+
+
+def test_daily_run_without_claude_credentials_alerts_once_per_day(empty_db, monkeypatch):
+    _insert_company(empty_db)
+
+    def fake_run_fetcher(company, session=None):
+        return FetchResult(company_id=company["id"], company_name=company["name"], postings=[])
+
+    monkeypatch.setattr(run_module, "run_fetcher", fake_run_fetcher)
+    run(run_module.run(empty_db, kind="daily"))
+    run(run_module.run(empty_db, kind="daily"))
+
+    alerts = run(empty_db.all("SELECT * FROM alerts"))
+    assert len(alerts) == 1
+
+
+def test_check_now_run_without_claude_credentials_does_not_alert(empty_db, monkeypatch):
+    # check_now runs never call the Claude steps in the first place (see
+    # _run_body), so a missing credential there isn't news.
+    company_id = _insert_company(empty_db)
+
+    def fake_run_fetcher(company, session=None):
+        return FetchResult(company_id=company["id"], company_name=company["name"], postings=[])
+
+    monkeypatch.setattr(run_module, "run_fetcher", fake_run_fetcher)
+    request_id = run(empty_db.run(
+        "INSERT INTO check_requests (company_ids, requested_at, status) VALUES (?, '2026-09-20T08:00:00', 'pending')",
+        f"[{company_id}]",
+    ))
+    run(run_module.run_check_request(empty_db, request_id))
+
+    assert run(empty_db.all("SELECT * FROM alerts")) == []
+
+
 def test_run_marks_run_row_failed_instead_of_leaving_it_running(empty_db, monkeypatch):
     _insert_company(empty_db)
 

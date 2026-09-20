@@ -55,7 +55,7 @@ The daily job's Claude agent steps (`job/agent/`) run in GitHub Actions, not in 
 
 `GITHUB_TOKEN` for the daily improvement step's title-suggestion pull requests doesn't need setting up -- it's the default Actions token, already scoped by `contents: write` and `pull-requests: write` in `daily-search.yml`.
 
-Until at least one of `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY` is set, the daily job still runs (feeds, matching, verification, pruning) but skips every Claude step.
+Until at least one of `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY` is set, the daily job still runs (feeds, matching, verification, pruning) but skips every Claude step -- and says so loudly rather than silently: the run's summary on the dashboard gets a "Claude steps skipped" note, and a `claude_not_configured` alert is recorded once a day for as long as neither secret is set.
 
 ### 4. DNS record for the subdomain
 
