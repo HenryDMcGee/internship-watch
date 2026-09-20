@@ -96,3 +96,20 @@ pip install -r requirements-dev.txt
 pytest
 python scripts/validate_titles.py
 ```
+
+## Running the daily job by hand
+
+The daily job (`job/run.py`) normally runs on GitHub Actions at 08:00 America/Chicago (`.github/workflows/daily-search.yml`), or for specific companies when you click Check now on the dashboard (`.github/workflows/check-now.yml`). To run it yourself:
+
+**From GitHub Actions (writes to the real database):** open the **Actions** tab, choose **Daily search**, and click **Run workflow**. Manual runs skip the 08:00 guard and run immediately. This needs `CLOUDFLARE_D1_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`, and `D1_DATABASE_ID` saved as repository secrets first (**Settings**, **Secrets and variables**, **Actions**).
+
+**From your own computer (also writes to the real database, since the job always talks to D1's HTTP API, not a local database):**
+```bash
+pip install -r job/requirements.txt
+python -m playwright install --with-deps chromium
+export CLOUDFLARE_D1_TOKEN=...
+export CLOUDFLARE_ACCOUNT_ID=...
+export D1_DATABASE_ID=...
+python -m job.run
+```
+Add `--request-id <id>` to run only the companies from one `check_requests` row, the same way `check-now.yml` does.

@@ -1,9 +1,13 @@
 # Test dependencies for `pytest` (see CI: .github/workflows/ci.yml).
 # The Worker itself only needs what's in api/pyproject.toml; these are for
 # running the API's routes and access-token checks against plain CPython.
+# job/requirements.txt lists the daily job's own runtime dependencies
+# (requests, playwright); `requests` is repeated here so job/ tests that
+# call its fetchers and verification checks can run under CI too.
 fastapi
 httpx
 pytest
 jsonschema
 cryptography
 tzdata
+requests

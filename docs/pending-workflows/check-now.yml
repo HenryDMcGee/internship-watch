@@ -1,0 +1,48 @@
+# Runs the daily job for specific companies only, started by the Worker
+# (POST /api/companies/check) through GitHub's API. Shares a concurrency
+# group with daily-search.yml so the two never overlap.
+name: Check now
+
+on:
+  workflow_dispatch:
+    inputs:
+      request_id:
+        description: "check_requests row id to run"
+        required: true
+        type: string
+
+concurrency:
+  group: internship-watch-job
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install job dependencies
+        run: pip install -r job/requirements.txt
+
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-chromium-${{ runner.os }}-${{ hashFiles('job/requirements.txt') }}
+
+      - name: Install Playwright's Chromium
+        run: python -m playwright install --with-deps chromium
+
+      - name: Run the requested companies
+        env:
+          CLOUDFLARE_D1_TOKEN: ${{ secrets.CLOUDFLARE_D1_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          D1_DATABASE_ID: ${{ secrets.D1_DATABASE_ID }}
+        run: python -m job.run --request-id "${{ inputs.request_id }}"

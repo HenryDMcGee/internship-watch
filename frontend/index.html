@@ -67,12 +67,17 @@
 <dialog id="titlesDialog" aria-labelledby="titlesTitle">
   <div class="sheet">
     <h2 id="titlesTitle">Titles</h2>
-    <p>Read only for now. Titles change through <code>config/titles.json</code> and a pull request.</p>
+    <p>Editing opens or updates a pull request that changes only <code>config/titles.json</code>. Nothing changes until you review and merge it.</p>
+    <p id="titlesPending" class="pending-link" hidden><a id="titlesPendingLink" target="_blank" rel="noopener noreferrer">Pending change: see the open pull request</a></p>
     <div id="titlesBody"></div>
+    <h3>Edit as JSON</h3>
+    <textarea id="titlesJson" spellcheck="false" style="min-height:28vh"></textarea>
     <div class="row">
+      <button class="btn primary" id="titlesSave" type="button">Save (opens a pull request)</button>
       <span class="spacer"></span>
       <button class="btn" id="titlesClose" type="button">Close</button>
     </div>
+    <div class="msg" id="titlesMsg"></div>
   </div>
 </dialog>
 
@@ -88,6 +93,7 @@
     </div>
 
     <h3>On the list</h3>
+    <p class="sub" style="margin-top:-4px">Check now runs a search for just that company, up to 5 times a day total.</p>
     <div id="activeList"></div>
 
     <div id="removedSection" hidden>

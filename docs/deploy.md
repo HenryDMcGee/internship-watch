@@ -35,7 +35,17 @@ The API checks the Access login token on every request, so it needs two values f
 - **ACCESS_AUD:** in **Zero Trust**, open **Access controls**, **Applications**, then **Internship Watch**. Copy the **Application Audience (AUD) Tag**.
 - **ACCESS_TEAM_DOMAIN:** your team domain, in the form `<team name>.cloudflareaccess.com`. It's shown in the Zero Trust settings.
 
-### 3. DNS record for the subdomain
+### 3. GitHub token for Check now and title edits
+
+The Worker calls GitHub's API for two things: starting `check-now.yml` when you click Check now, and opening or updating the pull request that title edits make. It needs a token with **Actions: write**, **Contents: write**, and **Pull requests: write** on this repository only (a fine-grained personal access token, or a token from a GitHub App installed just here).
+
+Store it as a Worker secret, not in `wrangler.toml` (secrets never go in git):
+```powershell
+npx wrangler secret put GITHUB_TOKEN
+```
+Paste the token when prompted. If you skip this step, the dashboard still works, but Check now and title edits return an error until you add it.
+
+### 4. DNS record for the subdomain
 
 The Worker's route needs a proxied DNS record to answer on the subdomain. The record doesn't point at a real server.
 
@@ -51,19 +61,19 @@ If a record named `internship-watch` already exists, remove it first. Leave ever
 
 Run these from the `api` folder.
 
-### 4. Create the tables in the real database
+### 5. Create the tables in the real database
 ```powershell
 npx wrangler d1 migrations apply internship-watch-db --remote
 ```
 
-### 5. Load your current data (first deploy only)
+### 6. Load your current data (first deploy only)
 ```powershell
 cd ..
 python scripts/seed.py --remote
 cd api
 ```
 
-### 6. Deploy the Worker
+### 7. Deploy the Worker
 
 The Worker only ships files under `api/`, so refresh its copy of the titles
 first (`/api/titles` reads that copy, never the repository root):
@@ -82,9 +92,9 @@ uv run pywrangler deploy
 ## Deploying later changes
 
 After merging a pull request:
-1. If it added files in `db/migrations/`, run step 4.
-2. If it changed `config/titles.json`, or you're not sure, run `python scripts/bundle_titles.py` from the repository root before step 6.
-3. Run step 6.
+1. If it added files in `db/migrations/`, run step 5.
+2. If it changed `config/titles.json`, or you're not sure, run `python scripts/bundle_titles.py` from the repository root before step 7.
+3. Run step 7.
 
 To go back to the previous version:
 ```powershell
@@ -92,14 +102,15 @@ npx wrangler rollback
 ```
 Rollback doesn't undo database migrations. Any pull request that changes the database says how to reverse it.
 
-From phase 4, a GitHub Actions workflow runs steps 4 and 6 automatically when you merge, using `CLOUDFLARE_DEPLOY_TOKEN`.
+From phase 4, a GitHub Actions workflow runs steps 5 and 7 automatically when you merge, using `CLOUDFLARE_DEPLOY_TOKEN`.
 
 ## If something goes wrong
 
 | What you see | Likely cause | Fix |
 | --- | --- | --- |
-| "Site can't be reached" | The DNS record from step 3 is missing | Add it, set to Proxied |
+| "Site can't be reached" | The DNS record from step 4 is missing | Add it, set to Proxied |
 | The dashboard loads without asking you to sign in | The DNS record is set to DNS only, or the Access application's hostname doesn't match | Set the record to Proxied, and check the hostname is exactly `internship-watch.mcgeehenry.com` |
-| Sign-in works but the dashboard shows errors or no data | `ACCESS_AUD` or `ACCESS_TEAM_DOMAIN` is wrong, or migrations weren't applied | Recheck step 2, then run step 4 |
+| Sign-in works but the dashboard shows errors or no data | `ACCESS_AUD` or `ACCESS_TEAM_DOMAIN` is wrong, or migrations weren't applied | Recheck step 2, then run step 5 |
+| Check now or title edits return an error | `GITHUB_TOKEN` isn't set, or lacks Actions/Contents/Pull requests write | Recheck step 3 |
 | Deploy fails because of a Python package | The package doesn't run in Python Workers | Tell Claude; the plan's fallback is a small TypeScript Worker, proposed first |
 | Your main website shows a Cloudflare login | The Access application was created for `mcgeehenry.com` instead of the subdomain | Fix the application's hostname in Zero Trust |
