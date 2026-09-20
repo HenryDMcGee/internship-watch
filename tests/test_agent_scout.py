@@ -24,7 +24,7 @@ def test_run_scout_parses_mocked_response():
     def fake_run_claude(step, prompt, *, model):
         assert step == "scout"
         return ClaudeStepResult(
-            step=step, model=model,
+            step=step, model=model, web_searches=3,
             text='{"sources": [{"company_name": "Acme", "name": "Acme careers", "url": "https://acme.example/careers", "kind": "Company career sites", "covers": "Acme roles"}]}',
         )
 
@@ -36,7 +36,7 @@ def test_run_scout_parses_mocked_response():
 def test_run_scout_keeps_valid_entries_when_some_fail_validation():
     def fake_run_claude(step, prompt, *, model):
         return ClaudeStepResult(
-            step=step, model=model,
+            step=step, model=model, web_searches=3,
             text=(
                 '{"sources": ['
                 '{"company_name": "Acme", "name": "Acme careers", "url": "https://acme.example/careers"}, '
@@ -52,12 +52,31 @@ def test_run_scout_keeps_valid_entries_when_some_fail_validation():
 
 def test_run_scout_raises_loudly_when_every_result_fails_validation():
     def fake_run_claude(step, prompt, *, model):
-        return ClaudeStepResult(step=step, model=model, text='{"sources": [{"url": "https://missing-name.example"}]}')
+        return ClaudeStepResult(
+            step=step, model=model, web_searches=3, text='{"sources": [{"url": "https://missing-name.example"}]}',
+        )
 
     with pytest.raises(ClaudeOutputError) as exc_info:
         run_scout([{"name": "Acme"}], model="sonnet", run_claude=fake_run_claude)
     # The call still spent real tokens/searches -- that usage must not be
     # lost just because the reply couldn't be used (see `pipeline.guarded`).
+    assert exc_info.value.result is not None
+    assert exc_info.value.result.step == "scout"
+
+
+def test_run_scout_raises_loudly_when_it_made_no_web_searches():
+    # The scout has WebSearch/WebFetch enabled and real companies to look for -- zero
+    # searches means Claude answered from memory, so any source it reports is
+    # invented, not found (issue #20). That must fail loudly, not look like a clean
+    # "found a source" run.
+    def fake_run_claude(step, prompt, *, model):
+        return ClaudeStepResult(
+            step=step, model=model, web_searches=0,
+            text='{"sources": [{"company_name": "Acme", "name": "Acme careers", "url": "https://acme.example/careers"}]}',
+        )
+
+    with pytest.raises(ClaudeOutputError) as exc_info:
+        run_scout([{"name": "Acme"}], model="sonnet", run_claude=fake_run_claude)
     assert exc_info.value.result is not None
     assert exc_info.value.result.step == "scout"
 

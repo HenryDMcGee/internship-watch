@@ -4,6 +4,7 @@ import pytest
 
 from job.agent.client import (
     DEFAULT_TIMEOUT_SECONDS,
+    MIN_PROMPT_CHARS,
     STEP_TIMEOUT_SECONDS,
     ClaudeCallError,
     ClaudeLimitError,
@@ -12,6 +13,11 @@ from job.agent.client import (
     resolve_model,
     run_claude_step,
 )
+
+# Real step prompts are always well over `MIN_PROMPT_CHARS` (see the constant's
+# docstring); tests that aren't specifically about prompt length use this instead of a
+# short literal so they don't trip the minimum-length guard.
+SAMPLE_PROMPT = "Search for real internship postings at these companies: Acme, Globex. " * 10
 
 
 def _fake_runner(stdout="", stderr="", returncode=0):
@@ -33,7 +39,7 @@ def _json_result(result_text, **usage_overrides):
 
 def test_run_claude_step_parses_usage_and_result():
     runner = _fake_runner(stdout=_json_result('{"ok": true}'))
-    result = run_claude_step("classification", "prompt", model="haiku", runner=runner)
+    result = run_claude_step("classification", SAMPLE_PROMPT, model="haiku", runner=runner)
     assert result.text == '{"ok": true}'
     assert result.input_tokens == 100
     assert result.output_tokens == 50
@@ -50,13 +56,66 @@ def test_run_claude_step_builds_tools_flags_for_web_steps():
         captured["args"] = args
         return subprocess.CompletedProcess(args, 0, stdout=_json_result("{}"), stderr="")
 
-    run_claude_step("discovery", "prompt", model="sonnet", runner=runner)
+    run_claude_step("discovery", SAMPLE_PROMPT, model="sonnet", runner=runner)
     args = captured["args"]
     assert "--tools" in args
     assert args[args.index("--tools") + 1] == "WebSearch,WebFetch"
     assert "--allowedTools" in args
     assert "--permission-prompts" in args
     assert args[args.index("--permission-prompts") + 1] == "none"
+
+
+def test_run_claude_step_sends_the_prompt_on_stdin_not_as_an_argument():
+    # `claude`'s usage is `claude [options] [command] [prompt]` -- two positional
+    # slots. Passing the prompt as a bare command-line argument risks it binding to
+    # `[command]` instead of `[prompt]`, leaving the real prompt empty (issue #20).
+    # Sending it on stdin (`-p`'s own documented "useful for pipes" behavior) avoids
+    # that ambiguity entirely.
+    captured = {}
+
+    def runner(args, **kwargs):
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+        return subprocess.CompletedProcess(args, 0, stdout=_json_result("{}"), stderr="")
+
+    run_claude_step("classification", SAMPLE_PROMPT, model="haiku", runner=runner)
+    assert SAMPLE_PROMPT not in captured["args"]
+    assert captured["kwargs"]["input"] == SAMPLE_PROMPT
+
+
+def test_run_claude_step_rejects_a_prompt_that_is_too_short():
+    calls = []
+
+    def runner(args, **kwargs):
+        calls.append(args)
+        return subprocess.CompletedProcess(args, 0, stdout=_json_result("{}"), stderr="")
+
+    with pytest.raises(ClaudeCallError):
+        run_claude_step("classification", "way too short", model="haiku", runner=runner)
+    assert calls == []  # must not spend a real call on a prompt this short
+
+
+def test_run_claude_step_accepts_a_prompt_right_at_the_minimum_length():
+    prompt = "x" * MIN_PROMPT_CHARS
+    runner = _fake_runner(stdout=_json_result("{}"))
+    run_claude_step("classification", prompt, model="haiku", runner=runner)  # must not raise
+
+
+def test_run_claude_step_does_not_enforce_a_minimum_length_for_unclear_page():
+    # A scraped page's visible text can legitimately be very short (that sparseness is
+    # often why the plain-text heuristics called it unclear in the first place) -- the
+    # minimum-length guard would otherwise reject a real, valid call.
+    runner = _fake_runner(stdout=_json_result('{"decision": "unclear", "note": null}'))
+    run_claude_step("unclear_page", "short page text", model="haiku", runner=runner)  # must not raise
+
+
+def test_run_claude_step_logs_the_command_and_prompt_length(capsys):
+    runner = _fake_runner(stdout=_json_result("{}"))
+    run_claude_step("discovery", SAMPLE_PROMPT, model="sonnet", runner=runner)
+    output = capsys.readouterr().out
+    assert str(len(SAMPLE_PROMPT)) in output
+    assert "--tools WebSearch,WebFetch" in output
+    assert "--model sonnet" in output
 
 
 def test_run_claude_step_disables_tools_for_text_only_steps():
@@ -66,7 +125,7 @@ def test_run_claude_step_disables_tools_for_text_only_steps():
         captured["args"] = args
         return subprocess.CompletedProcess(args, 0, stdout=_json_result("{}"), stderr="")
 
-    run_claude_step("classification", "prompt", model="haiku", runner=runner)
+    run_claude_step("classification", SAMPLE_PROMPT, model="haiku", runner=runner)
     args = captured["args"]
     assert args[args.index("--tools") + 1] == ""
     assert "--allowedTools" not in args
@@ -74,32 +133,32 @@ def test_run_claude_step_disables_tools_for_text_only_steps():
 
 def test_run_claude_step_unknown_step_rejected():
     with pytest.raises(ValueError):
-        run_claude_step("not_a_step", "prompt", model="sonnet", runner=_fake_runner())
+        run_claude_step("not_a_step", SAMPLE_PROMPT, model="sonnet", runner=_fake_runner())
 
 
 def test_run_claude_step_raises_on_nonzero_exit():
     runner = _fake_runner(returncode=1, stderr="boom")
     with pytest.raises(ClaudeCallError):
-        run_claude_step("classification", "prompt", model="haiku", runner=runner)
+        run_claude_step("classification", SAMPLE_PROMPT, model="haiku", runner=runner)
 
 
 def test_run_claude_step_raises_limit_error_for_rate_limit_message():
     runner = _fake_runner(returncode=1, stderr="Error: usage limit reached for this account")
     with pytest.raises(ClaudeLimitError):
-        run_claude_step("classification", "prompt", model="haiku", runner=runner)
+        run_claude_step("classification", SAMPLE_PROMPT, model="haiku", runner=runner)
 
 
 def test_run_claude_step_raises_on_invalid_json_stdout():
     runner = _fake_runner(stdout="not json")
     with pytest.raises(ClaudeCallError):
-        run_claude_step("classification", "prompt", model="haiku", runner=runner)
+        run_claude_step("classification", SAMPLE_PROMPT, model="haiku", runner=runner)
 
 
 def test_run_claude_step_raises_when_payload_reports_error():
     import json
     runner = _fake_runner(stdout=json.dumps({"result": "boom", "is_error": True, "usage": {}}))
     with pytest.raises(ClaudeCallError):
-        run_claude_step("classification", "prompt", model="haiku", runner=runner)
+        run_claude_step("classification", SAMPLE_PROMPT, model="haiku", runner=runner)
 
 
 def test_run_claude_step_times_out():
@@ -107,7 +166,7 @@ def test_run_claude_step_times_out():
         raise subprocess.TimeoutExpired(cmd=args, timeout=1)
 
     with pytest.raises(ClaudeCallError):
-        run_claude_step("classification", "prompt", model="haiku", runner=runner, timeout=1)
+        run_claude_step("classification", SAMPLE_PROMPT, model="haiku", runner=runner, timeout=1)
 
 
 def test_run_claude_step_gives_web_search_steps_a_longer_timeout_by_default():
@@ -117,7 +176,7 @@ def test_run_claude_step_gives_web_search_steps_a_longer_timeout_by_default():
         captured["timeout"] = kwargs.get("timeout")
         return subprocess.CompletedProcess(args, 0, stdout=_json_result("{}"), stderr="")
 
-    run_claude_step("discovery", "prompt", model="sonnet", runner=runner)
+    run_claude_step("discovery", SAMPLE_PROMPT, model="sonnet", runner=runner)
     assert captured["timeout"] == STEP_TIMEOUT_SECONDS["discovery"]
     assert captured["timeout"] > DEFAULT_TIMEOUT_SECONDS
 
@@ -129,7 +188,7 @@ def test_run_claude_step_uses_default_timeout_for_text_only_steps():
         captured["timeout"] = kwargs.get("timeout")
         return subprocess.CompletedProcess(args, 0, stdout=_json_result("{}"), stderr="")
 
-    run_claude_step("classification", "prompt", model="haiku", runner=runner)
+    run_claude_step("classification", SAMPLE_PROMPT, model="haiku", runner=runner)
     assert captured["timeout"] == DEFAULT_TIMEOUT_SECONDS
 
 
@@ -140,7 +199,7 @@ def test_run_claude_step_explicit_timeout_overrides_the_per_step_default():
         captured["timeout"] = kwargs.get("timeout")
         return subprocess.CompletedProcess(args, 0, stdout=_json_result("{}"), stderr="")
 
-    run_claude_step("discovery", "prompt", model="sonnet", runner=runner, timeout=42)
+    run_claude_step("discovery", SAMPLE_PROMPT, model="sonnet", runner=runner, timeout=42)
     assert captured["timeout"] == 42
 
 

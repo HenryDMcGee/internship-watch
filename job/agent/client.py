@@ -13,12 +13,24 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import subprocess
 from dataclasses import dataclass
 from typing import Callable
 
 CLAUDE_BIN = "claude"
 DEFAULT_TIMEOUT_SECONDS = 300
+
+# Every real prompt for these steps is built from real data -- company names, titles,
+# postings -- and is comfortably over 700 characters even for a single item (measured
+# directly from each step's `build_prompt`). A prompt under this floor means the caller
+# lost its real content before the call ever went out, which is exactly how issue #20's
+# steps ended up answering from memory with no searches. `unclear_page` is deliberately
+# excluded: its content is a scraped page's visible text, which can legitimately be very
+# short or empty -- that sparseness is often *why* the plain-text heuristics called it
+# unclear in the first place (see `job/agent/unclear.py`).
+MIN_PROMPT_CHARS = 400
+STEPS_WITH_MIN_PROMPT_CHARS = frozenset({"discovery", "scout", "classification", "improvement"})
 
 # Steps that call the web need the model to actually search or fetch pages;
 # every other step is pure text-in, JSON-out.
@@ -100,11 +112,22 @@ def run_claude_step(
 ) -> ClaudeStepResult:
     if step not in STEP_TOOLS:
         raise ValueError(f"unknown agent step {step!r}")
+    if step in STEPS_WITH_MIN_PROMPT_CHARS and len(prompt) < MIN_PROMPT_CHARS:
+        raise ClaudeCallError(
+            f"{step} step's prompt is only {len(prompt)} character(s), under the {MIN_PROMPT_CHARS}-character "
+            "minimum for a real prompt -- refusing to call Claude with what looks like an empty or lost prompt"
+        )
     if timeout is None:
         timeout = STEP_TIMEOUT_SECONDS.get(step, DEFAULT_TIMEOUT_SECONDS)
 
+    # The prompt goes on stdin, not as a positional argument. `claude`'s own usage line
+    # is `claude [options] [command] [prompt]` -- two positional slots -- and a single
+    # non-flag token on the command line risks binding to `[command]` instead of
+    # `[prompt]`, leaving the real prompt empty and the CLI falling back to (empty)
+    # stdin. `-p`'s own help text documents stdin input as the alternative ("useful for
+    # pipes"), which sidesteps that ambiguity entirely.
     args = [
-        CLAUDE_BIN, "-p", prompt, "--output-format", "json", "--model", model,
+        CLAUDE_BIN, "-p", "--output-format", "json", "--model", model,
         # Runs unattended in GitHub Actions: anything that would need a
         # permission decision must be auto-denied, never hang waiting for one.
         "--permission-prompts", "none",
@@ -119,8 +142,10 @@ def run_claude_step(
     if system_prompt:
         args += ["--append-system-prompt", system_prompt]
 
+    print(f"{step}: prompt is {len(prompt)} character(s); running `{shlex.join(args)}` (prompt sent on stdin)")
+
     try:
-        completed = runner(args, capture_output=True, text=True, timeout=timeout, check=False)
+        completed = runner(args, input=prompt, capture_output=True, text=True, timeout=timeout, check=False)
     except subprocess.TimeoutExpired as exc:
         raise ClaudeCallError(f"{step} step timed out after {timeout}s") from exc
 

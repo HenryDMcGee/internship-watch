@@ -1,3 +1,5 @@
+import pytest
+
 from job.agent.client import ClaudeStepResult
 from job.agent.discovery import build_prompt, order_companies, run_discovery
 from job.agent.schemas import ClaudeOutputError
@@ -51,7 +53,7 @@ def test_run_discovery_parses_and_validates_mocked_response():
     def fake_run_claude(step, prompt, *, model):
         assert step == "discovery"
         return ClaudeStepResult(
-            step=step, model=model,
+            step=step, model=model, web_searches=3,
             text='{"results": [{"company_name": "Acme", "title": "PM Intern", "url": "https://x", "location_text": "SF"}]}',
         )
 
@@ -65,10 +67,28 @@ def test_run_discovery_parses_and_validates_mocked_response():
 
 def test_run_discovery_raises_on_invalid_claude_output():
     def fake_run_claude(step, prompt, *, model):
-        return ClaudeStepResult(step=step, model=model, text='{"nope": true}')
+        return ClaudeStepResult(step=step, model=model, web_searches=3, text='{"nope": true}')
 
     try:
         run_discovery([{"name": "Acme"}], TITLES_DOC, LOCATIONS, None, model="sonnet", run_claude=fake_run_claude)
         assert False, "expected ClaudeOutputError"
     except ClaudeOutputError:
         pass
+
+
+def test_run_discovery_raises_loudly_when_it_made_no_web_searches():
+    # Discovery has WebSearch/WebFetch enabled and real companies to look for -- zero
+    # searches means Claude answered from memory, so any URL it reports is invented,
+    # not found (issue #20). That must fail loudly, not look like a clean run.
+    def fake_run_claude(step, prompt, *, model):
+        return ClaudeStepResult(
+            step=step, model=model, web_searches=0,
+            text='{"results": [{"company_name": "Acme", "title": "PM Intern", "url": "https://x", "location_text": "SF"}]}',
+        )
+
+    with pytest.raises(ClaudeOutputError) as exc_info:
+        run_discovery([{"name": "Acme"}], TITLES_DOC, LOCATIONS, None, model="sonnet", run_claude=fake_run_claude)
+    # The call still cost real tokens even though its reply is being distrusted --
+    # that spend must still be recorded (see `pipeline.guarded`).
+    assert exc_info.value.result is not None
+    assert exc_info.value.result.step == "discovery"
