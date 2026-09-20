@@ -11,6 +11,7 @@ Every morning, find open Summer 2027 MBA internships that match Henry's titles a
 | Thing | Name |
 | --- | --- |
 | Display name | Internship Watch |
+| Dashboard address | `https://internship-watch.mcgeehenry.com` (mcgeehenry.com is already in Henry's Cloudflare account, with his website on it) |
 | GitHub repository | `internship-watch` |
 | Cloudflare Pages project | `internship-watch` |
 | Cloudflare Worker | `internship-watch-api` |
@@ -24,11 +25,11 @@ Every morning, find open Summer 2027 MBA internships that match Henry's titles a
 | Daily job | GitHub Actions, Python 3.12 | 08:00 America/Chicago. Scheduled at 13:00 and 14:00 UTC with a guard step. Can also be started by hand. |
 | Check now | GitHub Actions `check-now.yml` | Started by the Worker through GitHub's API. Checks specific companies only. Max 5 per day. |
 | API | Cloudflare Python Worker, FastAPI | Serves `/api/*`. Verifies the Cloudflare Access token on every request. |
-| Dashboard | Cloudflare Pages, static files | Same domain as the API. |
+| Dashboard | Cloudflare Pages, static files | `internship-watch.mcgeehenry.com`, same hostname as the API. The subdomain's DNS record must stay proxied. Redirect the default `internship-watch.pages.dev` address to the subdomain. |
 | Database | Cloudflare D1 | The daily job writes through Cloudflare's D1 HTTP API. The Worker uses its D1 binding. |
 | Backups | Cloudflare R2 | Nightly SQL export from the daily job. |
-| Login | Cloudflare Access | Henry's email only. |
-| Claude | Claude Code in GitHub Actions (Henry's subscription, `CLAUDE_CODE_OAUTH_TOKEN`) | Switching to `ANTHROPIC_API_KEY` must be a single setting. |
+| Login | Cloudflare Access | Self-hosted application for exactly `internship-watch.mcgeehenry.com`, one-time PIN, Henry's email only. Never on the root `mcgeehenry.com`, which hosts his website. |
+| Claude | Claude Code in GitHub Actions (Henry's subscription, `CLAUDE_CODE_OAUTH_TOKEN`, the same token used for building) | Default models: Sonnet for discovery, the source scout, and daily improvement; Haiku for classification and unclear-page checks. Switching to `ANTHROPIC_API_KEY` must be a single setting. |
 | Alerts and summary | Claude Code remote routine, triggered by API call | One message a day after the run. Alerts are included in it. |
 
 ## Daily run, in order
@@ -62,7 +63,7 @@ Every morning, find open Summer 2027 MBA internships that match Henry's titles a
   - billing mode (subscription or API key)
   - daily, weekly, and monthly budgets. Subscription defaults: 4 million tokens a day, 35 searches a day, 25 million tokens a week. API key defaults: $1.50 a day and $30 a month.
   - share per step, defaulting to discovery 60%, scout 20%, classification 15%, improvement 5%
-  - model per step (Haiku or Sonnet)
+  - model per step (Haiku or Sonnet), defaulting to Sonnet for discovery, the source scout, and daily improvement, and Haiku for classification and unclear-page checks
   - search limits per run and per company, and browser checks per run
   - order for cutting steps when the budget runs low: scout, then low-yield discovery, then the rest. Classification and pruning always run.
   - forecast and change history
@@ -117,7 +118,7 @@ Map the old field names (`firstSeen`, `statusNote`, and so on) to the new schema
    - source scout and daily improvement
    - Analytics, Budgets, usage tracking, and the Claude routine summary and alerts
 4. **Launch:**
-   - Cloudflare Pages, Worker, and D1 in production on Henry's new domain behind Access
+   - Cloudflare Pages, Worker, and D1 in production at `internship-watch.mcgeehenry.com` behind Access. Henry connects the subdomain once under the Pages project's Custom domains, so the deploy token doesn't need DNS permissions.
    - the deploy workflow and nightly R2 backups
 
 ## Secrets (never in git)
@@ -125,7 +126,7 @@ Map the old field names (`firstSeen`, `statusNote`, and so on) to the new schema
 | Secret | Stored in | Used by |
 | --- | --- | --- |
 | `CLAUDE_CODE_OAUTH_TOKEN` (or `ANTHROPIC_API_KEY`) | GitHub | Building with Claude Code, daily job, Check now |
-| `CLOUDFLARE_DEPLOY_TOKEN` | GitHub | Deploys (phase 4) |
+| `CLOUDFLARE_DEPLOY_TOKEN` (D1, Pages, and Workers Scripts edit; Workers Routes edit on the mcgeehenry.com zone) | GitHub | Deploys (phase 4) |
 | `CLOUDFLARE_D1_TOKEN` | GitHub | Daily job, Check now (phase 2) |
 | `CLOUDFLARE_ACCOUNT_ID`, `D1_DATABASE_ID` | GitHub | Deploys and daily job |
 | Worker's GitHub token (Actions, Contents, and Pull requests read and write, this repository only) | Cloudflare Worker | Check now and title edits (phase 2). The Worker may only edit `config/titles.json`. |

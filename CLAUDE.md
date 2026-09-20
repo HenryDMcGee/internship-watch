@@ -16,7 +16,7 @@ A private tool that finds Summer 2027 MBA product-type internships every morning
 - API: FastAPI in a Cloudflare Python Worker, `api/`. Python Workers only support a subset of packages. If something needed won't run there, propose a small TypeScript Worker instead of working around it.
 - Database: Cloudflare D1 (SQLite). Migrations in `db/migrations/`, numbered `0001_*.sql`. Local development uses `wrangler` with a local D1.
 - Dashboard: static HTML, CSS, and JavaScript in `frontend/`, served by Cloudflare Pages. It calls the API at `/api/*` on the same domain. Keep the look of `docs/reference/current-dashboard.html`.
-- Names: repository and folders `internship-watch`; Cloudflare Pages project `internship-watch`, Worker `internship-watch-api`, D1 database `internship-watch-db`, R2 bucket `internship-watch-backups`. Display name "Internship Watch".
+- Names: repository and folders `internship-watch`; Cloudflare Pages project `internship-watch`, Worker `internship-watch-api`, D1 database `internship-watch-db`, R2 bucket `internship-watch-backups`. Display name "Internship Watch". Dashboard address `internship-watch.mcgeehenry.com`. Never change anything on the root `mcgeehenry.com`, which hosts Henry's website.
 - Titles: `config/titles.json`, validated by `config/titles.schema.json` and `scripts/validate_titles.py`. Titles change only through pull requests.
 
 ## Rules
