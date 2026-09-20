@@ -25,7 +25,14 @@ except ImportError:  # pragma: no cover - zoneinfo is stdlib on 3.9+
     ZoneInfo = None  # type: ignore
 
 from job import config
-from job.agent.alerts import claude_limit_alert, evaluate_budget_alerts, evaluate_spike_alert, record_alerts, run_failed_alert
+from job.agent.alerts import (
+    claude_limit_alert,
+    claude_not_configured_alert,
+    evaluate_budget_alerts,
+    evaluate_spike_alert,
+    record_alerts,
+    run_failed_alert,
+)
 from job.agent.budgets import load_budget_status, monthly_forecast, weekly_forecast
 from job.agent.client import is_configured as claude_is_configured
 from job.agent.pipeline import build_unclear_reader, run_agent_steps
@@ -213,7 +220,8 @@ async def _run_body(db, run_id: int, started_at: str, kind: str, company_ids: li
     agent_outcome = None
     unclear_reader = None
     unclear_results: list = []
-    if kind == "daily" and claude_is_configured():
+    claude_configured = claude_is_configured()
+    if kind == "daily" and claude_configured:
         today_str = today_central().isoformat()
         status = await load_budget_status(db, budget_settings, today=today_str)
         agent_outcome = await run_agent_steps(
@@ -243,6 +251,11 @@ async def _run_body(db, run_id: int, started_at: str, kind: str, company_ids: li
         f"Checked {len(companies)} companies, {new_count} new posting(s), "
         f"{feed_error_count} feed error(s), {no_source_count} with no source yet."
     )
+    if kind == "daily" and not claude_configured:
+        # Never let this go unsaid (issue #16): a run without Claude
+        # credentials still completes, but discovery, classification, the
+        # source scout, and daily improvement all silently did nothing.
+        summary += " Claude steps skipped: no CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY is set."
     finished_at = now_iso()
     await db.run(
         "UPDATE runs SET finished_at = ?, status = 'completed', new_count = ?, summary = ? WHERE id = ?",
@@ -296,6 +309,8 @@ async def _finish_daily_run(db, *, run_status: str, run_reason: str | None, agen
             candidates.append(spike)
         if agent_outcome and agent_outcome.get("claude_limit_hit"):
             candidates.append(claude_limit_alert("; ".join(agent_outcome.get("errors") or []) or "usage limit reached"))
+        if not claude_is_configured():
+            candidates.append(claude_not_configured_alert())
         if run_status == "failed":
             candidates.append(run_failed_alert(run_reason or "unknown error"))
 

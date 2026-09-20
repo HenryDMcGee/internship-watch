@@ -5,9 +5,11 @@ from job.agent.alerts import (
     BUDGET_100,
     BUDGET_80,
     CLAUDE_LIMIT,
+    CLAUDE_NOT_CONFIGURED,
     RUN_FAILED,
     USAGE_SPIKE,
     claude_limit_alert,
+    claude_not_configured_alert,
     evaluate_budget_alerts,
     evaluate_spike_alert,
     record_alerts,
@@ -64,8 +66,14 @@ def test_run_failed_alert_type():
     assert run_failed_alert("boom").type == RUN_FAILED
 
 
+def test_claude_not_configured_alert_type_and_severity():
+    alert = claude_not_configured_alert()
+    assert alert.type == CLAUDE_NOT_CONFIGURED
+    assert alert.severity == "critical"
+
+
 def test_all_alert_types_registered():
-    assert ALERT_TYPES == {BUDGET_80, BUDGET_100, USAGE_SPIKE, CLAUDE_LIMIT, RUN_FAILED}
+    assert ALERT_TYPES == {BUDGET_80, BUDGET_100, USAGE_SPIKE, CLAUDE_LIMIT, RUN_FAILED, CLAUDE_NOT_CONFIGURED}
 
 
 # -- one per type per day ----------------------------------------------------
