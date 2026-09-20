@@ -7,7 +7,10 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 API_DIR = ROOT / "api"
 FIXTURES_DIR = Path(__file__).resolve().parent / "fixtures"
-SCHEMA_SQL = (ROOT / "db" / "migrations" / "0001_init.sql").read_text(encoding="utf-8")
+MIGRATIONS_DIR = ROOT / "db" / "migrations"
+SCHEMA_SQL = "\n".join(
+    p.read_text(encoding="utf-8") for p in sorted(MIGRATIONS_DIR.glob("*.sql"))
+)
 
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))

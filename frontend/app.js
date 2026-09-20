@@ -515,6 +515,8 @@
     var sub = [];
     if (c.status === "ranked" && c.rank) sub.push("Rank " + c.rank);
     if (c.careers_url) sub.push(c.feed_type ? c.feed_type : "careers link on file");
+    else if (c.last_feed_status === "no_source") sub.push("no source yet");
+    if (c.last_feed_status === "error" && c.last_feed_error) sub.push("feed error: " + c.last_feed_error);
     if (sub.length) name.appendChild(el("span", null, sub.join(" · ")));
     row.appendChild(name);
     action(row);
