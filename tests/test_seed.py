@@ -108,23 +108,41 @@ def test_build_statements_imports_ranking_as_ranked_companies():
     assert len(ranked_inserts) == len(ranking_rows) == 100
 
 
-def test_map_ranked_company_detects_amazons_feed_from_ranking_csv():
-    # seed/ranking.csv's Amazon row carries a careers_url so seeding sets
-    # feed_type/feed_id from it, the same detection the "Add company" form
-    # uses, instead of leaving Amazon with no known feed.
-    ranking_rows = seed.load_ranking_csv()
-    amazon = next(r for r in ranking_rows if r["name"] == "Amazon")
-    mapped = seed.map_ranked_company(amazon)
-    assert mapped["careers_url"] == "https://www.amazon.jobs"
-    assert mapped["feed_type"] == "amazon_jobs"
+def test_map_ranked_company_detects_feed_from_careers_url_already_on_file():
+    # scripts/seed.py never looks up a careers page itself -- it only runs
+    # detect_feed() on whatever careers_url a row already carries, the same
+    # detection the "Add company" form uses. Finding real careers links for
+    # ranked companies is phase 3's source scout's job (see issue #13).
+    row = {
+        "rank": 1, "name": "Acme", "market_cap_usd": 1_000_000_000.0, "hq_country": "US",
+        "as_of_date": "2027-01-01", "source": "manual snapshot",
+        "careers_url": "https://boards.greenhouse.io/acme",
+    }
+    mapped = seed.map_ranked_company(row)
+    assert mapped["feed_type"] == "greenhouse"
+    assert mapped["feed_id"] == "acme"
 
 
-def test_build_statements_gives_amazon_a_working_feed(empty_db):
+def test_map_ranked_company_leaves_feed_blank_without_careers_url():
+    row = {
+        "rank": 1, "name": "Acme", "market_cap_usd": 1_000_000_000.0, "hq_country": "US",
+        "as_of_date": "2027-01-01", "source": "manual snapshot", "careers_url": None,
+    }
+    mapped = seed.map_ranked_company(row)
+    assert mapped["feed_type"] is None
+    assert mapped["feed_id"] is None
+
+
+def test_build_statements_leaves_ranked_companies_without_a_known_feed(empty_db):
+    # seed/ranking.csv currently has no careers_url values on file, so none
+    # of the 100 ranked companies should get a feed_type at seed time --
+    # that's "no source yet", not something for the seed step to guess.
     statements = seed.build_statements()
     for sql, params in statements:
         run(empty_db.run(sql, *params))
-    amazon = run(empty_db.first("SELECT * FROM companies WHERE name = 'Amazon'"))
-    assert amazon["feed_type"] == "amazon_jobs"
+    ranked = run(empty_db.all("SELECT * FROM companies WHERE status = 'ranked'"))
+    assert len(ranked) == 100
+    assert all(c["feed_type"] is None for c in ranked)
 
 
 def test_build_statements_flags_unranked_companies_for_review(empty_db):

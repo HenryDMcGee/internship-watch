@@ -40,7 +40,7 @@ rank,name,market_cap_usd_billions,hq_country,as_of_date,source,careers_url
 2,Microsoft,3400,US,2026-09-01,manual snapshot,
 3,NVIDIA,3300,US,2026-09-01,manual snapshot,
 4,Alphabet,2500,US,2026-09-01,manual snapshot,
-5,Amazon,2300,US,2026-09-01,manual snapshot,https://www.amazon.jobs
+5,Amazon,2300,US,2026-09-01,manual snapshot,
 6,Meta Platforms,1600,US,2026-09-01,manual snapshot,
 7,Broadcom,1300,US,2026-09-01,manual snapshot,
 8,TSMC,1200,TW,2026-09-01,manual snapshot,
