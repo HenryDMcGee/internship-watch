@@ -138,6 +138,16 @@ dialog::backdrop{background:rgba(20,16,30,.55)}
 .titles-group li{margin:4px 0}
 .titles-group .aliases{color:var(--muted); font-size:13px}
 
+.pending-link{background:var(--accent-soft); border-radius:8px; padding:8px 10px; margin:0 0 12px}
+.pending-link a{color:var(--accent); font-weight:700; text-decoration:none}
+.pending-link a:hover{text-decoration:underline}
+
+.tag{display:inline-block; font-size:12px; font-weight:700; border-radius:999px; padding:1px 8px; border:1px solid var(--line); color:var(--muted)}
+.tag.unclear{border-color:var(--accent); color:var(--accent)}
+
+.check-status{font-size:13px; color:var(--muted)}
+.check-status.err{color:var(--danger)}
+
 @media (prefers-reduced-motion: no-preference){
   .item.flash{animation:flash 1.2s ease-out 1}
   @keyframes flash{from{background:var(--accent-soft)} to{background:var(--surface)}}

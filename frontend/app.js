@@ -5,6 +5,7 @@
   var state = {
     tab: "today",
     showClosed: false,
+    showOutside: false,
     query: "",
     postings: { today: [], earlier: [], archived: [] },
     sources: [],
@@ -46,7 +47,7 @@
       var detail = "";
       try {
         var body = await resp.json();
-        detail = body.detail || "";
+        detail = typeof body.detail === "string" ? body.detail : JSON.stringify(body.detail || "");
       } catch (e) { /* no JSON body */ }
       throw new Error(detail || "Request failed (" + resp.status + ")");
     }
@@ -81,6 +82,14 @@
     }
     render();
   }
+
+  var VERIFY_LABELS = {
+    feed: "Verified via the company's feed",
+    structured: "Verified via the job page",
+    browser: "Verified via a browser check",
+    mirror: "Verified via a mirror site",
+    user: "You confirmed this"
+  };
 
   function isOpen(p) { return p.status !== "closed"; }
 
@@ -132,19 +141,32 @@
     var isArchived = state.tab === "archived";
     var rows = state.postings[state.tab].filter(function (p) { return matchesQuery(p, q); });
     var closedHere = !isArchived ? rows.filter(function (p) { return !isOpen(p); }).length : 0;
+    var outsideHere = !isArchived ? rows.filter(function (p) { return p.location_match === "outside"; }).length : 0;
     if (!isArchived && !state.showClosed) rows = rows.filter(isOpen);
+    if (!isArchived && !state.showOutside) rows = rows.filter(function (p) { return p.location_match !== "outside"; });
     rows.sort(function (a, b) { return (isOpen(b) ? 1 : 0) - (isOpen(a) ? 1 : 0); });
 
     function addToggle() {
-      if (!closedHere) return;
-      var li = el("li", "toggle-row");
-      var b = el("button", "btn", state.showClosed
-        ? "Hide closed postings"
-        : (closedHere === 1 ? "Show 1 closed posting" : "Show " + closedHere + " closed postings"));
-      b.type = "button";
-      b.addEventListener("click", function () { state.showClosed = !state.showClosed; render(); });
-      li.appendChild(b);
-      list.appendChild(li);
+      if (closedHere) {
+        var li = el("li", "toggle-row");
+        var b = el("button", "btn", state.showClosed
+          ? "Hide closed postings"
+          : (closedHere === 1 ? "Show 1 closed posting" : "Show " + closedHere + " closed postings"));
+        b.type = "button";
+        b.addEventListener("click", function () { state.showClosed = !state.showClosed; render(); });
+        li.appendChild(b);
+        list.appendChild(li);
+      }
+      if (outsideHere) {
+        var li2 = el("li", "toggle-row");
+        var b2 = el("button", "btn", state.showOutside
+          ? "Hide postings outside your locations"
+          : (outsideHere === 1 ? "Show 1 posting outside your locations" : "Show " + outsideHere + " postings outside your locations"));
+        b2.type = "button";
+        b2.addEventListener("click", function () { state.showOutside = !state.showOutside; render(); });
+        li2.appendChild(b2);
+        list.appendChild(li2);
+      }
     }
 
     if (!rows.length) {
@@ -181,12 +203,17 @@
       else if (p.status === "unverified") li.appendChild(el("span", "badge unverified", "Status not confirmed"));
       li.appendChild(el("h3", "co", p.company_name || "Unknown company"));
       li.appendChild(el("div", "ti", p.title || ""));
+      if (p.location_match === "unclear") li.appendChild(el("span", "tag unclear", "Location unclear"));
+      else if (p.location_match === "outside") li.appendChild(el("span", "tag", "Outside your locations"));
       var meta = el("div", "meta");
       var locations = (p.locations || []).join(", ");
       if (locations) meta.appendChild(el("span", null, locations));
       if (p.source_name) meta.appendChild(el("span", null, "via " + p.source_name));
       if (p.posted_date) meta.appendChild(el("span", null, "posted " + fmtDate(p.posted_date)));
       meta.appendChild(el("span", null, "found " + fmtDate(p.first_seen)));
+      if (p.verified_via && VERIFY_LABELS[p.verified_via]) {
+        meta.appendChild(el("span", null, VERIFY_LABELS[p.verified_via] + (p.verified_at ? " " + fmtDate(p.verified_at) : "")));
+      }
       li.appendChild(meta);
       if (p.status_note) li.appendChild(el("p", "note", p.status_note + (p.verified_at ? " Checked " + fmtDate(p.verified_at) + "." : "")));
       if (p.note && !closed) li.appendChild(el("p", "note", p.note));
@@ -210,6 +237,18 @@
         ap.setAttribute("aria-pressed", p.applied ? "true" : "false");
         ap.addEventListener("click", function () { toggleApplied(p, ap); });
         actions.appendChild(ap);
+
+        var markOpen = el("button", "btn", "Mark open");
+        markOpen.type = "button";
+        markOpen.setAttribute("aria-pressed", p.user_status === "open" ? "true" : "false");
+        markOpen.addEventListener("click", function () { confirmPosting(p, "open", markOpen); });
+        actions.appendChild(markOpen);
+
+        var markClosed = el("button", "btn", "Mark closed");
+        markClosed.type = "button";
+        markClosed.setAttribute("aria-pressed", p.user_status === "closed" ? "true" : "false");
+        markClosed.addEventListener("click", function () { confirmPosting(p, "closed", markClosed); });
+        actions.appendChild(markClosed);
 
         var del = el("button", "btn del", "Delete");
         del.type = "button";
@@ -248,6 +287,13 @@
     btn.disabled = true;
     try { await apiPost("/postings/" + p.id + "/restore"); setStatus("Restored " + p.company_name + "."); await loadPostings(); }
     catch (e) { btn.disabled = false; setStatus("Couldn't restore that posting. " + e.message); }
+  }
+
+  async function confirmPosting(p, status, btn) {
+    btn.disabled = true;
+    try { await apiPost("/postings/" + p.id + "/confirm", { status: status }); await loadPostings(); }
+    catch (e) { setStatus("Couldn't save that change. " + e.message); }
+    btn.disabled = false;
   }
 
   // -------------------------------------------------------------------
@@ -375,41 +421,86 @@
   $("filter").addEventListener("input", function (e) { state.query = e.target.value.trim(); render(); });
 
   // -------------------------------------------------------------------
-  // Titles (read only)
+  // Titles
   // -------------------------------------------------------------------
+
+  function renderTitlesGroups(doc) {
+    var body = $("titlesBody");
+    body.textContent = "";
+    var groups = {};
+    var order = [];
+    doc.titles.forEach(function (t) {
+      if (!groups[t.group]) { groups[t.group] = []; order.push(t.group); }
+      groups[t.group].push(t);
+    });
+    order.forEach(function (group) {
+      var section = el("div", "titles-group");
+      section.appendChild(el("h3", null, group));
+      var ul = el("ul");
+      groups[group].forEach(function (t) {
+        var li = el("li");
+        li.appendChild(document.createTextNode(t.title + (t.active ? "" : " (inactive)")));
+        if (t.aliases && t.aliases.length) li.appendChild(el("span", "aliases", " — also: " + t.aliases.join(", ")));
+        ul.appendChild(li);
+      });
+      section.appendChild(ul);
+      body.appendChild(section);
+    });
+  }
+
+  function showPendingTitlesPr(pr) {
+    var p = $("titlesPending");
+    if (!pr) { p.hidden = true; return; }
+    p.hidden = false;
+    var a = $("titlesPendingLink");
+    a.href = pr.html_url || "#";
+    a.textContent = "Pending change: " + (pr.title || "see the open pull request");
+  }
+
+  async function loadPendingTitlesPr() {
+    try {
+      var body = await apiGet("/titles/pending");
+      showPendingTitlesPr(body.pending);
+    } catch (e) { /* not fatal; the editor still works */ }
+  }
 
   $("openTitles").addEventListener("click", async function () {
     var body = $("titlesBody");
     body.textContent = "Loading…";
+    $("titlesMsg").textContent = "";
+    showPendingTitlesPr(null);
     var dialog = $("titlesDialog");
     if (dialog.showModal) dialog.showModal(); else dialog.setAttribute("open", "");
     try {
       var doc = await apiGet("/titles");
-      body.textContent = "";
-      var groups = {};
-      var order = [];
-      doc.titles.forEach(function (t) {
-        if (!groups[t.group]) { groups[t.group] = []; order.push(t.group); }
-        groups[t.group].push(t);
-      });
-      order.forEach(function (group) {
-        var section = el("div", "titles-group");
-        section.appendChild(el("h3", null, group));
-        var ul = el("ul");
-        groups[group].forEach(function (t) {
-          var li = el("li");
-          li.appendChild(document.createTextNode(t.title + (t.active ? "" : " (inactive)")));
-          if (t.aliases && t.aliases.length) li.appendChild(el("span", "aliases", " — also: " + t.aliases.join(", ")));
-          ul.appendChild(li);
-        });
-        section.appendChild(ul);
-        body.appendChild(section);
-      });
+      renderTitlesGroups(doc);
+      $("titlesJson").value = JSON.stringify(doc, null, 2);
+      loadPendingTitlesPr();
     } catch (e) {
       body.textContent = "Couldn't load titles. " + e.message;
     }
   });
   $("titlesClose").addEventListener("click", function () { closeDialog($("titlesDialog")); });
+  $("titlesSave").addEventListener("click", async function () {
+    var doc;
+    try {
+      doc = JSON.parse($("titlesJson").value);
+    } catch (e) {
+      $("titlesMsg").textContent = "That's not valid JSON. " + e.message;
+      return;
+    }
+    $("titlesSave").disabled = true;
+    $("titlesMsg").textContent = "Saving…";
+    try {
+      var result = await apiPut("/titles", { doc: doc });
+      renderTitlesGroups(doc);
+      showPendingTitlesPr(result.pending);
+      $("titlesMsg").textContent = "Saved. Review and merge the pull request to apply it.";
+    } catch (e) {
+      $("titlesMsg").textContent = "Couldn't save. " + e.message;
+    }
+    $("titlesSave").disabled = false;
+  });
 
   function closeDialog(d) { if (d.close) d.close(); else d.removeAttribute("open"); }
 
@@ -468,6 +559,12 @@
     if (!active.length) activeList.appendChild(el("p", null, "Nothing on the list yet."));
     active.forEach(function (c) {
       activeList.appendChild(companyRow(c, function (row) {
+        var status = el("span", "check-status");
+        var check = el("button", "btn", "Check now");
+        check.type = "button";
+        check.addEventListener("click", function () { checkCompanyNow(c, check, status); });
+        row.appendChild(status);
+        row.appendChild(check);
         var remove = el("button", "btn del", "Remove");
         remove.type = "button";
         remove.addEventListener("click", function () { unpinCompany(c); });
@@ -494,6 +591,42 @@
     list.hidden = hidden;
     $("toggleRemoved").textContent = hidden ? "Show removed companies" : "Hide removed companies";
   });
+
+  function pollCheckRequest(id, statusEl, attempt) {
+    apiGet("/companies/check/" + id).then(function (row) {
+      if (row.status === "completed") {
+        var found = row.result && typeof row.result.new_count === "number" ? row.result.new_count : null;
+        statusEl.textContent = found === null ? "Done." : (found === 1 ? "Done, 1 new posting." : "Done, " + found + " new postings.");
+        statusEl.classList.remove("err");
+        return;
+      }
+      if (row.status === "failed") {
+        statusEl.textContent = "Check failed" + (row.result && row.result.error ? ": " + row.result.error : ".");
+        statusEl.classList.add("err");
+        return;
+      }
+      if (attempt >= 20) { statusEl.textContent = "Still running. Check back later."; return; }
+      setTimeout(function () { pollCheckRequest(id, statusEl, attempt + 1); }, 5000);
+    }).catch(function (e) {
+      statusEl.textContent = "Couldn't get the check's status. " + e.message;
+      statusEl.classList.add("err");
+    });
+  }
+
+  async function checkCompanyNow(c, btn, statusEl) {
+    btn.disabled = true;
+    statusEl.classList.remove("err");
+    statusEl.textContent = "Starting…";
+    try {
+      var row = await apiPost("/companies/check", { company_ids: [c.id] });
+      statusEl.textContent = "Running…";
+      pollCheckRequest(row.id, statusEl, 0);
+    } catch (e) {
+      statusEl.textContent = "Couldn't start the check. " + e.message;
+      statusEl.classList.add("err");
+    }
+    btn.disabled = false;
+  }
 
   async function pinCompany(c) {
     try { await apiPost("/companies/" + c.id + "/pin"); await loadCompanies(); }

@@ -28,6 +28,11 @@ except ImportError:  # pragma: no cover - zoneinfo is stdlib on 3.9+
 import companies as companies_logic
 from access import ACCESS_HEADER, AccessTokenError, fetch_jwks, verify_access_token
 from db import Database
+from github_client import GitHubApiError, GitHubClient
+from titles import open_or_update_titles_pr, validate_titles_doc, TITLES_BRANCH
+
+REPO = "HenryDMcGee/internship-watch"
+DAILY_CHECK_LIMIT = 5
 
 CENTRAL = ZoneInfo("America/Chicago") if ZoneInfo else None
 
@@ -58,6 +63,7 @@ app = FastAPI(title="Internship Watch API")
 app.state.db = None
 app.state.access_team_domain = os.environ.get("ACCESS_TEAM_DOMAIN", "")
 app.state.access_aud = os.environ.get("ACCESS_AUD", "")
+app.state.github = None  # set in the Worker entrypoint from the GITHUB_TOKEN secret
 
 _jwks_cache: dict[str, dict[str, Any]] = {}
 
@@ -178,6 +184,28 @@ async def restore_posting(posting_id: int, db: Database = Depends(get_db)):
     if not existing:
         raise HTTPException(status_code=404, detail="Posting not found")
     await db.run("UPDATE postings SET archived_at = NULL, archive_reason = NULL WHERE id = ?", posting_id)
+    updated = await db.first("SELECT * FROM postings WHERE id = ?", posting_id)
+    return _posting_out(updated)
+
+
+class ConfirmUpdate(BaseModel):
+    status: str  # "open" or "closed"
+
+
+@router.post("/postings/{posting_id}/confirm")
+async def confirm_posting(posting_id: int, body: ConfirmUpdate, db: Database = Depends(get_db)):
+    if body.status not in ("open", "closed"):
+        raise HTTPException(status_code=422, detail="status must be 'open' or 'closed'")
+    existing = await db.first("SELECT * FROM postings WHERE id = ?", posting_id)
+    if not existing:
+        raise HTTPException(status_code=404, detail="Posting not found")
+    at = now_iso()
+    await db.run(
+        """UPDATE postings
+           SET user_status = ?, user_status_at = ?, status = ?, verified_via = 'user', verified_at = ?
+           WHERE id = ?""",
+        body.status, at, body.status, at, posting_id,
+    )
     updated = await db.first("SELECT * FROM postings WHERE id = ?", posting_id)
     return _posting_out(updated)
 
@@ -328,6 +356,67 @@ async def save_pasted_companies(body: PasteSaveRequest, db: Database = Depends(g
 
 
 # ---------------------------------------------------------------------------
+# Check now
+# ---------------------------------------------------------------------------
+
+class CheckCompaniesRequest(BaseModel):
+    company_ids: list[int]
+
+
+def _check_request_out(row: dict) -> dict:
+    row = dict(row)
+    row["company_ids"] = json.loads(row.get("company_ids") or "[]")
+    row["result"] = json.loads(row["result"]) if row.get("result") else None
+    return row
+
+
+@router.post("/companies/check", status_code=201)
+async def check_companies(body: CheckCompaniesRequest, request: Request, db: Database = Depends(get_db)):
+    if not body.company_ids:
+        raise HTTPException(status_code=422, detail="company_ids is required")
+
+    found = await db.all(
+        f"SELECT id FROM companies WHERE id IN ({', '.join('?' for _ in body.company_ids)})", *body.company_ids
+    )
+    if len(found) != len(set(body.company_ids)):
+        raise HTTPException(status_code=404, detail="One or more companies were not found")
+
+    today = central_today()
+    count_row = await db.first(
+        "SELECT COUNT(*) AS n FROM check_requests WHERE substr(requested_at, 1, 10) = ?", today
+    )
+    if (count_row["n"] if count_row else 0) >= DAILY_CHECK_LIMIT:
+        raise HTTPException(status_code=429, detail=f"Check now is limited to {DAILY_CHECK_LIMIT} requests a day. Try again tomorrow.")
+
+    new_id = await db.run(
+        "INSERT INTO check_requests (company_ids, requested_at, status) VALUES (?, ?, 'pending')",
+        json.dumps(body.company_ids), now_iso(),
+    )
+
+    github: GitHubClient | None = request.app.state.github
+    if github is not None:
+        try:
+            await github.dispatch_workflow("check-now.yml", "main", {"request_id": str(new_id)})
+        except GitHubApiError as exc:
+            await db.run(
+                "UPDATE check_requests SET status = 'failed', result = ? WHERE id = ?",
+                json.dumps({"error": str(exc)}), new_id,
+            )
+            raise HTTPException(status_code=502, detail=f"Could not start the check: {exc}") from exc
+
+    created = await db.first("SELECT * FROM check_requests WHERE id = ?", new_id)
+    return _check_request_out(created)
+
+
+@router.get("/companies/check/{request_id}")
+async def check_companies_status(request_id: int, db: Database = Depends(get_db)):
+    row = await db.first("SELECT * FROM check_requests WHERE id = ?", request_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Check request not found")
+    return _check_request_out(row)
+
+
+# ---------------------------------------------------------------------------
 # Settings
 # ---------------------------------------------------------------------------
 
@@ -355,12 +444,45 @@ async def update_locations(body: LocationsUpdate, db: Database = Depends(get_db)
 
 
 # ---------------------------------------------------------------------------
-# Titles (read only)
+# Titles
 # ---------------------------------------------------------------------------
+
+class TitlesUpdate(BaseModel):
+    doc: dict[str, Any]
+
 
 @router.get("/titles")
 async def get_titles():
     return _load_titles()
+
+
+@router.get("/titles/pending")
+async def pending_titles_pr(request: Request):
+    github: GitHubClient | None = request.app.state.github
+    if github is None:
+        return {"pending": None}
+    try:
+        pr = await github.find_open_pr(TITLES_BRANCH)
+    except GitHubApiError as exc:
+        raise HTTPException(status_code=502, detail=f"Could not check for a pending change: {exc}") from exc
+    return {"pending": pr}
+
+
+@router.put("/titles")
+async def update_titles(body: TitlesUpdate, request: Request):
+    problems = validate_titles_doc(body.doc)
+    if problems:
+        raise HTTPException(status_code=422, detail={"problems": problems})
+
+    github: GitHubClient | None = request.app.state.github
+    if github is None:
+        raise HTTPException(status_code=503, detail="GitHub isn't configured for this environment")
+
+    try:
+        pr = await open_or_update_titles_pr(github, body.doc)
+    except GitHubApiError as exc:
+        raise HTTPException(status_code=502, detail=f"Could not open the pull request: {exc}") from exc
+    return {"pending": pr}
 
 
 app.include_router(router)
@@ -388,6 +510,8 @@ try:
             app.state.db = D1Database(self.env.DB)
             app.state.access_team_domain = getattr(self.env, "ACCESS_TEAM_DOMAIN", "") or ""
             app.state.access_aud = getattr(self.env, "ACCESS_AUD", "") or ""
+            github_token = getattr(self.env, "GITHUB_TOKEN", "") or ""
+            app.state.github = GitHubClient(repo=REPO, token=github_token) if github_token else None
             return await asgi.fetch(app, request, self.env)
 
 except ImportError:

@@ -1,0 +1,19 @@
+{
+  "jobs": [
+    {
+      "id": 1001,
+      "title": "MBA Product Manager Intern, Summer 2027",
+      "absolute_url": "https://boards.greenhouse.io/acme/jobs/1001",
+      "location": {"name": "San Francisco, CA"},
+      "updated_at": "2026-09-02T12:00:00-00:00",
+      "first_published": "2026-09-01T00:00:00-00:00"
+    },
+    {
+      "id": 1002,
+      "title": "Software Engineer Intern",
+      "absolute_url": "https://boards.greenhouse.io/acme/jobs/1002",
+      "location": {"name": "Remote"},
+      "updated_at": "2026-09-02T12:00:00-00:00"
+    }
+  ]
+}

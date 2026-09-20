@@ -1,0 +1,10 @@
+{
+  "content": [
+    {
+      "id": "posting-1",
+      "name": "MBA Product Manager Intern, Summer 2027",
+      "location": {"city": "Seattle", "region": "WA", "country": "us"},
+      "releasedDate": "2026-09-01T00:00:00.000Z"
+    }
+  ]
+}

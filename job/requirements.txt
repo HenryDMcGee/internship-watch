@@ -1,0 +1,6 @@
+# Runtime dependencies for the daily job (job/run.py), installed by
+# .github/workflows/daily-search.yml and check-now.yml before running it.
+# api/pyproject.toml and requirements-dev.txt are separate: those cover the
+# Worker and the test suite.
+requests
+playwright
