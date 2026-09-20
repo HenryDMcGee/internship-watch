@@ -25,9 +25,9 @@ try:
 except ImportError:  # pragma: no cover - zoneinfo is stdlib on 3.9+
     ZoneInfo = None  # type: ignore
 
-from . import companies as companies_logic
-from .access import ACCESS_HEADER, AccessTokenError, fetch_jwks, verify_access_token
-from .db import Database
+import companies as companies_logic
+from access import ACCESS_HEADER, AccessTokenError, fetch_jwks, verify_access_token
+from db import Database
 
 CENTRAL = ZoneInfo("America/Chicago") if ZoneInfo else None
 
@@ -375,7 +375,7 @@ try:
     from workers import WorkerEntrypoint  # type: ignore
     import asgi  # type: ignore
 
-    from .db import D1Database
+    from db import D1Database
 
     class Default(WorkerEntrypoint):  # pragma: no cover - only runs under Pyodide
         async def fetch(self, request):
