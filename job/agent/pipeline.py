@@ -40,6 +40,8 @@ async def run_agent_steps(
         if result is not None:
             await record_usage(db, run_id=run_id, step=step, result=result, now_iso=now_iso)
 
+    steps_succeeded: set[str] = set()
+
     async def guarded(step: str, fn):
         if outcome["claude_limit_hit"]:
             outcome["steps_skipped"].append({"step": step, "reason": "a Claude usage limit stopped this run"})
@@ -49,7 +51,9 @@ async def run_agent_steps(
             outcome["steps_skipped"].append({"step": step, "reason": reason})
             return None
         try:
-            return await fn()
+            value = await fn()
+            steps_succeeded.add(step)
+            return value
         except ClaudeLimitError as exc:
             outcome["claude_limit_hit"] = True
             outcome["errors"].append(f"{step}: {exc}")
@@ -98,18 +102,23 @@ async def run_agent_steps(
         decisions = await guarded("classification", do_classification) or []
         outcome["classification_count"] = await _apply_classification_decisions(db, decisions, now_iso=now_iso)
 
+    search_limit_per_run = int(budget_settings.get("search_limit_per_run") or 35)
+    scout_batch = scout.order_companies_for_scout(no_feed_companies, limit=search_limit_per_run)
+
     async def do_scout():
         found, result = scout.run_scout(
-            no_feed_companies, model=budget_settings.get("model_scout", "sonnet"),
-            search_limit_per_run=int(budget_settings.get("search_limit_per_run") or 35),
+            scout_batch, model=budget_settings.get("model_scout", "sonnet"),
+            search_limit_per_run=search_limit_per_run,
             run_claude=run_claude,
         )
         await record("scout", result)
         return found
 
-    if no_feed_companies:
+    if scout_batch:
         found_sources = await guarded("scout", do_scout) or []
         outcome["scout_count"] = await _store_scout_sources(db, found_sources, now_iso=now_iso)
+        if "scout" in steps_succeeded:
+            await _mark_companies_scouted(db, scout_batch, now_iso=now_iso)
 
     async def do_improvement():
         run_row = await db.first("SELECT * FROM runs WHERE id = ?", run_id)
@@ -227,6 +236,14 @@ async def _store_scout_sources(db, found: list[dict], *, now_iso: str) -> int:
         )
         stored += 1
     return stored
+
+
+async def _mark_companies_scouted(db, companies: list[dict], *, now_iso: str) -> None:
+    for company in companies:
+        company_id = company.get("id")
+        if company_id is None:
+            continue
+        await db.run("UPDATE companies SET last_scouted_at = ? WHERE id = ?", now_iso, company_id)
 
 
 async def _store_search_plan(db, plan: dict | None, *, today: str) -> None:
