@@ -32,11 +32,11 @@ binding = "DB"
 database_name = "internship-watch-db"
 # The database ID is not a secret. Find it in Cloudflare under D1, or in the
 # output of: npx wrangler d1 create internship-watch-db
-database_id = "REPLACE_WITH_D1_DATABASE_ID"
+database_id = "217741f8-9891-4c62-8125-37653b267097"
 migrations_dir = "../db/migrations"
 
 # Used by the API to verify the Cloudflare Access login on every request.
 # These are not secrets. See docs/deploy.md, step 2.
 [vars]
-ACCESS_TEAM_DOMAIN = "REPLACE_WITH_TEAM_NAME.cloudflareaccess.com"
-ACCESS_AUD = "REPLACE_WITH_ACCESS_APPLICATION_AUD_TAG"
+ACCESS_TEAM_DOMAIN = "royal-band-14be.cloudflareaccess.com"
+ACCESS_AUD = "0162b88431b5d036e4cbe75aa8999c7e8c48153f72abf818c8002c0440ad367d"
