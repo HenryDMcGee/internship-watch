@@ -15,6 +15,30 @@ PROMOTE_AFTER_FOUND = 1  # a trial source becomes active after this many real op
 DEMOTE_AFTER_EMPTY_CHECKS = 3  # demoted after this many checks in a row finding nothing
 
 
+def order_companies_for_scout(companies: list[dict], *, limit: int | None = None) -> list[dict]:
+    """Never-scouted companies first, then the least-recently-scouted, with
+    rank (lower is more important) as the tie-break within each group.
+
+    One run's search budget can't reach all 100 no-source companies, so
+    without this, every run would hand Claude the same leading names and
+    the rest would never get a turn. Sorting on `last_scouted_at` first
+    means an uncovered company always jumps ahead of an already-tried one;
+    once everyone's had a turn, it naturally cycles back starting with the
+    highest-priority (lowest rank) company, so coverage keeps moving
+    forward across runs instead of stalling on the same batch.
+    """
+
+    def sort_key(company: dict) -> tuple[str, float, str]:
+        last_scouted = company.get("last_scouted_at") or ""
+        rank = company.get("rank")
+        rank_key = float(rank) if rank is not None else float("inf")
+        name = (company.get("name") or "").strip().lower()
+        return (last_scouted, rank_key, name)
+
+    ordered = sorted(companies, key=sort_key)
+    return ordered[:limit] if limit is not None else ordered
+
+
 def build_prompt(companies: list[dict], *, search_limit_per_run: int) -> str:
     company_names = [c["name"] for c in companies]
     return "\n".join([

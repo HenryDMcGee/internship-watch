@@ -86,6 +86,41 @@ def test_run_agent_steps_stores_discovery_results_and_classifies_them(empty_db):
     assert plans[0]["plan_date"] == "2026-09-21"
 
 
+def test_run_agent_steps_records_last_scouted_at_for_the_batch_sent(empty_db):
+    company_id = _insert_company(empty_db, feed_type=None, rank=1)
+    run_id = run(empty_db.run("INSERT INTO runs (kind, started_at, status) VALUES ('daily', '2026-09-20T08:00:00', 'running')"))
+
+    fake = _fake_run_claude({
+        "scout": '{"sources": []}',
+        "improvement": '{"search_plan": null, "proposals": [], "title_suggestions": []}',
+    })
+
+    run(run_agent_steps(
+        empty_db, run_id=run_id, companies=[{"id": company_id, "name": "Acme", "feed_type": None, "rank": 1}],
+        titles_doc=TITLES_DOC, locations_setting=LOCATIONS, budget_settings=SETTINGS,
+        status=_open_status(), today="2026-09-20", now_iso="2026-09-20T08:00:00", run_claude=fake,
+    ))
+
+    company = run(empty_db.first("SELECT * FROM companies WHERE id = ?", company_id))
+    assert company["last_scouted_at"] == "2026-09-20T08:00:00"
+
+
+def test_run_agent_steps_does_not_record_last_scouted_at_when_scout_is_skipped(empty_db):
+    company_id = _insert_company(empty_db, feed_type=None, rank=1)
+    run_id = run(empty_db.run("INSERT INTO runs (kind, started_at, status) VALUES ('daily', '2026-09-20T08:00:00', 'running')"))
+
+    fake = _fake_run_claude({"improvement": '{"search_plan": null, "proposals": [], "title_suggestions": []}'})
+
+    run(run_agent_steps(
+        empty_db, run_id=run_id, companies=[{"id": company_id, "name": "Acme", "feed_type": None, "rank": 1}],
+        titles_doc=TITLES_DOC, locations_setting=LOCATIONS, budget_settings=SETTINGS,
+        status=_closed_status(), today="2026-09-20", now_iso="2026-09-20T08:00:00", run_claude=fake,
+    ))
+
+    company = run(empty_db.first("SELECT * FROM companies WHERE id = ?", company_id))
+    assert company["last_scouted_at"] is None
+
+
 def test_run_agent_steps_archives_a_classification_reject(empty_db):
     run_id = run(empty_db.run("INSERT INTO runs (kind, started_at, status) VALUES ('daily', '2026-09-20T08:00:00', 'running')"))
     posting_id = run(empty_db.run(

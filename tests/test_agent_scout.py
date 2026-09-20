@@ -4,6 +4,7 @@ from job.agent.scout import (
     PROMOTE_AFTER_FOUND,
     new_source_row,
     next_source_status,
+    order_companies_for_scout,
     run_scout,
 )
 
@@ -50,3 +51,37 @@ def test_next_source_status_stays_put_when_neither_threshold_met():
 
 def test_next_source_status_never_touches_a_source_already_demoted():
     assert next_source_status("demoted", found_count=0, empty_checks_in_a_row=5) == "demoted"
+
+
+def test_order_companies_for_scout_puts_never_scouted_before_already_tried():
+    companies = [
+        {"name": "Tried", "rank": 1, "last_scouted_at": "2026-09-19T08:00:00"},
+        {"name": "Never", "rank": 50, "last_scouted_at": None},
+    ]
+    ordered = order_companies_for_scout(companies)
+    assert [c["name"] for c in ordered] == ["Never", "Tried"]
+
+
+def test_order_companies_for_scout_breaks_ties_by_rank():
+    companies = [
+        {"name": "Low priority", "rank": 90, "last_scouted_at": None},
+        {"name": "High priority", "rank": 2, "last_scouted_at": None},
+    ]
+    ordered = order_companies_for_scout(companies)
+    assert [c["name"] for c in ordered] == ["High priority", "Low priority"]
+
+
+def test_order_companies_for_scout_cycles_back_to_the_oldest_tried_first():
+    companies = [
+        {"name": "Tried first", "rank": 1, "last_scouted_at": "2026-09-18T08:00:00"},
+        {"name": "Tried second", "rank": 2, "last_scouted_at": "2026-09-19T08:00:00"},
+    ]
+    ordered = order_companies_for_scout(companies)
+    assert [c["name"] for c in ordered] == ["Tried first", "Tried second"]
+
+
+def test_order_companies_for_scout_respects_the_limit():
+    companies = [{"name": f"Company {i}", "rank": i, "last_scouted_at": None} for i in range(5)]
+    ordered = order_companies_for_scout(companies, limit=2)
+    assert len(ordered) == 2
+    assert [c["name"] for c in ordered] == ["Company 0", "Company 1"]
