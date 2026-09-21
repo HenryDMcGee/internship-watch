@@ -8,6 +8,53 @@ CPython and could use the dependency.
 from __future__ import annotations
 
 import json
+import re
+
+# Claude sometimes wraps an otherwise-valid JSON reply in a markdown code fence
+# (```json ... ``` or ``` ... ```) even when the prompt asks for "only JSON, no
+# other text" -- issue #13 saw classification rejected as "not valid JSON" for
+# exactly this reason, even though the reply was usable once the fence was
+# stripped. Matched non-greedily so a fence is stripped even if the model adds
+# a trailing note after the closing ``` on the same reply.
+_CODE_FENCE_RE = re.compile(r"^\s*```(?:json)?\s*\n?(.*?)\n?```", re.DOTALL)
+
+
+def _strip_code_fence(text: str) -> str:
+    match = _CODE_FENCE_RE.match(text)
+    return match.group(1) if match else text
+
+
+def _extract_first_json_object(text: str) -> str | None:
+    """Finds the first balanced `{...}` block in `text`, so a reply that adds
+    any other text around otherwise-valid JSON (a fence not caught by
+    `_strip_code_fence`, a leading "Here's the JSON:", ...) still parses,
+    instead of failing the whole step over formatting Claude wasn't asked to
+    produce.
+    """
+    start = text.find("{")
+    if start == -1:
+        return None
+    depth = 0
+    in_string = False
+    escape = False
+    for i in range(start, len(text)):
+        ch = text[i]
+        if in_string:
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_string = False
+        elif ch == '"':
+            in_string = True
+        elif ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start : i + 1]
+    return None
 
 
 class ClaudeOutputError(ValueError):
@@ -24,9 +71,20 @@ class ClaudeOutputError(ValueError):
         self.result = result
 
 
+def _parse_json_with_fallback(text: str) -> dict:
+    candidate = _strip_code_fence(text)
+    try:
+        return json.loads(candidate)
+    except ValueError as exc:
+        extracted = _extract_first_json_object(candidate)
+        if extracted is None:
+            raise exc
+        return json.loads(extracted)
+
+
 def parse_and_validate(text: str, validator, *, result=None) -> dict:
     try:
-        payload = json.loads(text)
+        payload = _parse_json_with_fallback(text)
     except ValueError as exc:
         step = getattr(result, "step", "?")
         print(f"{step}: reply was not valid JSON ({exc}); first 500 character(s): {text[:500]!r}")

@@ -29,6 +29,37 @@ def test_parse_and_validate_accepts_valid_document():
     assert doc == {"results": []}
 
 
+def test_parse_and_validate_strips_a_json_code_fence():
+    # Issue #13: classification came back as valid JSON wrapped in a ```json
+    # fence even though the prompt asked for "only JSON, no other text".
+    reply = '```json\n{"decisions": []}\n```'
+    doc = parse_and_validate(reply, validate_classification_output)
+    assert doc == {"decisions": []}
+
+
+def test_parse_and_validate_strips_a_plain_code_fence():
+    reply = '```\n{"decisions": []}\n```'
+    doc = parse_and_validate(reply, validate_classification_output)
+    assert doc == {"decisions": []}
+
+
+def test_parse_and_validate_falls_back_to_the_first_json_object():
+    reply = 'Here is the JSON you asked for:\n{"decisions": []}\nLet me know if you need anything else.'
+    doc = parse_and_validate(reply, validate_classification_output)
+    assert doc == {"decisions": []}
+
+
+def test_parse_and_validate_fallback_handles_braces_inside_strings():
+    reply = 'Sure -- {"decisions": [{"id": 1, "decision": "reject", "reason": "title has { and } in it"}]}'
+    doc = parse_and_validate(reply, validate_classification_output)
+    assert doc["decisions"][0]["reason"] == "title has { and } in it"
+
+
+def test_parse_and_validate_still_rejects_text_with_no_json_object():
+    with pytest.raises(ClaudeOutputError):
+        parse_and_validate("Sorry, I can't help with that.", validate_discovery_output)
+
+
 def test_parse_and_validate_attaches_result_to_error_on_bad_json():
     sentinel = object()
     with pytest.raises(ClaudeOutputError) as exc_info:

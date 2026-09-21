@@ -49,6 +49,91 @@ def test_run_claude_step_parses_usage_and_result():
     assert result.model == "haiku"
 
 
+def test_run_claude_step_prefers_modelusage_over_the_top_level_usage_object():
+    # Issue #13: the top-level `usage` object is only the last underlying API
+    # turn's usage -- small and search-free once tool-calling turns and prompt
+    # caching are in play, even on a call that spent plenty and searched.
+    # `modelUsage` is the CLI's own running total for the whole call and is
+    # what's actually right; it must win when both are present.
+    import json
+
+    payload = {
+        "result": "{}",
+        "is_error": False,
+        "usage": {
+            "input_tokens": 12, "output_tokens": 8,
+            "cache_read_input_tokens": 4, "cache_creation_input_tokens": 0,
+            "server_tool_use": {"web_search_requests": 0},
+        },
+        "modelUsage": {
+            "claude-sonnet-4-5-20250929": {
+                "inputTokens": 2900, "outputTokens": 400,
+                "cacheReadInputTokens": 1500, "cacheCreationInputTokens": 200,
+                "webSearchRequests": 5,
+            }
+        },
+    }
+    runner = _fake_runner(stdout=json.dumps(payload))
+    result = run_claude_step("scout", SAMPLE_PROMPT, model="sonnet", runner=runner)
+    assert result.input_tokens == 2900
+    assert result.output_tokens == 400
+    assert result.cache_read_tokens == 1500
+    assert result.cache_write_tokens == 200
+    assert result.web_searches == 5
+
+
+def test_run_claude_step_sums_modelusage_across_multiple_models():
+    import json
+
+    payload = {
+        "result": "{}",
+        "is_error": False,
+        "modelUsage": {
+            "claude-sonnet-4-5-20250929": {
+                "inputTokens": 100, "outputTokens": 10,
+                "cacheReadInputTokens": 0, "cacheCreationInputTokens": 0,
+                "webSearchRequests": 2,
+            },
+            "claude-haiku-4-5-20251001": {
+                "inputTokens": 50, "outputTokens": 5,
+                "cacheReadInputTokens": 0, "cacheCreationInputTokens": 0,
+                "webSearchRequests": 1,
+            },
+        },
+    }
+    runner = _fake_runner(stdout=json.dumps(payload))
+    result = run_claude_step("scout", SAMPLE_PROMPT, model="sonnet", runner=runner)
+    assert result.input_tokens == 150
+    assert result.output_tokens == 15
+    assert result.web_searches == 3
+
+
+def test_run_claude_step_falls_back_to_top_level_usage_without_modelusage():
+    # Older CLI versions (or a reply shape without `modelUsage`) must still work.
+    runner = _fake_runner(stdout=_json_result('{"ok": true}'))
+    result = run_claude_step("classification", SAMPLE_PROMPT, model="haiku", runner=runner)
+    assert result.input_tokens == 100
+    assert result.web_searches == 2
+
+
+def test_run_claude_step_logs_the_full_usage_and_modelusage_objects(capsys):
+    import json
+
+    payload = {
+        "result": "{}",
+        "is_error": False,
+        "usage": {"input_tokens": 12, "output_tokens": 8},
+        "modelUsage": {"claude-sonnet-4-5-20250929": {"inputTokens": 2900, "webSearchRequests": 5}},
+    }
+    runner = _fake_runner(stdout=json.dumps(payload))
+    run_claude_step("scout", SAMPLE_PROMPT, model="sonnet", runner=runner)
+    output = capsys.readouterr().out
+    assert "usage={'input_tokens': 12, 'output_tokens': 8}" in output
+    assert "modelUsage={'claude-sonnet-4-5-20250929'" in output
+    assert "2900" in output
+    assert "webSearchRequests" in output
+
+
 def test_run_claude_step_builds_tools_flags_for_web_steps():
     captured = {}
 
@@ -58,14 +143,16 @@ def test_run_claude_step_builds_tools_flags_for_web_steps():
 
     run_claude_step("discovery", SAMPLE_PROMPT, model="sonnet", runner=runner)
     args = captured["args"]
-    assert "--tools" in args
-    assert args[args.index("--tools") + 1] == "WebSearch,WebFetch"
     # Confirmed by testing the CLI directly: a headless call without `--allowedTools`
     # gets "permission for the WebSearch tool hasn't been granted in this session"
     # instead of actually searching (issue #20) -- WebSearch/WebFetch must be
     # pre-approved, comma-separated, for every step that needs the web.
     assert "--allowedTools" in args
     assert args[args.index("--allowedTools") + 1] == "WebSearch,WebFetch"
+    # No `--tools` for a web step (issue #13): `--allowedTools` alone is what a
+    # terminal call confirmed works, and `--permission-prompts none` already
+    # auto-denies anything not pre-approved, so `--tools` was redundant at best.
+    assert "--tools" not in args
     assert "--permission-prompts" in args
     assert args[args.index("--permission-prompts") + 1] == "none"
 
@@ -119,7 +206,6 @@ def test_run_claude_step_logs_the_command_and_prompt_length(capsys):
     run_claude_step("discovery", SAMPLE_PROMPT, model="sonnet", runner=runner)
     output = capsys.readouterr().out
     assert str(len(SAMPLE_PROMPT)) in output
-    assert "--tools WebSearch,WebFetch" in output
     assert "--allowedTools WebSearch,WebFetch" in output
     assert "--model sonnet" in output
     assert SAMPLE_PROMPT[:200] in output
