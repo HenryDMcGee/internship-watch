@@ -108,6 +108,46 @@ def test_run_claude_step_sums_modelusage_across_multiple_models():
     assert result.web_searches == 3
 
 
+def test_run_claude_step_sums_cost_usd_across_multiple_models():
+    # Issue #26: run 13's real discovery reply -- Sonnet orchestrates and
+    # barely spends anything itself, while a Haiku sub-agent does every
+    # search and burns most of the tokens. Estimating cost from the summed
+    # tokens under "sonnet" (the step's own model) would price Haiku's chunk
+    # at Sonnet's rate; the CLI's own per-model `costUSD` must be summed
+    # instead and carried through untouched.
+    import json
+
+    payload = {
+        "result": "{}",
+        "is_error": False,
+        "modelUsage": {
+            "claude-sonnet-5": {
+                "inputTokens": 14, "outputTokens": 17748,
+                "cacheReadInputTokens": 349774, "cacheCreationInputTokens": 69252,
+                "webSearchRequests": 0, "costUSD": 0.5244708,
+            },
+            "claude-haiku-4-5": {
+                "inputTokens": 344843, "outputTokens": 14469,
+                "webSearchRequests": 35, "costUSD": 0.767188,
+            },
+        },
+    }
+    runner = _fake_runner(stdout=json.dumps(payload))
+    result = run_claude_step("discovery", SAMPLE_PROMPT, model="sonnet", runner=runner)
+    assert result.web_searches == 35
+    assert result.input_tokens == 344857  # 14 + 344843, hundreds of thousands
+    assert result.cost_usd == pytest.approx(0.5244708 + 0.767188)
+
+
+def test_run_claude_step_cost_usd_is_none_without_modelusage():
+    # No `modelUsage` at all (older CLI) means no per-model `costUSD` to sum
+    # either -- `usage.py` must fall back to its own estimate, which it can
+    # only do if this is `None` rather than `0` (a call really can cost $0).
+    runner = _fake_runner(stdout=_json_result('{"ok": true}'))
+    result = run_claude_step("classification", SAMPLE_PROMPT, model="haiku", runner=runner)
+    assert result.cost_usd is None
+
+
 def test_run_claude_step_falls_back_to_top_level_usage_without_modelusage():
     # Older CLI versions (or a reply shape without `modelUsage`) must still work.
     runner = _fake_runner(stdout=_json_result('{"ok": true}'))
