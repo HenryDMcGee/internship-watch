@@ -60,7 +60,12 @@ def test_run_claude_step_builds_tools_flags_for_web_steps():
     args = captured["args"]
     assert "--tools" in args
     assert args[args.index("--tools") + 1] == "WebSearch,WebFetch"
+    # Confirmed by testing the CLI directly: a headless call without `--allowedTools`
+    # gets "permission for the WebSearch tool hasn't been granted in this session"
+    # instead of actually searching (issue #20) -- WebSearch/WebFetch must be
+    # pre-approved, comma-separated, for every step that needs the web.
     assert "--allowedTools" in args
+    assert args[args.index("--allowedTools") + 1] == "WebSearch,WebFetch"
     assert "--permission-prompts" in args
     assert args[args.index("--permission-prompts") + 1] == "none"
 
@@ -115,7 +120,9 @@ def test_run_claude_step_logs_the_command_and_prompt_length(capsys):
     output = capsys.readouterr().out
     assert str(len(SAMPLE_PROMPT)) in output
     assert "--tools WebSearch,WebFetch" in output
+    assert "--allowedTools WebSearch,WebFetch" in output
     assert "--model sonnet" in output
+    assert SAMPLE_PROMPT[:200] in output
 
 
 def test_run_claude_step_disables_tools_for_text_only_steps():

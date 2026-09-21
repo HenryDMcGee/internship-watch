@@ -28,6 +28,8 @@ def parse_and_validate(text: str, validator, *, result=None) -> dict:
     try:
         payload = json.loads(text)
     except ValueError as exc:
+        step = getattr(result, "step", "?")
+        print(f"{step}: reply was not valid JSON ({exc}); first 500 character(s): {text[:500]!r}")
         raise ClaudeOutputError(f"not valid JSON: {exc}", result=result) from exc
     problems = validator(payload)
     if problems:

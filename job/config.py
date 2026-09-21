@@ -37,7 +37,14 @@ async def load_watchlist_setting(db) -> list[str]:
     row = await db.first("SELECT value FROM settings WHERE key = 'watchlist'")
     if not row:
         return []
-    return json.loads(row["value"])
+    entries = json.loads(row["value"])
+    # A real watchlist entry is an object with a "company" name and an optional
+    # "note" (see seed/settings.json and the dashboard's watch-list panel) -- only
+    # the name is needed here. A bare string is also accepted, since that's what
+    # `discovery.order_companies` and its tests otherwise assume. Without this,
+    # `order_companies` called `.strip()` on the whole entry dict and crashed
+    # discovery for every run (issue #20, run 11).
+    return [e["company"] if isinstance(e, dict) else e for e in entries]
 
 
 async def load_search_plan(db, plan_date: str) -> dict | None:
