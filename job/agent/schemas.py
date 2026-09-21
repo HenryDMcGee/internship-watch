@@ -150,24 +150,67 @@ def validate_classification_output(payload) -> list[str]:
 
     problems: list[str] = []
     for i, d in enumerate(decisions):
-        if not isinstance(d, dict):
-            problems.append(f"decisions[{i}] must be an object")
-            continue
-        if not isinstance(d.get("id"), int):
-            problems.append(f"decisions[{i}].id must be an integer")
-        decision = d.get("decision")
-        if decision not in _CLASSIFICATION_DECISIONS:
-            problems.append(f"decisions[{i}].decision must be one of {sorted(_CLASSIFICATION_DECISIONS)}")
-        if decision == "match" and not _is_nonempty_str(d.get("matched_title")):
-            problems.append(f"decisions[{i}].matched_title is required when decision is 'match'")
-        if not _is_str_or_none(d.get("title_en")):
-            problems.append(f"decisions[{i}].title_en must be a string")
-        location_match = d.get("location_match")
-        if location_match is not None and location_match not in _LOCATION_MATCHES:
-            problems.append(f"decisions[{i}].location_match must be one of {sorted(_LOCATION_MATCHES)}")
-        if not _is_str_or_none(d.get("reason")):
-            problems.append(f"decisions[{i}].reason must be a string")
+        problems.extend(f"decisions[{i}]: {p}" for p in validate_classification_decision(d))
     return problems
+
+
+def validate_classification_document(payload) -> list[str]:
+    """Shape-only check for a classification reply: a JSON object with a
+    `decisions` list. Used as the hard parse gate in
+    `classification.run_classification` instead of
+    `validate_classification_output`, which also rejects the whole list
+    over a single bad item -- the same failure mode fixed for the scout in
+    issue #20 (see `validate_scout_document`), and the reason classification
+    could spend real tokens on a batch yet leave every posting in it
+    unclassified: one malformed decision sank the other, otherwise-good
+    ones alongside it. Per-item problems are handled separately by
+    `split_classification_decisions`.
+    """
+    if not isinstance(payload, dict):
+        return ["document must be a JSON object"]
+    if not isinstance(payload.get("decisions"), list):
+        return ["'decisions' must be a list"]
+    return []
+
+
+def validate_classification_decision(d) -> list[str]:
+    """Per-item version of `validate_classification_output`'s checks, for
+    one entry in a classification reply's `decisions` list."""
+    if not isinstance(d, dict):
+        return ["must be an object"]
+    problems: list[str] = []
+    if not isinstance(d.get("id"), int):
+        problems.append("id must be an integer")
+    decision = d.get("decision")
+    if decision not in _CLASSIFICATION_DECISIONS:
+        problems.append(f"decision must be one of {sorted(_CLASSIFICATION_DECISIONS)}")
+    if decision == "match" and not _is_nonempty_str(d.get("matched_title")):
+        problems.append("matched_title is required when decision is 'match'")
+    if not _is_str_or_none(d.get("title_en")):
+        problems.append("title_en must be a string")
+    location_match = d.get("location_match")
+    if location_match is not None and location_match not in _LOCATION_MATCHES:
+        problems.append(f"location_match must be one of {sorted(_LOCATION_MATCHES)}")
+    if not _is_str_or_none(d.get("reason")):
+        problems.append("reason must be a string")
+    return problems
+
+
+def split_classification_decisions(payload: dict) -> tuple[list[dict], list[str]]:
+    """Splits an already-shape-checked classification reply into the
+    decisions that pass per-item validation and human-readable problems for
+    the ones that don't, so one malformed entry doesn't cost every other
+    real decision in the same batch (issue #26)."""
+    decisions = payload.get("decisions") or []
+    valid: list[dict] = []
+    problems: list[str] = []
+    for i, d in enumerate(decisions):
+        item_problems = validate_classification_decision(d)
+        if item_problems:
+            problems.append(f"decisions[{i}]: " + "; ".join(item_problems))
+        else:
+            valid.append(d)
+    return valid, problems
 
 
 # ---------------------------------------------------------------------------

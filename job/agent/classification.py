@@ -6,7 +6,12 @@ non-English postings, `title_en`.
 from __future__ import annotations
 
 from job.agent.client import ClaudeStepResult, resolve_model, run_claude_step
-from job.agent.schemas import parse_and_validate, validate_classification_output
+from job.agent.schemas import (
+    ClaudeOutputError,
+    parse_and_validate,
+    split_classification_decisions,
+    validate_classification_document,
+)
 
 
 def _location_text(posting: dict) -> str:
@@ -57,5 +62,18 @@ def run_classification(
         return [], None
     prompt = build_prompt(postings, titles_doc, locations_setting)
     result = run_claude("classification", prompt, model=resolve_model(model))
-    payload = parse_and_validate(result.text, validate_classification_output, result=result)
-    return payload["decisions"], result
+    payload = parse_and_validate(result.text, validate_classification_document, result=result)
+    raw_decisions = payload.get("decisions") or []
+    decisions, problems = split_classification_decisions(payload)
+    print(
+        f"classification: Claude returned {len(raw_decisions)} decision(s), {len(decisions)} passed validation"
+        + (f", {len(problems)} rejected ({'; '.join(problems)})" if problems else "")
+    )
+    if raw_decisions and not decisions:
+        # Same reasoning as the scout's equivalent guard (issue #20): every
+        # decision in the batch failing validation is the same "spent
+        # budget, produced nothing usable" failure as a reply that can't be
+        # parsed at all, and must not look like a clean "nothing to
+        # classify" run.
+        raise ClaudeOutputError("all decisions failed validation: " + "; ".join(problems), result=result)
+    return decisions, result

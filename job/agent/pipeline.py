@@ -24,6 +24,7 @@ from job.agent.schemas import ClaudeOutputError
 from job.agent.titles_pr import open_title_suggestions_pr
 from job.agent.usage import record_usage
 from job.config import load_search_plan, load_watchlist_setting
+from job.dedup import find_duplicate_posting
 from job.locations import location_match as compute_location_match
 
 # `job.config` (imported above) adds `api/src` to `sys.path`, which this
@@ -40,7 +41,7 @@ async def run_agent_steps(
     run_claude=_default_run_claude,
 ) -> dict:
     outcome = {
-        "discovery_count": 0, "classification_count": 0, "scout_count": 0,
+        "discovery_count": 0, "discovery_new_count": 0, "classification_count": 0, "scout_count": 0,
         "steps_skipped": [], "steps_succeeded": [], "claude_limit_hit": False, "errors": [], "title_pr": None,
     }
 
@@ -99,9 +100,10 @@ async def run_agent_steps(
         await record("discovery", result)
         return results
 
+    discovery_ids: list[int] = []
     if no_feed_companies:
         discovery_results = await guarded("discovery", do_discovery) or []
-        outcome["discovery_count"] = await _store_discovery_results(
+        outcome["discovery_count"], discovery_ids = await _store_discovery_results(
             db, discovery_results, now_iso=now_iso, locations_setting=locations_setting
         )
 
@@ -119,6 +121,14 @@ async def run_agent_steps(
     if unclassified:
         decisions = await guarded("classification", do_classification) or []
         outcome["classification_count"] = await _apply_classification_decisions(db, decisions, now_iso=now_iso)
+
+    # `discovery_count` is every row discovery *stored*, before classification
+    # has had a say -- adding that straight to the run's `new_count` (issue
+    # #26) overcounted postings that classification went on to reject (and
+    # archive) in this very run. Only a discovered posting that came out of
+    # classification matched and still isn't archived actually shows up on
+    # the dashboard, so that's what should count as "new" for the summary.
+    outcome["discovery_new_count"] = await _count_visible_postings(db, discovery_ids)
 
     search_limit_per_run = int(budget_settings.get("search_limit_per_run") or 35)
     scout_batch = scout.order_companies_for_scout(no_feed_companies, limit=search_limit_per_run)
@@ -203,14 +213,23 @@ def build_unclear_reader(*, status: BudgetStatus, model: str, on_usage, on_error
 # DB helpers
 # ---------------------------------------------------------------------------
 
-async def _store_discovery_results(db, results: list[dict], *, now_iso: str, locations_setting: dict) -> int:
+async def _store_discovery_results(
+    db, results: list[dict], *, now_iso: str, locations_setting: dict
+) -> tuple[int, list[int]]:
     stored = 0
+    inserted_ids: list[int] = []
     for r in results:
-        existing = await db.first("SELECT id FROM postings WHERE url = ?", r["url"])
+        # A URL match is exact, but a company re-listing an already-known
+        # role under a new URL is common enough (issue #26: an NVIDIA role
+        # Henry had already marked applied came back under a different
+        # URL) that URL alone isn't enough -- `find_duplicate_posting` also
+        # matches on company + normalized title so that role never gets a
+        # second row.
+        existing = await find_duplicate_posting(db, company_name=r["company_name"], title=r["title"], url=r["url"])
         if existing:
             continue
         loc_decision = compute_location_match(r.get("location_text") or "", locations_setting)
-        await db.run(
+        new_id = await db.run(
             """INSERT INTO postings
                (company_name, title, url, source_name, locations, location_match, posted_date,
                 first_seen, status)
@@ -220,14 +239,33 @@ async def _store_discovery_results(db, results: list[dict], *, now_iso: str, loc
             loc_decision, r.get("posted_date"), now_iso[:10],
         )
         stored += 1
-    return stored
+        inserted_ids.append(new_id)
+    return stored, inserted_ids
+
+
+async def _count_visible_postings(db, ids: list[int]) -> int:
+    """How many of `ids` are still on the dashboard: classified with a
+    matched title and not archived. Used to count discovery's real
+    contribution to a run's `new_count` only after classification has run.
+    """
+    if not ids:
+        return 0
+    placeholders = ", ".join("?" for _ in ids)
+    row = await db.first(
+        f"SELECT COUNT(*) AS n FROM postings WHERE archived_at IS NULL AND matched_title IS NOT NULL "
+        f"AND id IN ({placeholders})",
+        *ids,
+    )
+    return (row or {}).get("n") or 0
 
 
 async def _apply_classification_decisions(db, decisions: list[dict], *, now_iso: str) -> int:
     applied = 0
+    unmatched_ids = []
     for d in decisions:
         posting = await db.first("SELECT id FROM postings WHERE id = ?", d.get("id"))
         if not posting:
+            unmatched_ids.append(d.get("id"))
             continue
         if d["decision"] == "match":
             await db.run(
@@ -241,6 +279,8 @@ async def _apply_classification_decisions(db, decisions: list[dict], *, now_iso:
                 "UPDATE postings SET archived_at = ?, archive_reason = ? WHERE id = ?",
                 now_iso, f"Claude classification: {d.get('reason') or 'not a match'}", posting["id"],
             )
+    if unmatched_ids:
+        print(f"classification: {len(unmatched_ids)} decision(s) referenced unknown posting id(s): {unmatched_ids}")
     return applied
 
 

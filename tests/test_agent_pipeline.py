@@ -144,6 +144,7 @@ def test_run_agent_steps_stores_discovery_results_and_classifies_them(empty_db):
     ))
 
     assert outcome["discovery_count"] == 1
+    assert outcome["discovery_new_count"] == 1
     assert outcome["classification_count"] == 1
     assert outcome["scout_count"] == 1
     assert outcome["errors"] == []
@@ -163,6 +164,107 @@ def test_run_agent_steps_stores_discovery_results_and_classifies_them(empty_db):
     plans = run(empty_db.all("SELECT * FROM search_plans"))
     assert len(plans) == 1
     assert plans[0]["plan_date"] == "2026-09-21"
+
+
+def test_run_agent_steps_discovery_new_count_excludes_a_classification_reject(empty_db):
+    # issue #26: a discovered posting that classification goes on to reject
+    # (and archive) in the same run must not still count toward the run's
+    # "new" total -- it never actually lands on the dashboard.
+    _insert_company(empty_db, feed_type=None)
+    run_id = run(empty_db.run("INSERT INTO runs (kind, started_at, status) VALUES ('daily', '2026-09-20T08:00:00', 'running')"))
+
+    fake = _fake_run_claude({
+        "discovery": '{"results": [{"company_name": "Acme", "title": "Software Engineer Intern", '
+                     '"url": "https://acme.example/1", "location_text": "SF"}]}',
+        "classification": '{"decisions": [{"id": 1, "decision": "reject", "matched_title": null, '
+                           '"reason": "not a PM role"}]}',
+        "scout": '{"sources": []}',
+        "improvement": '{"search_plan": null, "proposals": [], "title_suggestions": []}',
+    })
+
+    outcome = run(run_agent_steps(
+        empty_db, run_id=run_id, companies=[{"id": 1, "name": "Acme", "feed_type": None}],
+        titles_doc=TITLES_DOC, locations_setting=LOCATIONS, budget_settings=SETTINGS,
+        status=_open_status(), today="2026-09-20", now_iso="2026-09-20T08:00:00", run_claude=fake,
+    ))
+
+    assert outcome["discovery_count"] == 1
+    assert outcome["discovery_new_count"] == 0
+    assert outcome["classification_count"] == 0
+
+    posting = run(empty_db.first("SELECT * FROM postings WHERE id = 1"))
+    assert posting["archived_at"] is not None
+
+
+def test_run_agent_steps_does_not_store_a_discovery_result_matching_an_existing_posting(empty_db):
+    # issue #26: an NVIDIA posting Henry had already marked applied got
+    # rediscovered under a new URL and saved as a second row. Company +
+    # normalized title must catch that even though the URL differs.
+    _insert_company(empty_db, feed_type=None)
+    run_id = run(empty_db.run("INSERT INTO runs (kind, started_at, status) VALUES ('daily', '2026-09-20T08:00:00', 'running')"))
+    run(empty_db.run(
+        """INSERT INTO postings (company_name, title, url, locations, location_match, first_seen, status, applied)
+           VALUES ('Acme', 'PM Intern', 'https://acme.example/old', '[]', 'unclear', '2026-09-18', 'unverified', 1)"""
+    ))
+
+    fake = _fake_run_claude({
+        "discovery": '{"results": [{"company_name": "Acme", "title": "PM Intern", '
+                     '"url": "https://acme.example/new", "location_text": "SF"}]}',
+        "scout": '{"sources": []}',
+        "improvement": '{"search_plan": null, "proposals": [], "title_suggestions": []}',
+    })
+
+    outcome = run(run_agent_steps(
+        empty_db, run_id=run_id, companies=[{"id": 1, "name": "Acme", "feed_type": None}],
+        titles_doc=TITLES_DOC, locations_setting=LOCATIONS, budget_settings=SETTINGS,
+        status=_open_status(), today="2026-09-20", now_iso="2026-09-20T08:00:00", run_claude=fake,
+    ))
+
+    assert outcome["discovery_count"] == 0
+    postings = run(empty_db.all("SELECT * FROM postings"))
+    assert len(postings) == 1
+    assert postings[0]["url"] == "https://acme.example/old"
+    assert postings[0]["applied"] == 1
+
+
+def test_run_agent_steps_classification_keeps_good_decisions_when_one_entry_is_invalid(empty_db):
+    # issue #26: classification could spend real tokens on a batch of
+    # decisions and leave every posting in it unclassified if a single
+    # decision in the reply was malformed -- the same "one bad item sinks
+    # the whole batch" failure already fixed for the scout in issue #20.
+    run_id = run(empty_db.run("INSERT INTO runs (kind, started_at, status) VALUES ('daily', '2026-09-20T08:00:00', 'running')"))
+    good_id = run(empty_db.run(
+        """INSERT INTO postings (company_name, title, url, locations, location_match, first_seen, status)
+           VALUES ('Acme', 'PM Intern', 'https://acme.example/1', '[]', 'unclear', '2026-09-20', 'unverified')"""
+    ))
+    other_id = run(empty_db.run(
+        """INSERT INTO postings (company_name, title, url, locations, location_match, first_seen, status)
+           VALUES ('Acme', 'Other Role', 'https://acme.example/2', '[]', 'unclear', '2026-09-20', 'unverified')"""
+    ))
+
+    fake = _fake_run_claude({
+        "classification": (
+            '{"decisions": [{"id": %d, "decision": "match", "matched_title": "PM Intern", "title_en": null}, '
+            '{"id": "not-an-int", "decision": "reject"}]}' % good_id
+        ),
+        "improvement": '{"search_plan": null, "proposals": [], "title_suggestions": []}',
+    })
+
+    outcome = run(run_agent_steps(
+        empty_db, run_id=run_id, companies=[], titles_doc=TITLES_DOC, locations_setting=LOCATIONS,
+        budget_settings=SETTINGS, status=_open_status(), today="2026-09-20", now_iso="2026-09-20T08:00:00",
+        run_claude=fake,
+    ))
+
+    assert "classification" in outcome["steps_succeeded"]
+    assert outcome["classification_count"] == 1
+
+    good_posting = run(empty_db.first("SELECT * FROM postings WHERE id = ?", good_id))
+    assert good_posting["matched_title"] == "PM Intern"
+
+    other_posting = run(empty_db.first("SELECT * FROM postings WHERE id = ?", other_id))
+    assert other_posting["matched_title"] is None
+    assert other_posting["archived_at"] is None
 
 
 def test_run_agent_steps_sets_company_feed_from_a_recognized_scout_url(empty_db):

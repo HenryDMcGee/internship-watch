@@ -3,7 +3,9 @@ import pytest
 from job.agent.schemas import (
     ClaudeOutputError,
     parse_and_validate,
+    split_classification_decisions,
     split_scout_sources,
+    validate_classification_document,
     validate_classification_output,
     validate_discovery_output,
     validate_improvement_output,
@@ -126,6 +128,30 @@ def test_classification_output_rejects_bad_decision():
 def test_classification_output_rejects_non_int_id():
     payload = {"decisions": [{"id": "1", "decision": "reject"}]}
     assert validate_classification_output(payload) != []
+
+
+def test_classification_document_only_checks_shape_not_items():
+    # A bad item is not this gate's job -- `split_classification_decisions`
+    # handles that separately, so one malformed decision doesn't sink an
+    # otherwise-good batch (issue #26, same failure mode as issue #20's
+    # scout bug).
+    payload = {"decisions": [{"id": "not an int"}]}
+    assert validate_classification_document(payload) == []
+
+
+def test_classification_document_rejects_non_list_decisions():
+    assert validate_classification_document({"decisions": "nope"}) != []
+
+
+def test_split_classification_decisions_keeps_good_entries_and_reports_bad_ones():
+    payload = {"decisions": [
+        {"id": 1, "decision": "match", "matched_title": "PM Intern"},
+        {"id": "bad", "decision": "reject"},
+    ]}
+    valid, problems = split_classification_decisions(payload)
+    assert len(valid) == 1
+    assert valid[0]["id"] == 1
+    assert len(problems) == 1
 
 
 # -- unclear page -----------------------------------------------------------

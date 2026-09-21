@@ -357,6 +357,70 @@ def test_daily_run_actually_calls_discovery_and_scout_for_no_source_companies(em
     assert run(empty_db.all("SELECT * FROM alerts")) == []
 
 
+def test_daily_run_new_count_excludes_a_discovery_that_classification_rejects(empty_db, monkeypatch):
+    # issue #26: run 14 reported 1 new posting in its summary, but the
+    # posting hadn't actually passed classification -- new_count must only
+    # reflect postings that end up matched and still on the dashboard.
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "test-token")
+    _insert_company(empty_db, feed_type=None, feed_id=None)
+
+    def fake_run_fetcher(company, session=None):
+        return FetchResult(company_id=company["id"], company_name=company["name"], postings=[])
+
+    monkeypatch.setattr(run_module, "run_fetcher", fake_run_fetcher)
+
+    def fake_run_claude_step(step, prompt, *, model, **kwargs):
+        text = {
+            "discovery": '{"results": [{"company_name": "Acme", "title": "Software Engineer Intern", '
+                         '"url": "https://acme.example/1", "location_text": "SF"}]}',
+            "classification": '{"decisions": [{"id": 1, "decision": "reject", "matched_title": null, '
+                               '"reason": "not a PM role"}]}',
+            "scout": '{"sources": []}',
+            "improvement": '{"search_plan": null, "proposals": [], "title_suggestions": []}',
+        }[step]
+        web_searches = 3 if step in ("discovery", "scout") else 0
+        return ClaudeStepResult(step=step, model=model, text=text, web_searches=web_searches)
+
+    monkeypatch.setattr(agent_client, "run_claude_step", fake_run_claude_step)
+
+    result = run(run_module.run(empty_db, kind="daily"))
+    assert result["new_count"] == 0
+
+    postings = run(empty_db.all("SELECT * FROM postings"))
+    assert len(postings) == 1
+    assert postings[0]["archived_at"] is not None
+
+    runs = run(empty_db.all("SELECT * FROM runs"))
+    assert runs[0]["new_count"] == 0
+
+
+def test_daily_run_new_count_counts_a_discovery_that_classification_matches(empty_db, monkeypatch):
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "test-token")
+    _insert_company(empty_db, feed_type=None, feed_id=None)
+
+    def fake_run_fetcher(company, session=None):
+        return FetchResult(company_id=company["id"], company_name=company["name"], postings=[])
+
+    monkeypatch.setattr(run_module, "run_fetcher", fake_run_fetcher)
+
+    def fake_run_claude_step(step, prompt, *, model, **kwargs):
+        text = {
+            "discovery": '{"results": [{"company_name": "Acme", "title": "MBA Product Manager Intern", '
+                         '"url": "https://acme.example/1", "location_text": "San Francisco, CA"}]}',
+            "classification": '{"decisions": [{"id": 1, "decision": "match", '
+                               '"matched_title": "MBA Product Manager Intern", "title_en": null}]}',
+            "scout": '{"sources": []}',
+            "improvement": '{"search_plan": null, "proposals": [], "title_suggestions": []}',
+        }[step]
+        web_searches = 3 if step in ("discovery", "scout") else 0
+        return ClaudeStepResult(step=step, model=model, text=text, web_searches=web_searches)
+
+    monkeypatch.setattr(agent_client, "run_claude_step", fake_run_claude_step)
+
+    result = run(run_module.run(empty_db, kind="daily"))
+    assert result["new_count"] == 1
+
+
 def test_daily_run_flags_it_when_discovery_and_scout_do_not_actually_run(empty_db, monkeypatch):
     # Regression for issue #20: Henry's run 8 recorded a single Claude call
     # (improvement) even though all 100 companies had no source yet --

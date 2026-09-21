@@ -41,6 +41,7 @@ from job.agent.pipeline import build_unclear_reader, run_agent_steps
 from job.agent.summary import build_summary_payload, send_daily_summary
 from job.agent.usage import record_usage
 from job.d1_client import D1HttpDatabase
+from job.dedup import find_duplicate_posting
 from job.fetchers import run_fetcher
 from job.locations import location_match
 from job.matching import classify_posting, cycle_status
@@ -104,8 +105,8 @@ async def _fetch_and_store(db, companies: list[dict], titles_doc: dict, location
             if match.decision == "reject":
                 continue
 
-            existing = await db.first(
-                "SELECT id FROM postings WHERE company_id = ? AND url = ?", company["id"], fetched.url
+            existing = await find_duplicate_posting(
+                db, company_name=company["name"], title=fetched.title, url=fetched.url
             )
             if existing:
                 continue
@@ -251,7 +252,7 @@ async def _run_body(db, run_id: int, started_at: str, kind: str, company_ids: li
             # matching how `run_fetcher` is mocked below.
             run_claude=agent_client.run_claude_step,
         )
-        new_count += agent_outcome["discovery_count"]
+        new_count += agent_outcome["discovery_new_count"]
         unclear_reader = build_unclear_reader(
             status=status, model=budget_settings.get("model_classification", "haiku"),
             on_usage=unclear_results.append,
@@ -259,7 +260,7 @@ async def _run_body(db, run_id: int, started_at: str, kind: str, company_ids: li
         )
     elif kind == "daily":
         agent_outcome = {
-            "discovery_count": 0, "classification_count": 0, "scout_count": 0,
+            "discovery_count": 0, "discovery_new_count": 0, "classification_count": 0, "scout_count": 0,
             "steps_skipped": [{"step": "all", "reason": "Claude isn't configured (no "
                                                           "CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY)"}],
             "steps_succeeded": [], "claude_limit_hit": False, "errors": [], "title_pr": None,
