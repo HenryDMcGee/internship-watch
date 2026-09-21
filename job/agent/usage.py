@@ -1,4 +1,4 @@
-"""Records every Claude call in the `usage` table, with an estimated cost.
+"""Records every Claude call in the `usage` table, with its cost.
 
 `est_cost_usd` matters most in `api_key` billing mode, where it's what
 `budgets.py` enforces against; in `subscription` mode it's kept only for
@@ -31,13 +31,23 @@ def estimate_cost_usd(
 
 
 async def record_usage(db, *, run_id: int, step: str, result: ClaudeStepResult, now_iso: str) -> int:
-    cost = estimate_cost_usd(
-        result.model,
-        input_tokens=result.input_tokens,
-        output_tokens=result.output_tokens,
-        cache_read_tokens=result.cache_read_tokens,
-        cache_write_tokens=result.cache_write_tokens,
-    )
+    # `result.cost_usd` is the CLI's own sum of `costUSD` across every model
+    # in `modelUsage` (see `client.py`'s `_usage_from_payload`) -- it's
+    # preferred over our own per-token estimate because a web-search step's
+    # tokens are split across the orchestrating model and a Haiku sub-agent
+    # (issue #26), and estimating from summed tokens under a single model's
+    # rate misprices whichever model didn't do most of the work. Only a
+    # reply with no `modelUsage` at all (older CLI) falls back to the
+    # estimate below.
+    cost = result.cost_usd
+    if cost is None:
+        cost = estimate_cost_usd(
+            result.model,
+            input_tokens=result.input_tokens,
+            output_tokens=result.output_tokens,
+            cache_read_tokens=result.cache_read_tokens,
+            cache_write_tokens=result.cache_write_tokens,
+        )
     return await db.run(
         """INSERT INTO usage
            (run_id, step, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,

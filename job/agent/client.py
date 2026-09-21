@@ -78,13 +78,18 @@ class ClaudeStepResult:
     cache_read_tokens: int = 0
     cache_write_tokens: int = 0
     web_searches: int = 0
+    # The CLI's own sum of `costUSD` across every model in `modelUsage` --
+    # None when the reply has no `modelUsage` (older CLI, or the top-level
+    # `usage` fallback), which tells `usage.py` to fall back to its own
+    # per-token estimate instead of treating "no cost reported" as free.
+    cost_usd: float | None = None
 
 
 Runner = Callable[..., "subprocess.CompletedProcess[str]"]
 
 
-def _usage_from_payload(payload: dict) -> tuple[int, int, int, int, int]:
-    """Pulls token/search counts out of the CLI's final JSON reply.
+def _usage_from_payload(payload: dict) -> tuple[int, int, int, int, int, float | None]:
+    """Pulls token/search/cost counts out of the CLI's final JSON reply.
 
     Issue #13: a real run logged `input_tokens` of 10-14 and `web_searches` of
     0 for calls that (per their own multi-thousand-character prompts and
@@ -97,6 +102,18 @@ def _usage_from_payload(payload: dict) -> tuple[int, int, int, int, int]:
     call, including `webSearchRequests` -- that's the one budgets.py and the
     `usage` table need. Fall back to the top-level `usage` object only for a
     CLI version/reply that doesn't include `modelUsage`.
+
+    Issue #26: `modelUsage` is keyed by model, and a web-search step's search
+    tool calls run in a Haiku sub-agent -- so a single `discovery`/`scout`
+    call's reply has one entry for the orchestrating Sonnet model (a handful
+    of tokens, no searches) and a second entry for Haiku (hundreds of
+    thousands of tokens, every search). Summing every model's `costUSD` too
+    (not just tokens/searches) matters because pricing a Haiku-heavy call at
+    Sonnet's per-token rate -- which is what happens if cost is estimated
+    from the summed tokens under the single "model" the step was called
+    with -- overstates cost substantially; the CLI's own per-model `costUSD`
+    doesn't have that problem, so it's preferred over our own estimate
+    whenever it's present.
     """
     model_usage = payload.get("modelUsage") or {}
     if model_usage:
@@ -105,13 +122,16 @@ def _usage_from_payload(payload: dict) -> tuple[int, int, int, int, int]:
             "cacheReadInputTokens": 0, "cacheCreationInputTokens": 0,
             "webSearchRequests": 0,
         }
+        cost_usd = 0.0
         for stats in model_usage.values():
+            stats = stats or {}
             for key in totals:
-                totals[key] += int((stats or {}).get(key) or 0)
+                totals[key] += int(stats.get(key) or 0)
+            cost_usd += float(stats.get("costUSD") or 0)
         return (
             totals["inputTokens"], totals["outputTokens"],
             totals["cacheReadInputTokens"], totals["cacheCreationInputTokens"],
-            totals["webSearchRequests"],
+            totals["webSearchRequests"], cost_usd,
         )
     usage = payload.get("usage") or {}
     server_tool_use = usage.get("server_tool_use") or {}
@@ -121,6 +141,7 @@ def _usage_from_payload(payload: dict) -> tuple[int, int, int, int, int]:
         int(usage.get("cache_read_input_tokens") or 0),
         int(usage.get("cache_creation_input_tokens") or 0),
         int(server_tool_use.get("web_search_requests") or 0),
+        None,
     )
 
 
@@ -214,12 +235,12 @@ def run_claude_step(
     print(f"{step}: usage={payload.get('usage')!r}")
     print(f"{step}: modelUsage={payload.get('modelUsage')!r}")
 
-    input_tokens, output_tokens, cache_read, cache_write, web_searches = _usage_from_payload(payload)
+    input_tokens, output_tokens, cache_read, cache_write, web_searches, cost_usd = _usage_from_payload(payload)
     return ClaudeStepResult(
         step=step, model=model, text=payload.get("result", ""),
         input_tokens=input_tokens, output_tokens=output_tokens,
         cache_read_tokens=cache_read, cache_write_tokens=cache_write,
-        web_searches=web_searches,
+        web_searches=web_searches, cost_usd=cost_usd,
     )
 
 
