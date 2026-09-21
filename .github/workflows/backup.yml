@@ -1,0 +1,43 @@
+# Nightly backup of the D1 database to the R2 bucket internship-watch-backups.
+# Runs at 09:00 UTC (4am Central), before the 8am search. Can also be started by hand.
+# Old backups are removed by an R2 lifecycle rule (delete after 30 days).
+name: Backup
+
+on:
+  schedule:
+    - cron: "0 9 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: backup
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_DEPLOY_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Export the database
+        working-directory: api
+        run: |
+          BACKUP_DATE=$(date -u +%Y-%m-%d)
+          echo "BACKUP_DATE=$BACKUP_DATE" >> "$GITHUB_ENV"
+          npx --yes wrangler d1 export internship-watch-db --remote --output "../backup-$BACKUP_DATE.sql"
+
+      - name: Upload to R2
+        working-directory: api
+        run: |
+          npx --yes wrangler r2 object put "internship-watch-backups/$BACKUP_DATE.sql" \
+            --file "../backup-$BACKUP_DATE.sql" --remote
