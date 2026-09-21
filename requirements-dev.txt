@@ -11,3 +11,4 @@ jsonschema
 cryptography
 tzdata
 requests
+pyyaml

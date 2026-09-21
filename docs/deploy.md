@@ -103,18 +103,38 @@ uv run pywrangler deploy
 
 ## Deploying later changes
 
-After merging a pull request:
-1. If it added files in `db/migrations/`, run step 5.
+From phase 4, merging a pull request to `master` deploys automatically: once CI passes, `.github/workflows/deploy.yml` runs step 5 (apply migrations) and step 7 (deploy the Worker) for you, using the `CLOUDFLARE_DEPLOY_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` secrets. Watch the **Actions** tab for the **Deploy** run.
+
+The manual commands above still work as a fallback (for example, if Actions is down, or you're deploying from a branch that isn't `master`):
+1. If the change added files in `db/migrations/`, run step 5.
 2. If it changed `config/titles.json`, or you're not sure, run `python scripts/bundle_titles.py` from the repository root before step 7.
 3. Run step 7.
 
-To go back to the previous version:
-```powershell
-npx wrangler rollback
-```
-Rollback doesn't undo database migrations. Any pull request that changes the database says how to reverse it.
+### Rolling back
 
-From phase 4, a GitHub Actions workflow runs steps 5 and 7 automatically when you merge, using `CLOUDFLARE_DEPLOY_TOKEN`.
+Two options, depending on what's wrong:
+- **Revert the pull request** on GitHub, then merge the revert. The automatic deploy ships the reverted code the same way as any other merge.
+- **Roll back the Worker only**, without touching `master`:
+  ```powershell
+  npx wrangler rollback
+  ```
+  This is faster, but the next automatic deploy (or manual `pywrangler deploy`) overwrites it with whatever `master` still has, so also revert the pull request if the bad change shouldn't ship again.
+
+Neither option undoes database migrations. Any pull request that changes the database says how to reverse it.
+
+## Backups
+
+`.github/workflows/backup.yml` runs nightly at 09:00 UTC (after the 08:00 America/Chicago daily job) and exports the database to the `internship-watch-backups` R2 bucket as `<date>.sql`, deleting backups older than 30 days. Run it by hand from the **Actions** tab (**Backup**, **Run workflow**) any time you want a backup right away, such as before a risky migration.
+
+### Restoring a backup
+
+1. In Cloudflare, open **R2**, then **internship-watch-backups**, and download the `.sql` file for the date you want.
+2. Apply it to the database:
+   ```powershell
+   npx wrangler d1 execute internship-watch-db --remote --file=<date>.sql
+   ```
+   This replays the exported SQL; it doesn't delete rows added since the backup, so review the file first if you only want to restore part of it.
+3. Recheck the dashboard (see **Check it**, above).
 
 ## If something goes wrong
 
