@@ -1,5 +1,14 @@
 First Release
 
+features:
+Phase 1-3
+
+releases:
+apples 9-21-2026
+bananas tbd
+coconuts tbd
+daiquiri tbd
+
 # Internship Watch
 
 Finds Summer 2027 MBA product internships every morning and shows them on a private dashboard. Claude Code builds it through GitHub Actions, and every change goes through a pull request you review.
