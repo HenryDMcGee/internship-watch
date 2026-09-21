@@ -1,4 +1,4 @@
-from job.matching import classify_posting, cycle_status, find_exclude_word, match_title
+from job.matching import classify_posting, cycle_status, find_exclude_word, match_title, normalize_title
 
 TITLES_DOC = {
     "version": 1,
@@ -78,3 +78,11 @@ def test_classify_posting_unclear_cycle_is_stored_for_phase_3():
     result = classify_posting("MBA Product Manager Intern", "", TITLES_DOC)
     assert result.decision == "unclear"
     assert result.matched_title == "MBA Product Manager Intern"
+
+
+def test_normalize_title_collapses_whitespace_and_case():
+    assert (
+        normalize_title("  Product Management   MBA Intern, Data Center GPU - Summer 2027  ")
+        == "product management mba intern, data center gpu - summer 2027"
+    )
+    assert normalize_title("Some Title") == normalize_title("some   title")

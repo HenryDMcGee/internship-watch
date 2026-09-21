@@ -17,6 +17,14 @@ def _normalize(text: str) -> str:
     return _WS_RE.sub(" ", (text or "").strip().lower())
 
 
+def normalize_title(text: str) -> str:
+    """Normalize a posting's job title for matching the same role across
+    sources -- whitespace-collapsed and lowercased, same as title/alias
+    matching (`match_title`) uses internally.
+    """
+    return _normalize(text)
+
+
 def find_exclude_word(text: str, exclude_words: list[str]) -> str | None:
     """Return the first exclude word found in `text` (case-insensitive), if any."""
     haystack = _normalize(text)
