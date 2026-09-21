@@ -84,6 +84,35 @@ Runner = Callable[..., "subprocess.CompletedProcess[str]"]
 
 
 def _usage_from_payload(payload: dict) -> tuple[int, int, int, int, int]:
+    """Pulls token/search counts out of the CLI's final JSON reply.
+
+    Issue #13: a real run logged `input_tokens` of 10-14 and `web_searches` of
+    0 for calls that (per their own multi-thousand-character prompts and
+    working search behavior) plainly cost more than that and did search.
+    The reply's top-level `usage` is the *last* underlying API turn's own
+    usage -- with prompt caching and a headless run's tool-calling turns
+    (search, then read results, then answer), that's often a small delta,
+    not what the whole `claude -p` call actually spent. `modelUsage`, keyed
+    by model id, is the CLI's own running total across every turn of the
+    call, including `webSearchRequests` -- that's the one budgets.py and the
+    `usage` table need. Fall back to the top-level `usage` object only for a
+    CLI version/reply that doesn't include `modelUsage`.
+    """
+    model_usage = payload.get("modelUsage") or {}
+    if model_usage:
+        totals = {
+            "inputTokens": 0, "outputTokens": 0,
+            "cacheReadInputTokens": 0, "cacheCreationInputTokens": 0,
+            "webSearchRequests": 0,
+        }
+        for stats in model_usage.values():
+            for key in totals:
+                totals[key] += int((stats or {}).get(key) or 0)
+        return (
+            totals["inputTokens"], totals["outputTokens"],
+            totals["cacheReadInputTokens"], totals["cacheCreationInputTokens"],
+            totals["webSearchRequests"],
+        )
     usage = payload.get("usage") or {}
     server_tool_use = usage.get("server_tool_use") or {}
     return (
@@ -133,18 +162,26 @@ def run_claude_step(
         "--permission-prompts", "none",
     ]
     tools = STEP_TOOLS[step]
-    # `--tools` controls which tools exist at all for this call (CLAUDE.md:
-    # "no shell or file-editing tools"); `--allowedTools` pre-approves the ones
-    # that do, so they don't need a permission decision either -- confirmed
-    # necessary by testing the CLI directly: without `--allowedTools`, a
-    # headless call gets "permission for the WebSearch tool hasn't been
-    # granted in this session" instead of searching (issue #20). Both flags
-    # use the same comma-separated value; `--allowedTools` also accepts
-    # spaces, but comma is what was confirmed to work.
+    # For a step that needs the web, only `--allowedTools` is passed (no
+    # `--tools`): `--allowedTools` pre-approves WebSearch/WebFetch so they run
+    # without a permission decision -- confirmed necessary by testing the CLI
+    # directly, since without it a headless call gets "permission for the
+    # WebSearch tool hasn't been granted in this session" instead of
+    # searching (issue #20). `--tools` alongside it was issue #13: it isn't
+    # needed (per `claude --help`, `--permission-prompts none` only
+    # auto-denies whatever isn't already pre-approved, so nothing outside
+    # `--allowedTools` runs anyway) and adding it changed CLI behavior enough
+    # that discovery/scout usage came back wrong. `claude --help` confirms
+    # this matches a terminal call of `claude -p "..." --allowedTools
+    # "WebSearch,WebFetch"` with neither `--tools` nor `--permission-prompts`.
+    # For a tool-free step, `--tools ""` disables every tool outright
+    # (CLAUDE.md: "no shell or file-editing tools") -- there's nothing to
+    # pre-approve, so `--allowedTools` is skipped instead.
     tools_value = ",".join(tools)
-    args += ["--tools", tools_value]
     if tools:
         args += ["--allowedTools", tools_value]
+    else:
+        args += ["--tools", ""]
     if system_prompt:
         args += ["--append-system-prompt", system_prompt]
 
@@ -169,6 +206,13 @@ def run_claude_step(
 
     if payload.get("is_error"):
         _raise_for_message(step, f"{step} step reported an error: {str(payload.get('result', ''))[:500]}")
+
+    # Full, unfiltered usage objects straight from the CLI reply -- so a real
+    # run's logs show exactly what's actually there instead of us guessing
+    # again (issue #13: parsed `usage` fields disagreed with the run's real
+    # cost, and this is the only way to check the reply itself next time).
+    print(f"{step}: usage={payload.get('usage')!r}")
+    print(f"{step}: modelUsage={payload.get('modelUsage')!r}")
 
     input_tokens, output_tokens, cache_read, cache_write, web_searches = _usage_from_payload(payload)
     return ClaudeStepResult(
