@@ -35,15 +35,15 @@ The API checks the Access login token on every request, so it needs two values f
 - **ACCESS_AUD:** in **Zero Trust**, open **Access controls**, **Applications**, then **Internship Watch**. Copy the **Application Audience (AUD) Tag**.
 - **ACCESS_TEAM_DOMAIN:** your team domain, in the form `<team name>.cloudflareaccess.com`. It's shown in the Zero Trust settings.
 
-### 3. GitHub token for Check now and title edits
+### 3. GitHub token for the Titles panel, Check now, and title edits
 
-The Worker calls GitHub's API for two things: starting `check-now.yml` when you click Check now, and opening or updating the pull request that title edits make. It needs a token with **Actions: write**, **Contents: write**, and **Pull requests: write** on this repository only (a fine-grained personal access token, or a token from a GitHub App installed just here).
+The Worker calls GitHub's API for three things: reading `config/titles.json` for the Titles panel, starting `check-now.yml` when you click Check now, and opening or updating the pull request that title edits make. It needs a token with **Actions: write**, **Contents: write**, and **Pull requests: write** on this repository only (a fine-grained personal access token, or a token from a GitHub App installed just here).
 
 Store it as a Worker secret, not in `wrangler.toml` (secrets never go in git):
 ```powershell
 npx wrangler secret put GITHUB_TOKEN
 ```
-Paste the token when prompted. If you skip this step, the dashboard still works, but Check now and title edits return an error until you add it.
+Paste the token when prompted. If you skip this step, the dashboard still works, but the Titles panel, Check now, and title edits return an error until you add it.
 
 ### 3b. GitHub Actions secrets for the daily job's Claude steps
 
@@ -86,13 +86,7 @@ cd api
 ```
 
 ### 7. Deploy the Worker
-
-The Worker only ships files under `api/`, so refresh its copy of the titles
-first (`/api/titles` reads that copy, never the repository root):
 ```powershell
-cd ..
-python scripts/bundle_titles.py
-cd api
 uv run pywrangler deploy
 ```
 
@@ -107,8 +101,7 @@ From phase 4, merging a pull request to `master` deploys automatically: once CI 
 
 The manual commands above still work as a fallback (for example, if Actions is down, or you're deploying from a branch that isn't `master`):
 1. If the change added files in `db/migrations/`, run step 5.
-2. If it changed `config/titles.json`, or you're not sure, run `python scripts/bundle_titles.py` from the repository root before step 7.
-3. Run step 7.
+2. Run step 7.
 
 ### Rolling back
 
@@ -143,6 +136,6 @@ Neither option undoes database migrations. Any pull request that changes the dat
 | "Site can't be reached" | The DNS record from step 4 is missing | Add it, set to Proxied |
 | The dashboard loads without asking you to sign in | The DNS record is set to DNS only, or the Access application's hostname doesn't match | Set the record to Proxied, and check the hostname is exactly `internship-watch.mcgeehenry.com` |
 | Sign-in works but the dashboard shows errors or no data | `ACCESS_AUD` or `ACCESS_TEAM_DOMAIN` is wrong, or migrations weren't applied | Recheck step 2, then run step 5 |
-| Check now or title edits return an error | `GITHUB_TOKEN` isn't set, or lacks Actions/Contents/Pull requests write | Recheck step 3 |
+| Titles panel, Check now, or title edits return an error | `GITHUB_TOKEN` isn't set, or lacks Actions/Contents/Pull requests write | Recheck step 3 |
 | Deploy fails because of a Python package | The package doesn't run in Python Workers | Tell Claude; the plan's fallback is a small TypeScript Worker, proposed first |
 | Your main website shows a Cloudflare login | The Access application was created for `mcgeehenry.com` instead of the subdomain | Fix the application's hostname in Zero Trust |

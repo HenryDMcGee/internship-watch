@@ -14,7 +14,6 @@ import json
 import os
 import time
 from datetime import date, datetime, timedelta
-from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request, Response
@@ -30,7 +29,7 @@ from access import ACCESS_HEADER, AccessTokenError, fetch_jwks, verify_access_to
 from budgets import MODEL_FIELDS, NUMERIC_FIELDS, SHARE_FIELDS, linear_forecast, validate_budget_settings
 from db import Database
 from github_client import GitHubApiError, GitHubClient
-from titles import open_or_update_titles_pr, validate_titles_doc, TITLES_BRANCH
+from titles import load_titles_doc, open_or_update_titles_pr, validate_titles_doc, TITLES_BRANCH
 
 REPO = "HenryDMcGee/internship-watch"
 DAILY_CHECK_LIMIT = 5
@@ -46,18 +45,6 @@ def central_today() -> str:
 
 def now_iso() -> str:
     return datetime.now(CENTRAL).isoformat() if CENTRAL else datetime.utcnow().isoformat()
-
-
-def _load_titles() -> dict:
-    here = Path(__file__).resolve().parent
-    bundled = here / "titles.json"
-    if bundled.exists():
-        return json.loads(bundled.read_text(encoding="utf-8"))
-    # Fallback for local dev/tests when scripts/bundle_titles.py hasn't run
-    # yet: read straight from the repo. Not available inside the deployed
-    # Worker, which only has the files wrangler bundled.
-    repo_config = here.parent.parent / "config" / "titles.json"
-    return json.loads(repo_config.read_text(encoding="utf-8"))
 
 
 app = FastAPI(title="Internship Watch API")
@@ -453,8 +440,14 @@ class TitlesUpdate(BaseModel):
 
 
 @router.get("/titles")
-async def get_titles():
-    return _load_titles()
+async def get_titles(request: Request):
+    github: GitHubClient | None = request.app.state.github
+    if github is None:
+        raise HTTPException(status_code=503, detail="GitHub isn't configured for this environment")
+    try:
+        return await load_titles_doc(github)
+    except GitHubApiError as exc:
+        raise HTTPException(status_code=502, detail=f"Could not read titles from GitHub: {exc}") from exc
 
 
 @router.get("/titles/pending")

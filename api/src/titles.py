@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import json
 
-from github_client import GitHubClient
+from github_client import GitHubApiError, GitHubClient
 
 TITLES_PATH = "config/titles.json"
 TITLES_BRANCH = "titles-update-from-dashboard"
@@ -86,6 +86,20 @@ def validate_titles_doc(doc: dict) -> list[str]:
                 problems.append(f"exclude word '{word}' would block title '{owner}'")
 
     return problems
+
+
+async def load_titles_doc(github: GitHubClient) -> dict:
+    """Read `config/titles.json` from `BASE_BRANCH` on GitHub.
+
+    The deployed Worker only bundles `api/src`, so it can't read repository
+    files by path (see CLAUDE.md's "Things that have broken before"). This
+    also means the panel always shows what's actually on `BASE_BRANCH`.
+    """
+    result = await github.get_file(TITLES_PATH, BASE_BRANCH)
+    if result is None:
+        raise GitHubApiError(f"{TITLES_PATH} was not found on {BASE_BRANCH}")
+    content, _sha = result
+    return json.loads(content)
 
 
 async def open_or_update_titles_pr(github: GitHubClient, doc: dict) -> dict:

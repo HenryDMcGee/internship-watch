@@ -1,10 +1,17 @@
 import asyncio
+import base64
+import json
+import shutil
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 
 from github_client import GitHubClient
 from src.main import app, central_today
+
+ROOT = Path(__file__).resolve().parent.parent
+CONFIG_DIR = ROOT / "config"
 
 
 def run(coro):
@@ -150,6 +157,54 @@ VALID_DOC = {
     "exclude_words": ["marketing"],
     "titles": [{"title": "MBA Product Manager Intern", "group": "Core PM", "aliases": [], "active": True}],
 }
+
+
+def test_get_titles_requires_github_configured(client):
+    tc, _ = client
+    resp = tc.get("/api/titles")
+    assert resp.status_code == 503
+
+
+def test_get_titles_reads_from_github(client):
+    tc, _ = client
+    content = base64.b64encode((json.dumps(VALID_DOC) + "\n").encode("utf-8")).decode("ascii")
+    transport = ScriptedTransport([(200, {"content": content, "encoding": "base64", "sha": "abc123"})])
+    app.state.github = GitHubClient(repo="HenryDMcGee/internship-watch", token="tok", transport=transport)
+
+    resp = tc.get("/api/titles")
+    assert resp.status_code == 200
+    assert resp.json() == VALID_DOC
+
+    method, url, _ = transport.calls[0]
+    assert method == "GET"
+    assert url.endswith("/repos/HenryDMcGee/internship-watch/contents/config/titles.json?ref=master")
+
+
+def test_get_titles_works_with_no_config_folder_on_disk(client, tmp_path):
+    tc, _ = client
+    content = base64.b64encode((json.dumps(VALID_DOC) + "\n").encode("utf-8")).decode("ascii")
+    transport = ScriptedTransport([(200, {"content": content, "encoding": "base64", "sha": "abc123"})])
+    app.state.github = GitHubClient(repo="HenryDMcGee/internship-watch", token="tok", transport=transport)
+
+    assert CONFIG_DIR.exists()
+    moved = tmp_path / "config-moved-away"
+    shutil.move(str(CONFIG_DIR), str(moved))
+    try:
+        resp = tc.get("/api/titles")
+    finally:
+        shutil.move(str(moved), str(CONFIG_DIR))
+
+    assert resp.status_code == 200
+    assert resp.json() == VALID_DOC
+
+
+def test_get_titles_returns_a_clear_error_when_github_is_unreachable(client):
+    tc, _ = client
+    transport = ScriptedTransport([(500, {"message": "boom"})])
+    app.state.github = GitHubClient(repo="HenryDMcGee/internship-watch", token="tok", transport=transport)
+
+    resp = tc.get("/api/titles")
+    assert resp.status_code == 502
 
 
 def test_pending_titles_pr_none_without_github(client):

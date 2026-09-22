@@ -170,15 +170,6 @@ def test_locations_settings_get_and_update(client):
     assert tc.get("/api/settings/locations").json() == {"countries": ["US", "JP", "CA"], "include_remote": True}
 
 
-def test_titles_are_read_only_from_bundled_config(client):
-    tc, _ = client
-    resp = tc.get("/api/titles")
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["version"] == 1
-    assert any(t["title"] == "MBA Product Manager Intern" for t in body["titles"])
-
-
 def test_access_required_when_configured(client):
     tc, _ = client
     app.state.access_team_domain = "royal-band-14be.cloudflareaccess.com"
