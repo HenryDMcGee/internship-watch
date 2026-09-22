@@ -12,6 +12,9 @@
     companies: [],
     analytics: null,
     proposals: [],
+    titlesOriginal: null,
+    titlesDraft: null,
+    titlesConfirmDelete: null,
   };
 
   function $(id) { return document.getElementById(id); }
@@ -49,7 +52,9 @@
       var detail = "";
       try {
         var body = await resp.json();
-        detail = typeof body.detail === "string" ? body.detail : JSON.stringify(body.detail || "");
+        if (typeof body.detail === "string") detail = body.detail;
+        else if (body.detail && Array.isArray(body.detail.problems)) detail = body.detail.problems.join(" ");
+        else detail = JSON.stringify(body.detail || "");
       } catch (e) { /* no JSON body */ }
       throw new Error(detail || "Request failed (" + resp.status + ")");
     }
@@ -630,28 +635,153 @@
   // Titles
   // -------------------------------------------------------------------
 
-  function renderTitlesGroups(doc) {
+  var NEW_GROUP_VALUE = "__new__";
+
+  function cloneDoc(doc) { return JSON.parse(JSON.stringify(doc)); }
+
+  function normalizeTitleKey(s) { return String(s).toLowerCase().trim().split(/\s+/).join(" "); }
+
+  function titlesGroupsInOrder(doc) {
+    var groups = [];
+    (doc ? doc.titles : []).forEach(function (t) { if (groups.indexOf(t.group) === -1) groups.push(t.group); });
+    return groups;
+  }
+
+  function findDuplicateTitleOwner(doc, name) {
+    var key = normalizeTitleKey(name);
+    for (var i = 0; i < doc.titles.length; i++) {
+      var t = doc.titles[i];
+      var names = [t.title].concat(t.aliases || []);
+      for (var j = 0; j < names.length; j++) {
+        if (normalizeTitleKey(names[j]) === key) return t.title;
+      }
+    }
+    return null;
+  }
+
+  function findExcludedWordIn(doc, name) {
+    var key = normalizeTitleKey(name);
+    var words = doc.exclude_words || [];
+    for (var i = 0; i < words.length; i++) {
+      if (key.indexOf(String(words[i]).toLowerCase()) !== -1) return words[i];
+    }
+    return null;
+  }
+
+  function countTitlesChanges() {
+    if (!state.titlesOriginal || !state.titlesDraft) return 0;
+    var origByTitle = {}, draftByTitle = {};
+    state.titlesOriginal.titles.forEach(function (t) { origByTitle[t.title] = t; });
+    state.titlesDraft.titles.forEach(function (t) { draftByTitle[t.title] = t; });
+    var count = 0;
+    Object.keys(origByTitle).forEach(function (k) { if (!(k in draftByTitle)) count++; });
+    Object.keys(draftByTitle).forEach(function (k) {
+      if (!(k in origByTitle)) count++;
+      else if (!!origByTitle[k].active !== !!draftByTitle[k].active) count++;
+    });
+    return count;
+  }
+
+  function hasUnsavedTitlesChanges() { return countTitlesChanges() > 0; }
+
+  function titleRow(t) {
+    var li = el("li", "title-row");
+    if (state.titlesConfirmDelete === t.title) {
+      li.classList.add("confirm");
+      li.appendChild(el("p", "confirm-msg", "Delete '" + t.title + "'? It will be removed once you merge the pull request."));
+      var row = el("div", "row");
+      var delBtn = el("button", "btn del", "Delete");
+      delBtn.type = "button";
+      delBtn.addEventListener("click", function () { removeDraftTitle(t.title); });
+      var cancelBtn = el("button", "btn", "Cancel");
+      cancelBtn.type = "button";
+      cancelBtn.addEventListener("click", function () { state.titlesConfirmDelete = null; renderTitlesPanel(); });
+      row.appendChild(delBtn);
+      row.appendChild(cancelBtn);
+      li.appendChild(row);
+      return li;
+    }
+
+    var cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.checked = !!t.active;
+    cb.setAttribute("aria-label", (t.active ? "Turn off " : "Turn on ") + t.title);
+    cb.addEventListener("change", function () { toggleDraftTitleActive(t.title, cb.checked); });
+    li.appendChild(cb);
+
+    var info = el("div", "title-info");
+    info.appendChild(el("div", "title-name", t.title));
+    if (t.aliases && t.aliases.length) info.appendChild(el("span", "aliases", "Also: " + t.aliases.join(", ")));
+    li.appendChild(info);
+
+    var del = el("button", "btn title-x", "×");
+    del.type = "button";
+    del.setAttribute("aria-label", "Delete " + t.title);
+    del.addEventListener("click", function () { state.titlesConfirmDelete = t.title; renderTitlesPanel(); });
+    li.appendChild(del);
+
+    return li;
+  }
+
+  function toggleDraftTitleActive(titleName, checked) {
+    var entry = state.titlesDraft.titles.filter(function (t) { return t.title === titleName; })[0];
+    if (!entry) return;
+    entry.active = checked;
+    renderTitlesPanel();
+  }
+
+  function removeDraftTitle(titleName) {
+    state.titlesDraft.titles = state.titlesDraft.titles.filter(function (t) { return t.title !== titleName; });
+    state.titlesConfirmDelete = null;
+    renderTitlesPanel();
+  }
+
+  function populateTitlesGroupSelect() {
+    var select = $("titlesNewGroup");
+    var current = select.value;
+    select.textContent = "";
+    var groups = titlesGroupsInOrder(state.titlesDraft);
+    groups.forEach(function (g) {
+      var opt = document.createElement("option");
+      opt.value = g; opt.textContent = g;
+      select.appendChild(opt);
+    });
+    var newOpt = document.createElement("option");
+    newOpt.value = NEW_GROUP_VALUE; newOpt.textContent = "New group…";
+    select.appendChild(newOpt);
+    if (current && (groups.indexOf(current) !== -1 || current === NEW_GROUP_VALUE)) select.value = current;
+    $("titlesNewGroupName").hidden = select.value !== NEW_GROUP_VALUE;
+  }
+
+  function updateTitlesUnsavedCount() {
+    var n = countTitlesChanges();
+    $("titlesUnsaved").textContent = n === 0 ? "No unsaved changes." : (n === 1 ? "1 unsaved change." : n + " unsaved changes.");
+    $("titlesSave").disabled = n === 0;
+  }
+
+  function renderTitlesPanel() {
+    if (!state.titlesDraft) return;
     var body = $("titlesBody");
     body.textContent = "";
-    var groups = {};
-    var order = [];
-    doc.titles.forEach(function (t) {
-      if (!groups[t.group]) { groups[t.group] = []; order.push(t.group); }
-      groups[t.group].push(t);
-    });
-    order.forEach(function (group) {
+    var groups = titlesGroupsInOrder(state.titlesDraft);
+    var byGroup = {};
+    state.titlesDraft.titles.forEach(function (t) { (byGroup[t.group] = byGroup[t.group] || []).push(t); });
+    if (!groups.length) {
+      body.appendChild(el("p", null, "No titles yet. Add one below."));
+    }
+    groups.forEach(function (group) {
       var section = el("div", "titles-group");
       section.appendChild(el("h3", null, group));
-      var ul = el("ul");
-      groups[group].forEach(function (t) {
-        var li = el("li");
-        li.appendChild(document.createTextNode(t.title + (t.active ? "" : " (inactive)")));
-        if (t.aliases && t.aliases.length) li.appendChild(el("span", "aliases", " — also: " + t.aliases.join(", ")));
-        ul.appendChild(li);
-      });
+      var ul = el("ul", "title-list");
+      byGroup[group].forEach(function (t) { ul.appendChild(titleRow(t)); });
       section.appendChild(ul);
       body.appendChild(section);
     });
+    populateTitlesGroupSelect();
+    updateTitlesUnsavedCount();
+    if (document.activeElement !== $("titlesJson")) {
+      $("titlesJson").value = JSON.stringify(state.titlesDraft, null, 2);
+    }
   }
 
   function showPendingTitlesPr(pr) {
@@ -660,7 +790,7 @@
     p.hidden = false;
     var a = $("titlesPendingLink");
     a.href = pr.html_url || "#";
-    a.textContent = "Pending change: " + (pr.title || "see the open pull request");
+    a.textContent = "Title changes waiting for review: #" + (pr.number != null ? pr.number : "") + (pr.title ? " (" + pr.title + ")" : "");
   }
 
   async function loadPendingTitlesPr() {
@@ -670,24 +800,39 @@
     } catch (e) { /* not fatal; the editor still works */ }
   }
 
-  $("openTitles").addEventListener("click", async function () {
-    var body = $("titlesBody");
-    body.textContent = "Loading…";
-    $("titlesMsg").textContent = "";
-    showPendingTitlesPr(null);
-    var dialog = $("titlesDialog");
-    if (dialog.showModal) dialog.showModal(); else dialog.setAttribute("open", "");
-    try {
-      var doc = await apiGet("/titles");
-      renderTitlesGroups(doc);
-      $("titlesJson").value = JSON.stringify(doc, null, 2);
-      loadPendingTitlesPr();
-    } catch (e) {
-      body.textContent = "Couldn't load titles. " + e.message;
-    }
+  function addDraftTitle() {
+    if (!state.titlesDraft) return;
+    var msgEl = $("titlesAddMsg");
+    msgEl.textContent = "";
+    var title = $("titlesNewTitle").value.trim();
+    var groupSelect = $("titlesNewGroup").value;
+    var isNewGroup = groupSelect === NEW_GROUP_VALUE;
+    var group = isNewGroup ? $("titlesNewGroupName").value.trim() : groupSelect;
+
+    if (!title) { msgEl.textContent = "Enter a title."; return; }
+    if (title.length > 120) { msgEl.textContent = "Titles must be 120 characters or fewer."; return; }
+    if (!group) { msgEl.textContent = "Enter a group name."; return; }
+    var dup = findDuplicateTitleOwner(state.titlesDraft, title);
+    if (dup) { msgEl.textContent = "'" + title + "' is already in the list, under '" + dup + "'."; return; }
+    var badWord = findExcludedWordIn(state.titlesDraft, title);
+    if (badWord) { msgEl.textContent = "'" + title + "' contains the excluded word '" + badWord + "'."; return; }
+
+    state.titlesDraft.titles.push({ title: title, group: group, aliases: [], active: true });
+    renderTitlesPanel();
+    $("titlesNewTitle").value = "";
+    if (isNewGroup) { $("titlesNewGroup").value = group; $("titlesNewGroupName").value = ""; $("titlesNewGroupName").hidden = true; }
+    $("titlesNewTitle").focus();
+  }
+
+  $("titlesAddBtn").addEventListener("click", addDraftTitle);
+  $("titlesNewTitle").addEventListener("keydown", function (e) { if (e.key === "Enter") { e.preventDefault(); addDraftTitle(); } });
+  $("titlesNewGroupName").addEventListener("keydown", function (e) { if (e.key === "Enter") { e.preventDefault(); addDraftTitle(); } });
+  $("titlesNewGroup").addEventListener("change", function () {
+    $("titlesNewGroupName").hidden = $("titlesNewGroup").value !== NEW_GROUP_VALUE;
+    if (!$("titlesNewGroupName").hidden) $("titlesNewGroupName").focus();
   });
-  $("titlesClose").addEventListener("click", function () { closeDialog($("titlesDialog")); });
-  $("titlesSave").addEventListener("click", async function () {
+
+  $("titlesJsonApply").addEventListener("click", function () {
     var doc;
     try {
       doc = JSON.parse($("titlesJson").value);
@@ -695,17 +840,62 @@
       $("titlesMsg").textContent = "That's not valid JSON. " + e.message;
       return;
     }
+    state.titlesDraft = doc;
+    state.titlesConfirmDelete = null;
+    renderTitlesPanel();
+    $("titlesMsg").textContent = "Applied. Review below, then Save to open a pull request.";
+  });
+
+  $("openTitles").addEventListener("click", async function () {
+    state.titlesDraft = null;
+    state.titlesOriginal = null;
+    state.titlesConfirmDelete = null;
+    $("titlesBody").textContent = "Loading…";
+    $("titlesAddMsg").textContent = "";
+    $("titlesMsg").textContent = "";
+    $("titlesUnsaved").textContent = "";
+    $("titlesJsonDetails").removeAttribute("open");
+    showPendingTitlesPr(null);
+    var dialog = $("titlesDialog");
+    if (dialog.showModal) dialog.showModal(); else dialog.setAttribute("open", "");
+    try {
+      var doc = await apiGet("/titles");
+      state.titlesOriginal = cloneDoc(doc);
+      state.titlesDraft = cloneDoc(doc);
+      renderTitlesPanel();
+      loadPendingTitlesPr();
+    } catch (e) {
+      $("titlesBody").textContent = "Couldn't load titles. " + e.message;
+    }
+  });
+
+  function closeTitlesDialogIfConfirmed() {
+    if (hasUnsavedTitlesChanges() && !window.confirm("Discard " + countTitlesChanges() + " unsaved title change(s)?")) return false;
+    closeDialog($("titlesDialog"));
+    return true;
+  }
+  $("titlesClose").addEventListener("click", function () { closeTitlesDialogIfConfirmed(); });
+  $("titlesDialog").addEventListener("cancel", function (e) {
+    if (hasUnsavedTitlesChanges() && !window.confirm("Discard " + countTitlesChanges() + " unsaved title change(s)?")) e.preventDefault();
+  });
+  window.addEventListener("beforeunload", function (e) {
+    if ($("titlesDialog").open && hasUnsavedTitlesChanges()) { e.preventDefault(); e.returnValue = ""; }
+  });
+
+  $("titlesSave").addEventListener("click", async function () {
+    if (!state.titlesDraft) return;
     $("titlesSave").disabled = true;
     $("titlesMsg").textContent = "Saving…";
     try {
-      var result = await apiPut("/titles", { doc: doc });
-      renderTitlesGroups(doc);
+      var result = await apiPut("/titles", { doc: state.titlesDraft });
+      state.titlesOriginal = cloneDoc(state.titlesDraft);
       showPendingTitlesPr(result.pending);
+      renderTitlesPanel();
       $("titlesMsg").textContent = "Saved. Review and merge the pull request to apply it.";
     } catch (e) {
       $("titlesMsg").textContent = "Couldn't save. " + e.message;
+      $("titlesSave").disabled = false;
     }
-    $("titlesSave").disabled = false;
   });
 
   function closeDialog(d) { if (d.close) d.close(); else d.removeAttribute("open"); }

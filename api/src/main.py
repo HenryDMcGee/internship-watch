@@ -29,7 +29,7 @@ from access import ACCESS_HEADER, AccessTokenError, fetch_jwks, verify_access_to
 from budgets import MODEL_FIELDS, NUMERIC_FIELDS, SHARE_FIELDS, linear_forecast, validate_budget_settings
 from db import Database
 from github_client import GitHubApiError, GitHubClient
-from titles import load_titles_doc, open_or_update_titles_pr, validate_titles_doc, TITLES_BRANCH
+from titles import load_titles_doc, open_or_update_titles_pr, validate_titles_doc, BASE_BRANCH, TITLES_BRANCH
 
 REPO = "HenryDMcGee/internship-watch"
 DAILY_CHECK_LIMIT = 5
@@ -445,7 +445,9 @@ async def get_titles(request: Request):
     if github is None:
         raise HTTPException(status_code=503, detail="GitHub isn't configured for this environment")
     try:
-        return await load_titles_doc(github)
+        pending = await github.find_open_pr(TITLES_BRANCH)
+        ref = TITLES_BRANCH if pending else BASE_BRANCH
+        return await load_titles_doc(github, ref)
     except GitHubApiError as exc:
         raise HTTPException(status_code=502, detail=f"Could not read titles from GitHub: {exc}") from exc
 

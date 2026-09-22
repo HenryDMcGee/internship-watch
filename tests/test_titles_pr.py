@@ -5,7 +5,7 @@ import json
 import pytest
 
 from src.github_client import GitHubClient
-from src.titles import BASE_BRANCH, TITLES_BRANCH, TITLES_PATH, open_or_update_titles_pr, validate_titles_doc
+from src.titles import BASE_BRANCH, TITLES_BRANCH, TITLES_PATH, load_titles_doc, open_or_update_titles_pr, validate_titles_doc
 
 VALID_DOC = {
     "version": 1,
@@ -42,6 +42,55 @@ def test_validate_titles_doc_rejects_exclude_word_that_blocks_a_title():
 
 def test_validate_titles_doc_rejects_missing_fields():
     assert validate_titles_doc({"version": 1}) != []
+
+
+def test_validate_titles_doc_rejects_whitespace_only_title():
+    doc = dict(VALID_DOC, titles=[dict(VALID_DOC["titles"][0], title="   ")])
+    assert any("empty" in p for p in validate_titles_doc(doc))
+
+
+def test_validate_titles_doc_rejects_overlong_title():
+    doc = dict(VALID_DOC, titles=[dict(VALID_DOC["titles"][0], title="x" * 121)])
+    assert validate_titles_doc(doc) != []
+
+
+def test_validate_titles_doc_rejects_duplicate_with_different_case():
+    doc = dict(VALID_DOC, titles=VALID_DOC["titles"] + [
+        {"title": VALID_DOC["titles"][0]["title"].upper(), "group": "Core PM", "aliases": [], "active": True},
+    ])
+    assert any("duplicate" in p for p in validate_titles_doc(doc))
+
+
+def test_validate_titles_doc_rejects_duplicate_via_alias():
+    doc = dict(VALID_DOC, titles=VALID_DOC["titles"] + [
+        {"title": "Another Intern Role", "group": "Core PM", "aliases": [VALID_DOC["titles"][0]["title"].lower()], "active": True},
+    ])
+    assert any("duplicate" in p for p in validate_titles_doc(doc))
+
+
+class FakeGitHub:
+    def __init__(self, files):
+        self.files = files
+        self.calls = []
+
+    async def get_file(self, path, ref):
+        self.calls.append((path, ref))
+        return self.files.get(ref)
+
+
+def test_load_titles_doc_defaults_to_base_branch():
+    github = FakeGitHub({BASE_BRANCH: (json.dumps(VALID_DOC), "sha1")})
+    doc = run(load_titles_doc(github))
+    assert doc == VALID_DOC
+    assert github.calls == [(TITLES_PATH, BASE_BRANCH)]
+
+
+def test_load_titles_doc_reads_a_given_ref():
+    other_doc = dict(VALID_DOC, exclude_words=["marketing", "sales"])
+    github = FakeGitHub({TITLES_BRANCH: (json.dumps(other_doc), "sha2")})
+    doc = run(load_titles_doc(github, TITLES_BRANCH))
+    assert doc == other_doc
+    assert github.calls == [(TITLES_PATH, TITLES_BRANCH)]
 
 
 class ScriptedTransport:

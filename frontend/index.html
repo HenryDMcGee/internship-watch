@@ -115,11 +115,28 @@
     <p>Editing opens or updates a pull request that changes only <code>config/titles.json</code>. Nothing changes until you review and merge it.</p>
     <p id="titlesPending" class="pending-link" hidden><a id="titlesPendingLink" target="_blank" rel="noopener noreferrer">Pending change: see the open pull request</a></p>
     <div id="titlesBody"></div>
-    <h3>Edit as JSON</h3>
-    <textarea id="titlesJson" spellcheck="false" style="min-height:28vh"></textarea>
+
+    <h3>Add a title</h3>
+    <div class="addform">
+      <input id="titlesNewTitle" type="text" placeholder="New title" aria-label="New title" maxlength="120">
+      <select id="titlesNewGroup" aria-label="Group for the new title"></select>
+      <button class="btn primary" id="titlesAddBtn" type="button">Add</button>
+    </div>
+    <input id="titlesNewGroupName" type="text" placeholder="New group name" aria-label="New group name" hidden>
+    <div class="msg" id="titlesAddMsg"></div>
+
+    <details id="titlesJsonDetails">
+      <summary>Edit as JSON</summary>
+      <textarea id="titlesJson" spellcheck="false" style="min-height:28vh" aria-label="Titles as JSON"></textarea>
+      <div class="row">
+        <button class="btn" id="titlesJsonApply" type="button">Apply JSON</button>
+      </div>
+    </details>
+
     <div class="row">
-      <button class="btn primary" id="titlesSave" type="button">Save (opens a pull request)</button>
+      <span class="msg" id="titlesUnsaved"></span>
       <span class="spacer"></span>
+      <button class="btn primary" id="titlesSave" type="button">Save (opens a pull request)</button>
       <button class="btn" id="titlesClose" type="button">Close</button>
     </div>
     <div class="msg" id="titlesMsg"></div>

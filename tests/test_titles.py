@@ -39,3 +39,9 @@ def test_unknown_field_is_rejected():
     doc, schema = load()
     doc["titles"][0]["priority"] = 1
     assert any(p.startswith("schema") for p in find_problems(doc, schema))
+
+
+def test_whitespace_only_title_is_caught():
+    doc, schema = load()
+    doc["titles"][0]["title"] = "  "
+    assert any("empty" in p for p in find_problems(doc, schema))
