@@ -77,15 +77,16 @@ From the repository root:
 cd api
 npx wrangler d1 migrations apply internship-watch-db --local
 cd ..
-python scripts/bundle_titles.py
 python scripts/seed.py
 cd api
 uv run pywrangler dev
 ```
 
-This creates the local D1 tables, copies `config/titles.json` for the API to serve, loads the seed data (9 postings with 3 closed and hidden, 30 sources, 2 search log entries, the ranked companies, and the locations panel), and starts the dashboard and API. Open the address `pywrangler` prints.
+This creates the local D1 tables, loads the seed data (9 postings with 3 closed and hidden, 30 sources, 2 search log entries, the ranked companies, and the locations panel), and starts the dashboard and API. Open the address `pywrangler` prints.
 
 Cloudflare Access isn't in front of a local server, so there's no login token to check there. The API skips the check when `ACCESS_TEAM_DOMAIN` or `ACCESS_AUD` is empty; leave `api/.dev.vars` (gitignored) unset, or set both to empty strings there, for local development. `api/wrangler.toml`'s committed `[vars]` values are for the real deployment and always take effect once deployed.
+
+The Titles panel, Check now, and title edits all call GitHub's API through the `GITHUB_TOKEN` Worker secret (see `docs/deploy.md`'s step 3). Locally, put the same token in `api/.dev.vars` as `GITHUB_TOKEN=...` to exercise those; without it, they return a clear error instead of working.
 
 To re-seed from scratch, delete `api/.wrangler/` (the local D1 state) and repeat the steps above.
 

@@ -48,5 +48,9 @@ A private tool that finds Summer 2027 MBA product-type internships every morning
 * If the tests can't run, say so plainly at the top of the description rather than at the end, and list which checks you could not make.
 * When a test fails, fix the code the test is checking. Only change a test when the test itself is wrong, and say why in the description.
 
+## Things that have broken before
+
+* The deployed Worker only contains `api/src` (see `api/wrangler.toml`'s `main = "src/main.py"`). Never read repo files by path from the API (e.g. `config/titles.json`) — they aren't there in production, only on disk locally and in CI. Read them through `github_client` instead.
+
 
 
