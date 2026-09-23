@@ -168,22 +168,46 @@ def test_get_titles_requires_github_configured(client):
 def test_get_titles_reads_from_github(client):
     tc, _ = client
     content = base64.b64encode((json.dumps(VALID_DOC) + "\n").encode("utf-8")).decode("ascii")
-    transport = ScriptedTransport([(200, {"content": content, "encoding": "base64", "sha": "abc123"})])
+    transport = ScriptedTransport([
+        (200, []),  # find_open_pr -> none open
+        (200, {"content": content, "encoding": "base64", "sha": "abc123"}),
+    ])
     app.state.github = GitHubClient(repo="HenryDMcGee/internship-watch", token="tok", transport=transport)
 
     resp = tc.get("/api/titles")
     assert resp.status_code == 200
     assert resp.json() == VALID_DOC
 
-    method, url, _ = transport.calls[0]
+    method, url, _ = transport.calls[1]
     assert method == "GET"
     assert url.endswith("/repos/HenryDMcGee/internship-watch/contents/config/titles.json?ref=master")
+
+
+def test_get_titles_reads_from_the_pending_pull_request_branch_when_one_is_open(client):
+    tc, _ = client
+    content = base64.b64encode((json.dumps(VALID_DOC) + "\n").encode("utf-8")).decode("ascii")
+    transport = ScriptedTransport([
+        (200, [{"number": 7, "html_url": "https://github.com/x/y/pull/7"}]),  # find_open_pr -> open
+        (200, {"content": content, "encoding": "base64", "sha": "abc123"}),
+    ])
+    app.state.github = GitHubClient(repo="HenryDMcGee/internship-watch", token="tok", transport=transport)
+
+    resp = tc.get("/api/titles")
+    assert resp.status_code == 200
+    assert resp.json() == VALID_DOC
+
+    method, url, _ = transport.calls[1]
+    assert method == "GET"
+    assert url.endswith("/repos/HenryDMcGee/internship-watch/contents/config/titles.json?ref=titles-update-from-dashboard")
 
 
 def test_get_titles_works_with_no_config_folder_on_disk(client, tmp_path):
     tc, _ = client
     content = base64.b64encode((json.dumps(VALID_DOC) + "\n").encode("utf-8")).decode("ascii")
-    transport = ScriptedTransport([(200, {"content": content, "encoding": "base64", "sha": "abc123"})])
+    transport = ScriptedTransport([
+        (200, []),  # find_open_pr -> none open
+        (200, {"content": content, "encoding": "base64", "sha": "abc123"}),
+    ])
     app.state.github = GitHubClient(repo="HenryDMcGee/internship-watch", token="tok", transport=transport)
 
     assert CONFIG_DIR.exists()
@@ -245,3 +269,74 @@ def test_update_titles_opens_pull_request(client):
     resp = tc.put("/api/titles", json={"doc": VALID_DOC})
     assert resp.status_code == 200
     assert resp.json()["pending"]["number"] == 4
+
+
+def test_update_titles_reuses_an_already_open_pull_request(client):
+    tc, db = client
+    transport = ScriptedTransport([
+        (200, {"object": {"sha": "existing"}}),  # ensure_branch: branch already exists
+        (404, {}),  # put_file: get_file -> missing
+        (201, {}),  # put_file: PUT
+        (200, [{"number": 4, "html_url": "https://github.com/x/y/pull/4"}]),  # find_open_pr -> exists
+    ])
+    app.state.github = GitHubClient(repo="HenryDMcGee/internship-watch", token="tok", transport=transport)
+
+    resp = tc.put("/api/titles", json={"doc": VALID_DOC})
+    assert resp.status_code == 200
+    assert resp.json()["pending"]["number"] == 4
+    # No create_pr call was needed: exactly 4 calls were made.
+    assert len(transport.calls) == 4
+
+
+def test_update_titles_rejects_whitespace_only_title(client):
+    tc, db = client
+    transport = ScriptedTransport([])
+    app.state.github = GitHubClient(repo="HenryDMcGee/internship-watch", token="tok", transport=transport)
+    bad_doc = dict(VALID_DOC, titles=[dict(VALID_DOC["titles"][0], title="   ")])
+    resp = tc.put("/api/titles", json={"doc": bad_doc})
+    assert resp.status_code == 422
+    assert any("empty" in p for p in resp.json()["detail"]["problems"])
+    assert transport.calls == []
+
+
+def test_update_titles_rejects_overlong_title(client):
+    tc, db = client
+    transport = ScriptedTransport([])
+    app.state.github = GitHubClient(repo="HenryDMcGee/internship-watch", token="tok", transport=transport)
+    bad_doc = dict(VALID_DOC, titles=[dict(VALID_DOC["titles"][0], title="x" * 121)])
+    resp = tc.put("/api/titles", json={"doc": bad_doc})
+    assert resp.status_code == 422
+    assert transport.calls == []
+
+
+def test_update_titles_rejects_duplicate_with_different_case_and_via_alias(client):
+    tc, db = client
+    transport = ScriptedTransport([])
+    app.state.github = GitHubClient(repo="HenryDMcGee/internship-watch", token="tok", transport=transport)
+    dup_doc = dict(VALID_DOC, titles=VALID_DOC["titles"] + [
+        {"title": VALID_DOC["titles"][0]["title"].upper(), "group": "Core PM", "aliases": [], "active": True},
+    ])
+    resp = tc.put("/api/titles", json={"doc": dup_doc})
+    assert resp.status_code == 422
+    assert any("duplicate" in p for p in resp.json()["detail"]["problems"])
+
+    alias_doc = dict(VALID_DOC, titles=VALID_DOC["titles"] + [
+        {"title": "Another Intern Role", "group": "Core PM", "aliases": [VALID_DOC["titles"][0]["title"].lower()], "active": True},
+    ])
+    resp = tc.put("/api/titles", json={"doc": alias_doc})
+    assert resp.status_code == 422
+    assert any("duplicate" in p for p in resp.json()["detail"]["problems"])
+    assert transport.calls == []
+
+
+def test_update_titles_rejects_excluded_word_in_a_new_title(client):
+    tc, db = client
+    transport = ScriptedTransport([])
+    app.state.github = GitHubClient(repo="HenryDMcGee/internship-watch", token="tok", transport=transport)
+    bad_doc = dict(VALID_DOC, titles=VALID_DOC["titles"] + [
+        {"title": "Marketing Intern", "group": "Core PM", "aliases": [], "active": True},
+    ])
+    resp = tc.put("/api/titles", json={"doc": bad_doc})
+    assert resp.status_code == 422
+    assert any("would block" in p for p in resp.json()["detail"]["problems"])
+    assert transport.calls == []

@@ -30,6 +30,8 @@ def find_problems(doc: dict, schema: dict) -> list[str]:
 
     seen: dict[str, str] = {}
     for entry in doc["titles"]:
+        if not entry["title"].strip():
+            problems.append("title must not be empty or whitespace-only")
         for name in [entry["title"], *entry["aliases"]]:
             key = " ".join(name.lower().split())
             if key in seen:

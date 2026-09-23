@@ -69,6 +69,9 @@ def validate_titles_doc(doc: dict) -> list[str]:
         if len(set(aliases)) != len(aliases):
             problems.append(f"aliases for '{title}' has duplicates")
 
+        if isinstance(title, str) and not title.strip():
+            problems.append("title must not be empty or whitespace-only")
+
         if not isinstance(entry.get("active"), bool):
             problems.append(f"active for '{title}' must be true or false")
 
@@ -88,16 +91,17 @@ def validate_titles_doc(doc: dict) -> list[str]:
     return problems
 
 
-async def load_titles_doc(github: GitHubClient) -> dict:
-    """Read `config/titles.json` from `BASE_BRANCH` on GitHub.
+async def load_titles_doc(github: GitHubClient, ref: str = BASE_BRANCH) -> dict:
+    """Read `config/titles.json` from `ref` on GitHub (`BASE_BRANCH` by default).
 
     The deployed Worker only bundles `api/src`, so it can't read repository
-    files by path (see CLAUDE.md's "Things that have broken before"). This
-    also means the panel always shows what's actually on `BASE_BRANCH`.
+    files by path (see CLAUDE.md's "Things that have broken before"). When a
+    title pull request is already open, callers pass `TITLES_BRANCH` so the
+    panel loads that branch's version and new edits add to it.
     """
-    result = await github.get_file(TITLES_PATH, BASE_BRANCH)
+    result = await github.get_file(TITLES_PATH, ref)
     if result is None:
-        raise GitHubApiError(f"{TITLES_PATH} was not found on {BASE_BRANCH}")
+        raise GitHubApiError(f"{TITLES_PATH} was not found on {ref}")
     content, _sha = result
     return json.loads(content)
 
