@@ -70,7 +70,7 @@
       "title": "Group Product Manager Intern",
       "group": "Core PM",
       "aliases": [],
-      "active": false
+      "active": true
     },
     {
       "title": "Platform Product Manager Intern",
@@ -112,7 +112,7 @@
       "title": "Product Lead Intern",
       "group": "Company-specific names",
       "aliases": [],
-      "active": false
+      "active": true
     },
     {
       "title": "Chase Associate Program Summer Associate",
@@ -292,7 +292,7 @@
       "title": "Category Manager Intern",
       "group": "Industry-specific",
       "aliases": [],
-      "active": false
+      "active": true
     },
     {
       "title": "Merchandising Intern",
@@ -304,19 +304,19 @@
       "title": "Portfolio Manager Intern",
       "group": "Industry-specific",
       "aliases": [],
-      "active": false
+      "active": true
     },
     {
       "title": "Offering Manager Intern",
       "group": "Industry-specific",
       "aliases": [],
-      "active": false
+      "active": true
     },
     {
       "title": "Platform Manager Intern",
       "group": "Industry-specific",
       "aliases": [],
-      "active": false
+      "active": true
     },
     {
       "title": "Digital Strategy Intern",
