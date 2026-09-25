@@ -13,6 +13,8 @@ API_SRC = ROOT / "api" / "src"
 if str(API_SRC) not in sys.path:
     sys.path.insert(0, str(API_SRC))
 
+from sql_helpers import in_json  # noqa: E402
+
 
 def load_titles(path: Path = TITLES_PATH) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
@@ -53,8 +55,8 @@ async def load_search_plan(db, plan_date: str) -> dict | None:
 
 
 async def load_companies(db, statuses: tuple[str, ...] = ("ranked", "pinned")) -> list[dict]:
-    placeholders = ", ".join("?" for _ in statuses)
-    rows = await db.all(f"SELECT * FROM companies WHERE status IN ({placeholders})", *statuses)
+    clause, param = in_json("status", statuses)
+    rows = await db.all(f"SELECT * FROM companies WHERE {clause}", param)
     out = []
     for row in rows:
         row = dict(row)
@@ -66,8 +68,8 @@ async def load_companies(db, statuses: tuple[str, ...] = ("ranked", "pinned")) -
 async def load_companies_by_ids(db, company_ids: list[int]) -> list[dict]:
     if not company_ids:
         return []
-    placeholders = ", ".join("?" for _ in company_ids)
-    rows = await db.all(f"SELECT * FROM companies WHERE id IN ({placeholders})", *company_ids)
+    clause, param = in_json("id", company_ids)
+    rows = await db.all(f"SELECT * FROM companies WHERE {clause}", param)
     out = []
     for row in rows:
         row = dict(row)

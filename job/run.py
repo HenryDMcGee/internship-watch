@@ -49,6 +49,7 @@ from job.pruning import decide_prune
 from job.ranking import is_quarterly_refresh_day, refresh_ranking
 from job.verify.browser import BrowserBudget
 from job.verify.pipeline import verify_posting
+from sql_helpers import in_json
 
 CENTRAL = ZoneInfo("America/Chicago") if ZoneInfo else None
 
@@ -145,9 +146,9 @@ async def _verify_and_prune(
     company_ids = [c["id"] for c in companies]
     if not company_ids:
         return
-    placeholders = ", ".join("?" for _ in company_ids)
+    clause, param = in_json("company_id", company_ids)
     postings = await db.all(
-        f"SELECT * FROM postings WHERE archived_at IS NULL AND company_id IN ({placeholders})", *company_ids
+        f"SELECT * FROM postings WHERE archived_at IS NULL AND {clause}", param
     )
 
     for posting in postings:
@@ -290,6 +291,7 @@ async def _run_body(db, run_id: int, started_at: str, kind: str, company_ids: li
     elif kind == "daily":
         agent_outcome = {
             "discovery_count": 0, "discovery_new_count": 0, "classification_count": 0, "scout_count": 0,
+            "scout_skipped_count": 0,
             "steps_skipped": [{"step": "all", "reason": "Claude isn't configured (no "
                                                           "CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY)"}],
             "steps_succeeded": [], "claude_limit_hit": False, "errors": [], "title_pr": None,

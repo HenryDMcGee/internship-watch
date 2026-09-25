@@ -12,6 +12,7 @@ all further Claude calls for the rest of the run, but not the run itself.
 from __future__ import annotations
 
 import json
+from datetime import date
 
 from job.agent import discovery, improvement, scout
 from job.agent import classification as classification_mod
@@ -32,6 +33,7 @@ from job.locations import location_match as compute_location_match
 # logic lives in `api/src/companies.py` and is reused here rather than
 # reimplemented.
 from companies import detect_feed, normalize_company_name  # noqa: E402
+from sql_helpers import in_json  # noqa: E402
 
 
 async def run_agent_steps(
@@ -42,6 +44,7 @@ async def run_agent_steps(
 ) -> dict:
     outcome = {
         "discovery_count": 0, "discovery_new_count": 0, "classification_count": 0, "scout_count": 0,
+        "scout_skipped_count": 0,
         "steps_skipped": [], "steps_succeeded": [], "claude_limit_hit": False, "errors": [], "title_pr": None,
     }
 
@@ -131,7 +134,13 @@ async def run_agent_steps(
     outcome["discovery_new_count"] = await _count_visible_postings(db, discovery_ids)
 
     search_limit_per_run = int(budget_settings.get("search_limit_per_run") or 35)
-    scout_batch = scout.order_companies_for_scout(no_feed_companies, limit=search_limit_per_run)
+    scout_candidates, outcome["scout_skipped_count"] = scout.split_companies_by_coverage(
+        no_feed_companies, today=date.fromisoformat(today)
+    )
+    if outcome["scout_skipped_count"]:
+        print(f"scout: skipped {outcome['scout_skipped_count']} already-covered compan"
+              f"{'y' if outcome['scout_skipped_count'] == 1 else 'ies'}")
+    scout_batch = scout.order_companies_for_scout(scout_candidates, limit=search_limit_per_run)
 
     async def do_scout():
         found, result = scout.run_scout(
@@ -250,11 +259,11 @@ async def _count_visible_postings(db, ids: list[int]) -> int:
     """
     if not ids:
         return 0
-    placeholders = ", ".join("?" for _ in ids)
+    clause, param = in_json("id", ids)
     row = await db.first(
         f"SELECT COUNT(*) AS n FROM postings WHERE archived_at IS NULL AND matched_title IS NOT NULL "
-        f"AND id IN ({placeholders})",
-        *ids,
+        f"AND {clause}",
+        param,
     )
     return (row or {}).get("n") or 0
 
@@ -297,6 +306,7 @@ async def _store_scout_sources(db, found: list[dict], *, now_iso: str, companies
     }
     stored = 0
     companies_updated = 0
+    companies_covered: set[int] = set()
     for f in found:
         existing = await db.first("SELECT * FROM sources WHERE url = ?", f["url"])
         if existing:
@@ -313,6 +323,15 @@ async def _store_scout_sources(db, found: list[dict], *, now_iso: str, companies
             stored += 1
         if await _apply_scout_company_feed(db, f, companies_by_name):
             companies_updated += 1
+        # Recorded even when `_apply_scout_company_feed` didn't set a
+        # `feed_type` (not every source Claude finds is one `detect_feed`
+        # recognizes) -- this is what `scout.split_companies_by_coverage`
+        # reads next run to stop re-spending search budget on a company
+        # that's already covered (issue #43).
+        company = companies_by_name.get(normalize_company_name(f.get("company_name") or ""))
+        if company and company.get("id") is not None and company["id"] not in companies_covered:
+            await db.run("UPDATE companies SET last_source_found_at = ? WHERE id = ?", now_iso, company["id"])
+            companies_covered.add(company["id"])
     print(
         f"scout: wrote {stored} new source(s) ({len(found) - stored} already known), "
         f"set feed info on {companies_updated} compan{'y' if companies_updated == 1 else 'ies'}"
@@ -356,7 +375,6 @@ async def _mark_companies_scouted(db, companies: list[dict], *, now_iso: str) ->
 async def _store_search_plan(db, plan: dict | None, *, today: str) -> None:
     if not plan:
         return
-    from datetime import date
 
     plan_date = improvement.tomorrow_iso(date.fromisoformat(today))
     existing = await db.first("SELECT plan_date FROM search_plans WHERE plan_date = ?", plan_date)
