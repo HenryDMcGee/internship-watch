@@ -26,13 +26,21 @@ except ImportError:  # pragma: no cover - zoneinfo is stdlib on 3.9+
 
 import companies as companies_logic
 from access import ACCESS_HEADER, AccessTokenError, fetch_jwks, verify_access_token
-from budgets import MODEL_FIELDS, NUMERIC_FIELDS, SHARE_FIELDS, linear_forecast, validate_budget_settings
+from budgets import (
+    MODEL_FIELDS,
+    NUMERIC_FIELDS,
+    SHARE_FIELDS,
+    daily_fraction_used,
+    linear_forecast,
+    validate_budget_settings,
+)
 from db import Database
 from github_client import GitHubApiError, GitHubClient
 from titles import load_titles_doc, open_or_update_titles_pr, validate_titles_doc, BASE_BRANCH, TITLES_BRANCH
 
 REPO = "HenryDMcGee/internship-watch"
 DAILY_CHECK_LIMIT = 5
+SEARCH_BUDGET_WARN_FRACTION = 0.80
 
 CENTRAL = ZoneInfo("America/Chicago") if ZoneInfo else None
 
@@ -402,6 +410,103 @@ async def check_companies_status(request_id: int, db: Database = Depends(get_db)
     if not row:
         raise HTTPException(status_code=404, detail="Check request not found")
     return _check_request_out(row)
+
+
+# ---------------------------------------------------------------------------
+# Search now: runs the same daily search as the 8am schedule, across every
+# company, started through GitHub's API like Check now.
+# ---------------------------------------------------------------------------
+
+class SearchStartRequest(BaseModel):
+    confirm_budget: bool = False
+
+
+def _search_request_out(row: dict) -> dict:
+    row = dict(row)
+    row["result"] = json.loads(row["result"]) if row.get("result") else None
+    return row
+
+
+async def _search_busy_reason(db: Database) -> str | None:
+    """None if it's safe to start a new search, else the message to show.
+
+    Covers three overlapping windows: a run already recorded in `runs`
+    (any kind -- the daily job and Check now share one Actions concurrency
+    group, so only one ever executes at a time), and a Check now or Search
+    now request that's been dispatched but hasn't started running yet (no
+    `runs` row exists for it until the Actions runner picks it up).
+    """
+    running_run = await db.first("SELECT id FROM runs WHERE finished_at IS NULL LIMIT 1")
+    if running_run:
+        return "A search is already running"
+    pending_check = await db.first("SELECT id FROM check_requests WHERE status IN ('pending', 'running') LIMIT 1")
+    if pending_check:
+        return "A search is already running"
+    pending_search = await db.first("SELECT id FROM search_requests WHERE status IN ('pending', 'running') LIMIT 1")
+    if pending_search:
+        return "A search is already running"
+    return None
+
+
+@router.get("/search/status")
+async def search_status(db: Database = Depends(get_db)):
+    reason = await _search_busy_reason(db)
+    return {"busy": reason is not None, "reason": reason}
+
+
+@router.post("/search/runs", status_code=201)
+async def start_search(body: SearchStartRequest, request: Request, db: Database = Depends(get_db)):
+    reason = await _search_busy_reason(db)
+    if reason:
+        raise HTTPException(status_code=409, detail=reason)
+
+    settings = await db.first("SELECT * FROM budget_settings WHERE id = 1") or {}
+    today = central_today()
+    usage_row = await db.first(
+        "SELECT SUM(input_tokens + output_tokens + cache_read_tokens + cache_write_tokens) AS tokens, "
+        "SUM(web_searches) AS searches, SUM(est_cost_usd) AS usd FROM usage WHERE substr(at, 1, 10) = ?",
+        today,
+    )
+    fraction = daily_fraction_used(
+        settings,
+        tokens=(usage_row or {}).get("tokens") or 0,
+        searches=(usage_row or {}).get("searches") or 0,
+        usd=(usage_row or {}).get("usd") or 0,
+    )
+    if fraction >= SEARCH_BUDGET_WARN_FRACTION and not body.confirm_budget:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "budget_warning",
+                "message": f"Today's budget is {fraction:.0%} used. A full search may be cut short. Search anyway?",
+            },
+        )
+
+    new_id = await db.run(
+        "INSERT INTO search_requests (requested_at, status) VALUES (?, 'pending')", now_iso(),
+    )
+
+    github: GitHubClient | None = request.app.state.github
+    if github is not None:
+        try:
+            await github.dispatch_workflow("daily-search.yml", "master", {})
+        except GitHubApiError as exc:
+            await db.run(
+                "UPDATE search_requests SET status = 'failed', result = ? WHERE id = ?",
+                json.dumps({"error": str(exc)}), new_id,
+            )
+            raise HTTPException(status_code=502, detail=f"Could not start the search: {exc}") from exc
+
+    created = await db.first("SELECT * FROM search_requests WHERE id = ?", new_id)
+    return _search_request_out(created)
+
+
+@router.get("/search/runs/{request_id}")
+async def search_run_status(request_id: int, db: Database = Depends(get_db)):
+    row = await db.first("SELECT * FROM search_requests WHERE id = ?", request_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Search request not found")
+    return _search_request_out(row)
 
 
 # ---------------------------------------------------------------------------

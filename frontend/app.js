@@ -299,6 +299,121 @@
   }
 
   // -------------------------------------------------------------------
+  // Search now
+  // -------------------------------------------------------------------
+
+  function setSearchStatus(text, isError) {
+    var e = $("searchStatus");
+    e.textContent = text || "";
+    e.classList.toggle("err", !!isError);
+  }
+
+  function setSearchButtonBusy(busy) {
+    $("searchNowBtn").disabled = busy;
+    $("searchNowBtn").setAttribute("aria-busy", busy ? "true" : "false");
+    $("searchNowSpinner").hidden = !busy;
+    $("searchNowLabel").textContent = busy ? "Searching…" : "Search now";
+  }
+
+  function formatSearchResult(result) {
+    if (!result) return "Done.";
+    var issues = [];
+    if (result.agent_outcome) {
+      (result.agent_outcome.steps_skipped || []).forEach(function (s) {
+        issues.push(s.step + " skipped (" + s.reason + ")");
+      });
+      (result.agent_outcome.errors || []).forEach(function (e) { issues.push(e); });
+    }
+    if (issues.length) return "Finished, but some steps were skipped: " + issues.join("; ") + ".";
+    var newCount = result.new_count || 0;
+    if (!newCount) return "Done: nothing new.";
+    var sourcesFound = result.sources_found || 0;
+    return "Done: " + newCount + (newCount === 1 ? " new posting" : " new postings") + ", " +
+      sourcesFound + (sourcesFound === 1 ? " source found" : " sources found") + ".";
+  }
+
+  function pollSearchRun(id) {
+    apiGet("/search/runs/" + id).then(function (row) {
+      if (row.status === "completed") {
+        setSearchButtonBusy(false);
+        setSearchStatus(formatSearchResult(row.result));
+        loadPostings();
+        return;
+      }
+      if (row.status === "failed") {
+        setSearchButtonBusy(false);
+        var err = row.result && row.result.error ? row.result.error : "unknown error";
+        setSearchStatus("Run failed: " + err, true);
+        return;
+      }
+      setTimeout(function () { pollSearchRun(id); }, 5000);
+    }).catch(function () {
+      setTimeout(function () { pollSearchRun(id); }, 5000);
+    });
+  }
+
+  async function postSearchStart(confirmBudget) {
+    var resp = await fetch(API + "/search/runs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ confirm_budget: !!confirmBudget }),
+    });
+    var body = null;
+    try { body = await resp.json(); } catch (e) { /* no JSON body */ }
+    return { ok: resp.ok, status: resp.status, body: body };
+  }
+
+  function searchErrorMessage(body, fallbackStatus) {
+    var detail = body && body.detail;
+    if (typeof detail === "string") return detail;
+    if (detail && detail.message) return detail.message;
+    return "Couldn't start the search (" + fallbackStatus + ").";
+  }
+
+  async function startSearch() {
+    setSearchButtonBusy(true);
+    setSearchStatus("Starting…");
+    try {
+      var res = await postSearchStart(false);
+      if (!res.ok && res.status === 409 && res.body && res.body.detail && res.body.detail.code === "budget_warning") {
+        setSearchButtonBusy(false);
+        setSearchStatus("");
+        if (!window.confirm(res.body.detail.message)) return;
+        setSearchButtonBusy(true);
+        setSearchStatus("Starting…");
+        res = await postSearchStart(true);
+      }
+      if (!res.ok) {
+        setSearchButtonBusy(false);
+        setSearchStatus(searchErrorMessage(res.body, res.status), true);
+        return;
+      }
+      setSearchStatus("Searching…");
+      pollSearchRun(res.body.id);
+    } catch (e) {
+      setSearchButtonBusy(false);
+      setSearchStatus("Couldn't start the search. " + e.message, true);
+    }
+  }
+
+  function checkSearchBusyOnLoad(wasBusy) {
+    apiGet("/search/status").then(function (body) {
+      if (body.busy) {
+        setSearchButtonBusy(true);
+        setSearchStatus(body.reason || "A search is already running");
+        setTimeout(function () { checkSearchBusyOnLoad(true); }, 8000);
+      } else if (wasBusy) {
+        setSearchButtonBusy(false);
+        setSearchStatus("");
+        loadPostings();
+      }
+    }).catch(function () { /* not fatal; the button still works */ });
+  }
+
+  $("searchNowBtn").addEventListener("click", startSearch);
+  checkSearchBusyOnLoad(false);
+
+  // -------------------------------------------------------------------
   // Sources
   // -------------------------------------------------------------------
 

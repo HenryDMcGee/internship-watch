@@ -51,3 +51,24 @@ def linear_forecast(used_to_date: float, elapsed_units: int, total_units: int) -
     if elapsed_units <= 0:
         return used_to_date
     return used_to_date / elapsed_units * total_units
+
+
+def daily_fraction_used(settings: dict, *, tokens: float, searches: float, usd: float) -> float:
+    """The worse of today's token/dollar and search fractions -- mirrors
+    `job/agent/budgets.py`'s `BudgetStatus.fraction_used()`, kept separate
+    (see this module's docstring) since the Worker only ships `api/src`.
+    Used for Search now's 80%-used confirmation (issue #35).
+    """
+    billing_mode = settings.get("billing_mode") or "subscription"
+    if billing_mode == "api_key":
+        daily_budget = float(settings.get("daily_usd_budget") or 0)
+        daily_used = usd
+    else:
+        daily_budget = float(settings.get("daily_token_budget") or 0)
+        daily_used = tokens
+    daily_fraction = (daily_used / daily_budget) if daily_budget > 0 else 0.0
+
+    search_budget = float(settings.get("daily_search_budget") or 0)
+    search_fraction = (searches / search_budget) if search_budget > 0 else 0.0
+
+    return max(daily_fraction, search_fraction)

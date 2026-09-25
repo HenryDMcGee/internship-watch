@@ -61,12 +61,13 @@ def today_central():
     return datetime.now(CENTRAL).date() if CENTRAL else datetime.utcnow().date()
 
 
-async def _fetch_and_store(db, companies: list[dict], titles_doc: dict, locations_setting: dict, run_id: int) -> tuple[int, dict[int, bool], dict[int, set[str]], int, int]:
+async def _fetch_and_store(db, companies: list[dict], titles_doc: dict, locations_setting: dict, run_id: int) -> tuple[int, dict[int, bool], dict[int, set[str]], int, int, int]:
     new_count = 0
     feed_ok: dict[int, bool] = {}
     current_urls: dict[int, set[str]] = {}
     no_source_count = 0
     feed_error_count = 0
+    sources_found = 0
 
     for company in companies:
         result = run_fetcher(company)
@@ -132,8 +133,9 @@ async def _fetch_and_store(db, companies: list[dict], titles_doc: dict, location
 
         if useful:
             await db.run("UPDATE run_stats SET useful = ? WHERE id = ?", useful, run_stats_id)
+            sources_found += 1
 
-    return new_count, feed_ok, current_urls, no_source_count, feed_error_count
+    return new_count, feed_ok, current_urls, no_source_count, feed_error_count, sources_found
 
 
 async def _verify_and_prune(
@@ -177,11 +179,28 @@ async def _verify_and_prune(
             )
 
 
+async def _claim_pending_search_request(db, run_id: int) -> int | None:
+    """Links this daily run to the newest pending `search_requests` row, if
+    any, so the dashboard's Search now button can poll a specific run's
+    status. `daily-search.yml` has no workflow_dispatch inputs (unlike
+    check-now.yml's request_id), so the link is made here by claiming the
+    request instead of the job being told which one started it -- safe
+    because the shared Actions concurrency group means only one daily run is
+    ever in flight at a time.
+    """
+    row = await db.first("SELECT id FROM search_requests WHERE status = 'pending' ORDER BY id DESC LIMIT 1")
+    if not row:
+        return None
+    await db.run("UPDATE search_requests SET status = 'running', run_id = ? WHERE id = ?", run_id, row["id"])
+    return row["id"]
+
+
 async def run(db, *, kind: str = "daily", company_ids: list[int] | None = None) -> dict:
     started_at = now_iso()
     run_id = await db.run(
         "INSERT INTO runs (kind, started_at, status) VALUES (?, ?, 'running')", kind, started_at
     )
+    search_request_id = await _claim_pending_search_request(db, run_id) if kind == "daily" else None
 
     try:
         result = await _run_body(db, run_id, started_at, kind, company_ids)
@@ -190,10 +209,20 @@ async def run(db, *, kind: str = "daily", company_ids: list[int] | None = None) 
             "UPDATE runs SET finished_at = ?, status = 'failed', summary = ? WHERE id = ?",
             now_iso(), f"Run failed: {exc}", run_id,
         )
+        if search_request_id:
+            await db.run(
+                "UPDATE search_requests SET status = 'failed', result = ? WHERE id = ?",
+                json.dumps({"error": str(exc)}), search_request_id,
+            )
         if kind == "daily":
             await _finish_daily_run(db, run_status="failed", run_reason=str(exc))
         raise
 
+    if search_request_id:
+        await db.run(
+            "UPDATE search_requests SET status = 'completed', result = ? WHERE id = ?",
+            json.dumps(result, default=str), search_request_id,
+        )
     if kind == "daily":
         await _finish_daily_run(
             db, run_status="completed", run_reason=None, agent_outcome=result.get("agent_outcome")
@@ -226,7 +255,7 @@ async def _run_body(db, run_id: int, started_at: str, kind: str, company_ids: li
     else:
         companies = await config.load_companies(db)
 
-    new_count, feed_ok, current_urls, no_source_count, feed_error_count = await _fetch_and_store(
+    new_count, feed_ok, current_urls, no_source_count, feed_error_count, sources_found = await _fetch_and_store(
         db, companies, titles_doc, locations_setting, run_id
     )
 
@@ -300,6 +329,7 @@ async def _run_body(db, run_id: int, started_at: str, kind: str, company_ids: li
         "started_at": started_at,
         "finished_at": finished_at,
         "new_count": new_count,
+        "sources_found": sources_found,
         "companies_checked": len(companies),
         "feed_errors": feed_error_count,
         "no_source_count": no_source_count,
