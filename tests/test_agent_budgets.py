@@ -174,3 +174,94 @@ def test_load_budget_status_sums_usage_rows(empty_db):
     assert status.today_by_step["discovery"].tokens == 150
     assert status.today_by_step["classification"].tokens == 30
     assert status.week.tokens == 180 + (999 + 999)  # same ISO week
+
+
+# -- resets (issue #38) ----------------------------------------------------
+
+def _insert_usage(db, *, tokens: int, searches: int, at: str, step: str = "discovery") -> None:
+    run(db.run(
+        """INSERT INTO usage (run_id, step, model, input_tokens, output_tokens, cache_read_tokens,
+           cache_write_tokens, web_searches, est_cost_usd, at)
+           VALUES (1, ?, 'sonnet', ?, 0, 0, 0, ?, 0, ?)""",
+        step, tokens, searches, at,
+    ))
+
+
+def _insert_reset(db, *, scope: str, reset_at: str, note: str | None = None) -> None:
+    run(db.run("INSERT INTO budget_resets (scope, reset_at, note) VALUES (?, ?, ?)", scope, reset_at, note))
+
+
+def test_daily_reset_excludes_usage_recorded_before_it(empty_db):
+    _insert_usage(empty_db, tokens=1000, searches=5, at="2026-09-25T07:00:00-05:00")
+    _insert_reset(empty_db, scope="daily", reset_at="2026-09-25T08:00:00-05:00")
+    _insert_usage(empty_db, tokens=200, searches=1, at="2026-09-25T09:00:00-05:00")
+
+    budget_settings = run(empty_db.first("SELECT * FROM budget_settings WHERE id = 1"))
+    status = run(load_budget_status(empty_db, budget_settings, today="2026-09-25"))
+
+    assert status.today.tokens == 200
+    assert status.today.searches == 1
+
+
+def test_daily_reset_does_not_affect_weekly_total(empty_db):
+    _insert_usage(empty_db, tokens=1000, searches=5, at="2026-09-25T07:00:00-05:00")
+    _insert_reset(empty_db, scope="daily", reset_at="2026-09-25T08:00:00-05:00")
+    _insert_usage(empty_db, tokens=200, searches=1, at="2026-09-25T09:00:00-05:00")
+
+    budget_settings = run(empty_db.first("SELECT * FROM budget_settings WHERE id = 1"))
+    status = run(load_budget_status(empty_db, budget_settings, today="2026-09-25"))
+
+    assert status.week.tokens == 1200  # the daily reset doesn't touch the weekly count
+
+
+def test_weekly_reset_excludes_usage_recorded_before_it(empty_db):
+    # 2026-09-21 is a Monday; the reset happens midweek on the 23rd.
+    _insert_usage(empty_db, tokens=5000, searches=0, at="2026-09-21T08:00:00-05:00")
+    _insert_reset(empty_db, scope="weekly", reset_at="2026-09-23T10:00:00-05:00")
+    _insert_usage(empty_db, tokens=300, searches=0, at="2026-09-24T08:00:00-05:00")
+
+    budget_settings = run(empty_db.first("SELECT * FROM budget_settings WHERE id = 1"))
+    status = run(load_budget_status(empty_db, budget_settings, today="2026-09-24"))
+
+    assert status.week.tokens == 300
+
+
+def test_reset_from_last_week_does_not_carry_into_this_week(empty_db):
+    # A weekly reset on 2026-09-16 (in last week's window) must not suppress
+    # this week's (starting 2026-09-21) usage.
+    _insert_reset(empty_db, scope="weekly", reset_at="2026-09-16T10:00:00-05:00")
+    _insert_usage(empty_db, tokens=400, searches=0, at="2026-09-21T08:00:00-05:00")
+
+    budget_settings = run(empty_db.first("SELECT * FROM budget_settings WHERE id = 1"))
+    status = run(load_budget_status(empty_db, budget_settings, today="2026-09-21"))
+
+    assert status.week.tokens == 400
+
+
+def test_day_boundary_holds_across_the_fall_daylight_saving_time_change(empty_db):
+    # 2026-11-01 is when Central switches from CDT (-05:00) to CST (-06:00)
+    # in the US. Usage just before local midnight on 2026-11-01 must not
+    # count as 2026-11-02, and usage just after must not count as 2026-11-01.
+    _insert_usage(empty_db, tokens=111, searches=0, at="2026-11-01T23:30:00-06:00")
+    _insert_usage(empty_db, tokens=222, searches=0, at="2026-11-02T00:30:00-06:00")
+
+    budget_settings = run(empty_db.first("SELECT * FROM budget_settings WHERE id = 1"))
+    status_1 = run(load_budget_status(empty_db, budget_settings, today="2026-11-01"))
+    status_2 = run(load_budget_status(empty_db, budget_settings, today="2026-11-02"))
+
+    assert status_1.today.tokens == 111
+    assert status_2.today.tokens == 222
+
+
+def test_daily_reset_cutoff_is_a_real_time_comparison_not_a_string_one(empty_db):
+    # A reset made right at the spring-forward change (2026-03-08, when
+    # Central jumps from -06:00 to -05:00) must still correctly separate
+    # earlier and later usage once converted to real instants in time.
+    _insert_usage(empty_db, tokens=50, searches=0, at="2026-03-08T01:30:00-06:00")
+    _insert_reset(empty_db, scope="daily", reset_at="2026-03-08T03:15:00-05:00")
+    _insert_usage(empty_db, tokens=70, searches=0, at="2026-03-08T03:30:00-05:00")
+
+    budget_settings = run(empty_db.first("SELECT * FROM budget_settings WHERE id = 1"))
+    status = run(load_budget_status(empty_db, budget_settings, today="2026-03-08"))
+
+    assert status.today.tokens == 70

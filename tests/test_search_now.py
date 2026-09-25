@@ -167,6 +167,29 @@ def test_start_search_proceeds_when_budget_confirmed(client):
     assert resp.json()["status"] == "pending"
 
 
+def test_start_search_not_blocked_after_a_daily_budget_reset(client, monkeypatch):
+    tc, db = client
+    _set_budget(db, daily_token_budget=1_000_000)
+    today = central_today()
+    run(db.run(
+        "INSERT INTO usage (run_id, step, model, input_tokens, output_tokens, cache_read_tokens, "
+        "cache_write_tokens, web_searches, est_cost_usd, at) "
+        "VALUES (NULL, 'discovery', 'sonnet', 900000, 0, 0, 0, 0, 0, ?)",
+        f"{today}T09:00:00-05:00",
+    ))
+    # `create_budget_reset` stamps `reset_at` with `now_iso()`; pinning it
+    # after the usage row's timestamp keeps this deterministic regardless of
+    # what time of day the suite happens to run.
+    import src.main as main_module
+    monkeypatch.setattr(main_module, "now_iso", lambda: f"{today}T10:00:00-05:00")
+
+    reset_resp = tc.post("/api/budgets/resets", json={"scope": "daily"})
+    assert reset_resp.status_code == 201
+
+    resp = tc.post("/api/search/runs", json={})
+    assert resp.status_code == 201
+
+
 def test_start_search_does_not_ask_for_confirmation_under_80_percent(client):
     tc, db = client
     _set_budget(db, daily_token_budget=1_000_000)

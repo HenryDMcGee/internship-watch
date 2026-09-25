@@ -15,6 +15,7 @@
     titlesOriginal: null,
     titlesDraft: null,
     titlesConfirmDelete: null,
+    budgets: null,
   };
 
   function $(id) { return document.getElementById(id); }
@@ -32,6 +33,14 @@
     if (p.length !== 3) return String(s);
     var d = new Date(+p[0], +p[1] - 1, +p[2]);
     return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  }
+
+  function fmtDateTime(s) {
+    if (!s) return "";
+    var d = new Date(s);
+    if (isNaN(d.getTime())) return String(s);
+    return d.toLocaleDateString(undefined, { month: "short", day: "numeric", timeZone: "America/Chicago" }) +
+      ", " + d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit", timeZone: "America/Chicago" });
   }
 
   function safeUrl(u) {
@@ -688,14 +697,36 @@
     });
   }
 
+  function renderBudgetsUsage(body) {
+    var settings = body.settings || {};
+    var usage = body.usage || { daily: { tokens: 0, searches: 0, usd: 0 }, weekly: { tokens: 0 } };
+    var resets = body.resets || {};
+    var dailyBudgetText = settings.billing_mode === "api_key"
+      ? fmtUsd(usage.daily.usd) + " of " + fmtUsd(settings.daily_usd_budget)
+      : (usage.daily.tokens || 0).toLocaleString() + " of " + (settings.daily_token_budget || 0).toLocaleString() + " tokens";
+    $("budgetsUsage").textContent = "Today: " + dailyBudgetText + ", " + (usage.daily.searches || 0) +
+      " of " + (settings.daily_search_budget || 0) + " searches used. This week: " +
+      (usage.weekly.tokens || 0).toLocaleString() + " of " + (settings.weekly_token_budget || 0).toLocaleString() + " tokens used.";
+
+    var dailyReset = resets.daily ? "Daily count reset " + fmtDateTime(resets.daily.reset_at) + "." : "Daily count never reset.";
+    var weeklyReset = resets.weekly ? "Weekly count reset " + fmtDateTime(resets.weekly.reset_at) + "." : "Weekly count never reset.";
+    $("budgetsLastReset").textContent = dailyReset + " " + weeklyReset;
+  }
+
+  function renderBudgetsResponse(body) {
+    state.budgets = body;
+    fillBudgetsForm(body.settings || {});
+    $("budgetsForecast").textContent = "Forecast this week: " + (body.forecast.weekly_tokens || 0).toLocaleString() +
+      " tokens. Forecast this month: " + fmtUsd(body.forecast.monthly_usd) + ".";
+    renderBudgetsUsage(body);
+    renderBudgetsHistory(body.changes || []);
+  }
+
   async function loadBudgets() {
     $("budgetsMsg").textContent = "";
     try {
       var body = await apiGet("/budgets");
-      fillBudgetsForm(body.settings || {});
-      $("budgetsForecast").textContent = "Forecast this week: " + (body.forecast.weekly_tokens || 0).toLocaleString() +
-        " tokens. Forecast this month: " + fmtUsd(body.forecast.monthly_usd) + ".";
-      renderBudgetsHistory(body.changes || []);
+      renderBudgetsResponse(body);
     } catch (e) {
       $("budgetsMsg").textContent = "Couldn't load budgets. " + e.message;
     }
@@ -712,16 +743,39 @@
     $("budgetsMsg").textContent = "Saving…";
     try {
       var body = await apiPut("/budgets", { doc: readBudgetsForm() });
-      fillBudgetsForm(body.settings || {});
-      $("budgetsForecast").textContent = "Forecast this week: " + (body.forecast.weekly_tokens || 0).toLocaleString() +
-        " tokens. Forecast this month: " + fmtUsd(body.forecast.monthly_usd) + ".";
-      renderBudgetsHistory(body.changes || []);
+      renderBudgetsResponse(body);
       $("budgetsMsg").textContent = "Saved.";
     } catch (e) {
       $("budgetsMsg").textContent = "Couldn't save. " + e.message;
     }
     $("budgetsSave").disabled = false;
   });
+
+  async function resetBudget(scope, btn) {
+    var usage = (state.budgets && state.budgets.usage) || { daily: { tokens: 0, searches: 0 }, weekly: { tokens: 0 } };
+    var settings = (state.budgets && state.budgets.settings) || {};
+    var message = scope === "daily"
+      ? "Today: " + (usage.daily.tokens || 0).toLocaleString() + " of " + (settings.daily_token_budget || 0).toLocaleString() +
+        " tokens and " + (usage.daily.searches || 0) + " of " + (settings.daily_search_budget || 0) +
+        " searches used. Reset the count to zero? Past usage stays in Analytics."
+      : "This week: " + (usage.weekly.tokens || 0).toLocaleString() + " of " + (settings.weekly_token_budget || 0).toLocaleString() +
+        " tokens used. Reset the count to zero? Past usage stays in Analytics.";
+    if (!window.confirm(message)) return;
+
+    btn.disabled = true;
+    $("budgetsMsg").textContent = "Resetting…";
+    try {
+      var body = await apiPost("/budgets/resets", { scope: scope });
+      renderBudgetsResponse(body);
+      $("budgetsMsg").textContent = (scope === "daily" ? "Today's" : "This week's") + " usage was reset.";
+    } catch (e) {
+      $("budgetsMsg").textContent = "Couldn't reset. " + e.message;
+    }
+    btn.disabled = false;
+  }
+
+  $("resetDailyBudget").addEventListener("click", function () { resetBudget("daily", $("resetDailyBudget")); });
+  $("resetWeeklyBudget").addEventListener("click", function () { resetBudget("weekly", $("resetWeeklyBudget")); });
 
   // -------------------------------------------------------------------
   // Tabs and filter

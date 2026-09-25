@@ -16,7 +16,14 @@ classification's share for the per-step check but are still cut under
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import date, timedelta
+from datetime import date, datetime, time, timedelta
+
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:  # pragma: no cover - zoneinfo is stdlib on 3.9+
+    ZoneInfo = None  # type: ignore
+
+CENTRAL = ZoneInfo("America/Chicago") if ZoneInfo else None
 
 ALWAYS_RUN = frozenset({"classification", "pruning"})
 
@@ -162,18 +169,60 @@ def _days_in_month(year: int, month: int) -> int:
     return (date(year, month + 1, 1) - date(year, month, 1)).days
 
 
+def _midnight_central(d: date) -> datetime:
+    return datetime.combine(d, time.min, tzinfo=CENTRAL) if CENTRAL else datetime.combine(d, time.min)
+
+
+def _parse_central(value: str) -> datetime:
+    """Parses a stored `at`/`reset_at` timestamp. Both are written by
+    `now_iso()` helpers that always include a Central offset in production;
+    naive strings (some test fixtures, and `SqliteDatabase` doesn't care
+    either way) are treated as already being Central local time.
+    """
+    dt = datetime.fromisoformat(value)
+    if dt.tzinfo is None and CENTRAL is not None:
+        dt = dt.replace(tzinfo=CENTRAL)
+    return dt
+
+
+def _reset_cutoff(reset_rows: list[dict], window_start: datetime) -> datetime:
+    """The later of `window_start` and the most recent reset in
+    `reset_rows` -- usage before this cutoff doesn't count toward the
+    window's budget.
+    """
+    latest = None
+    for row in reset_rows:
+        candidate = _parse_central(row["reset_at"])
+        if latest is None or candidate > latest:
+            latest = candidate
+    return max(latest, window_start) if latest else window_start
+
+
 async def load_budget_status(db, budget_settings: dict, *, today: str) -> BudgetStatus:
     today_date = date.fromisoformat(today)
-    week_start = (today_date - timedelta(days=today_date.weekday())).isoformat()  # Monday
+    week_start_date = today_date - timedelta(days=today_date.weekday())  # Monday
+    week_start = week_start_date.isoformat()
     month_start = today_date.replace(day=1).isoformat()
+
+    daily_reset_rows = await db.all(
+        "SELECT reset_at FROM budget_resets WHERE scope = 'daily' AND substr(reset_at, 1, 10) = ?",
+        today,
+    )
+    weekly_reset_rows = await db.all(
+        "SELECT reset_at FROM budget_resets WHERE scope = 'weekly' AND substr(reset_at, 1, 10) >= ? "
+        "AND substr(reset_at, 1, 10) <= ?",
+        week_start, today,
+    )
+    daily_cutoff = _reset_cutoff(daily_reset_rows, _midnight_central(today_date))
+    weekly_cutoff = _reset_cutoff(weekly_reset_rows, _midnight_central(week_start_date))
 
     today_rows = await db.all(
         "SELECT step, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, web_searches, "
-        "est_cost_usd FROM usage WHERE substr(at, 1, 10) = ?",
+        "est_cost_usd, at FROM usage WHERE substr(at, 1, 10) = ?",
         today,
     )
     week_rows = await db.all(
-        "SELECT input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, est_cost_usd "
+        "SELECT input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, est_cost_usd, at "
         "FROM usage WHERE substr(at, 1, 10) >= ? AND substr(at, 1, 10) <= ?",
         week_start, today,
     )
@@ -186,6 +235,8 @@ async def load_budget_status(db, budget_settings: dict, *, today: str) -> Budget
     today_totals = UsageTotals()
     today_by_step: dict[str, UsageTotals] = {}
     for row in today_rows:
+        if _parse_central(row["at"]) < daily_cutoff:
+            continue
         totals = _row_totals(row)
         searches = int(row.get("web_searches") or 0)
         today_totals.tokens += totals.tokens
@@ -198,6 +249,8 @@ async def load_budget_status(db, budget_settings: dict, *, today: str) -> Budget
 
     week_totals = UsageTotals()
     for row in week_rows:
+        if _parse_central(row["at"]) < weekly_cutoff:
+            continue
         totals = _row_totals(row)
         week_totals.tokens += totals.tokens
         week_totals.usd += totals.usd
