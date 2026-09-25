@@ -15,6 +15,7 @@
     titlesOriginal: null,
     titlesDraft: null,
     titlesConfirmDelete: null,
+    titlesFilter: "",
     budgets: null,
   };
 
@@ -853,8 +854,14 @@
 
   function hasUnsavedTitlesChanges() { return countTitlesChanges() > 0; }
 
+  function titleMatchesFilter(t, q) {
+    if (!q) return true;
+    var haystack = [t.title].concat(t.aliases || []).join(" ").toLowerCase();
+    return haystack.indexOf(q) !== -1;
+  }
+
   function titleRow(t) {
-    var li = el("li", "title-row");
+    var li = el("li", "title-row" + (t.active ? "" : " off"));
     if (state.titlesConfirmDelete === t.title) {
       li.classList.add("confirm");
       li.appendChild(el("p", "confirm-msg", "Delete '" + t.title + "'? It will be removed once you merge the pull request."));
@@ -938,14 +945,28 @@
     if (!groups.length) {
       body.appendChild(el("p", null, "No titles yet. Add one below."));
     }
+    var q = state.titlesFilter || "";
+    var anyVisible = false;
     groups.forEach(function (group) {
+      var items = byGroup[group];
+      var visible = items.filter(function (t) { return titleMatchesFilter(t, q); });
+      if (!visible.length) return;
+      anyVisible = true;
+      var onCount = items.filter(function (t) { return t.active; }).length;
+      var offCount = items.length - onCount;
       var section = el("div", "titles-group");
-      section.appendChild(el("h3", null, group));
+      var h3 = el("h3");
+      h3.appendChild(el("span", null, group));
+      h3.appendChild(el("span", "count", onCount + " on, " + offCount + " off"));
+      section.appendChild(h3);
       var ul = el("ul", "title-list");
-      byGroup[group].forEach(function (t) { ul.appendChild(titleRow(t)); });
+      visible.forEach(function (t) { ul.appendChild(titleRow(t)); });
       section.appendChild(ul);
       body.appendChild(section);
     });
+    if (groups.length && q && !anyVisible) {
+      body.appendChild(el("p", null, "No titles match that filter."));
+    }
     populateTitlesGroupSelect();
     updateTitlesUnsavedCount();
     if (document.activeElement !== $("titlesJson")) {
@@ -993,6 +1014,11 @@
     $("titlesNewTitle").focus();
   }
 
+  $("titlesFilter").addEventListener("input", function (e) {
+    state.titlesFilter = e.target.value.trim().toLowerCase();
+    renderTitlesPanel();
+  });
+
   $("titlesAddBtn").addEventListener("click", addDraftTitle);
   $("titlesNewTitle").addEventListener("keydown", function (e) { if (e.key === "Enter") { e.preventDefault(); addDraftTitle(); } });
   $("titlesNewGroupName").addEventListener("keydown", function (e) { if (e.key === "Enter") { e.preventDefault(); addDraftTitle(); } });
@@ -1019,6 +1045,8 @@
     state.titlesDraft = null;
     state.titlesOriginal = null;
     state.titlesConfirmDelete = null;
+    state.titlesFilter = "";
+    $("titlesFilter").value = "";
     $("titlesBody").textContent = "Loading…";
     $("titlesAddMsg").textContent = "";
     $("titlesMsg").textContent = "";
