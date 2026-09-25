@@ -6,6 +6,24 @@
   ],
   "titles": [
     {
+      "title": "Product Manager Intern",
+      "group": "Core PM",
+      "aliases": [
+        "Product Manager Intern (MBA)",
+        "MBA Product Intern"
+      ],
+      "active": true
+    },
+    {
+      "title": "Product Management Intern",
+      "group": "Core PM",
+      "aliases": [
+        "Product Management Internship",
+        "MBA Intern, Product Management"
+      ],
+      "active": true
+    },
+    {
       "title": "MBA Product Manager Intern",
       "group": "Core PM",
       "aliases": [],
@@ -28,7 +46,10 @@
     {
       "title": "Senior Product Manager Intern",
       "group": "Core PM",
-      "aliases": [],
+      "aliases": [
+        "Sr. Product Manager Intern",
+        "Sr Product Manager (Business Leadership Course)"
+      ],
       "active": true
     },
     {
@@ -40,14 +61,16 @@
     {
       "title": "Technical Product Manager Intern",
       "group": "Core PM",
-      "aliases": [],
+      "aliases": [
+        "Product Management - Technical Intern"
+      ],
       "active": true
     },
     {
       "title": "Group Product Manager Intern",
       "group": "Core PM",
       "aliases": [],
-      "active": true
+      "active": false
     },
     {
       "title": "Platform Product Manager Intern",
@@ -64,7 +87,9 @@
     {
       "title": "Program Manager Intern",
       "group": "Company-specific names",
-      "aliases": [],
+      "aliases": [
+        "Senior Program Manager MBA Intern"
+      ],
       "active": true
     },
     {
@@ -72,7 +97,8 @@
       "group": "Company-specific names",
       "aliases": [
         "PMT Intern",
-        "PM-T Intern"
+        "PM-T Intern",
+        "Sr. Product Manager Technical (PMT) Intern"
       ],
       "active": true
     },
@@ -86,18 +112,63 @@
       "title": "Product Lead Intern",
       "group": "Company-specific names",
       "aliases": [],
+      "active": false
+    },
+    {
+      "title": "Chase Associate Program Summer Associate",
+      "group": "MBA programs",
+      "aliases": [],
+      "active": true
+    },
+    {
+      "title": "Graduate Summer Internship Program - Product Management",
+      "group": "MBA programs",
+      "aliases": [
+        "Graduate Summer Internship Program - Product Development",
+        "Graduate Summer Internship Program - Digital Product Management"
+      ],
+      "active": true
+    },
+    {
+      "title": "MBA General Business Intern",
+      "group": "MBA programs",
+      "aliases": [],
+      "active": true
+    },
+    {
+      "title": "Business Leadership Course Intern",
+      "group": "MBA programs",
+      "aliases": [],
       "active": true
     },
     {
       "title": "Product Strategy Intern",
       "group": "Strategy and business-side",
-      "aliases": [],
+      "aliases": [
+        "Business & Product Strategy Intern"
+      ],
       "active": true
     },
     {
       "title": "Product & Business Operations Intern",
       "group": "Strategy and business-side",
       "aliases": [],
+      "active": true
+    },
+    {
+      "title": "Product Operations Intern",
+      "group": "Strategy and business-side",
+      "aliases": [
+        "Product Operations / Pricing & Monetization Intern"
+      ],
+      "active": true
+    },
+    {
+      "title": "Pricing & Monetization Intern",
+      "group": "Strategy and business-side",
+      "aliases": [
+        "Product Pricing & Commercialization Intern"
+      ],
       "active": true
     },
     {
@@ -116,8 +187,23 @@
       "title": "Strategy & Operations Intern",
       "group": "Strategy and business-side",
       "aliases": [
-        "S&O Intern"
+        "S&O Intern",
+        "Strategy & Execution Intern"
       ],
+      "active": true
+    },
+    {
+      "title": "Corporate Strategy Intern",
+      "group": "Strategy and business-side",
+      "aliases": [
+        "Corporate Strategy & Development Intern"
+      ],
+      "active": true
+    },
+    {
+      "title": "Corporate Operations Intern",
+      "group": "Strategy and business-side",
+      "aliases": [],
       "active": true
     },
     {
@@ -140,6 +226,20 @@
     },
     {
       "title": "Technical Program Manager Intern",
+      "group": "Technical and data-adjacent",
+      "aliases": [],
+      "active": true
+    },
+    {
+      "title": "Engineering Program Manager Intern",
+      "group": "Technical and data-adjacent",
+      "aliases": [
+        "Engineering Program Management Internship"
+      ],
+      "active": true
+    },
+    {
+      "title": "Operations Program Manager Intern",
       "group": "Technical and data-adjacent",
       "aliases": [],
       "active": true
@@ -171,17 +271,13 @@
     {
       "title": "Digital Product Manager Intern",
       "group": "Industry-specific",
-      "aliases": [],
+      "aliases": [
+        "Digital Product: Product Management (MBA)"
+      ],
       "active": true
     },
     {
       "title": "Product Development Associate Intern",
-      "group": "Industry-specific",
-      "aliases": [],
-      "active": true
-    },
-    {
-      "title": "Merchandising Intern",
       "group": "Industry-specific",
       "aliases": [],
       "active": true
@@ -193,22 +289,34 @@
       "active": true
     },
     {
+      "title": "Category Manager Intern",
+      "group": "Industry-specific",
+      "aliases": [],
+      "active": false
+    },
+    {
+      "title": "Merchandising Intern",
+      "group": "Industry-specific",
+      "aliases": [],
+      "active": false
+    },
+    {
       "title": "Portfolio Manager Intern",
       "group": "Industry-specific",
       "aliases": [],
-      "active": true
+      "active": false
     },
     {
       "title": "Offering Manager Intern",
       "group": "Industry-specific",
       "aliases": [],
-      "active": true
+      "active": false
     },
     {
       "title": "Platform Manager Intern",
       "group": "Industry-specific",
       "aliases": [],
-      "active": true
+      "active": false
     }
   ]
 }
