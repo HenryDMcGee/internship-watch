@@ -33,10 +33,20 @@ button,input,textarea{font:inherit; color:inherit}
 .hero h1 .dim{display:block; color:var(--muted); font-weight:500; font-size:.42em; letter-spacing:-.01em; margin-bottom:10px}
 .hero p{margin:14px 0 0; color:var(--muted); max-width:56ch}
 
-.tabs{display:flex; gap:4px; background:var(--surface); border:1px solid var(--line); border-radius:14px; padding:4px; flex-wrap:wrap}
+.tabs-row{display:flex; align-items:stretch; gap:8px; flex-wrap:wrap}
+.tabs{flex:1; min-width:240px; display:flex; gap:4px; background:var(--surface); border:1px solid var(--line); border-radius:14px; padding:4px; flex-wrap:wrap}
 .tab{flex:1; min-width:88px; border:0; background:transparent; border-radius:10px; padding:10px 8px; cursor:pointer; font-weight:700; color:var(--muted)}
 .tab[aria-selected="true"]{background:var(--ink); color:var(--bg)}
 .tab .n{font-weight:400; opacity:.8; margin-left:4px}
+
+.search-now-btn{display:inline-flex; align-items:center; gap:8px; white-space:nowrap; padding:0 16px}
+.search-status{margin:6px 2px 0; font-size:14px; color:var(--muted); min-height:1.4em}
+.search-status.err{color:var(--danger)}
+.spinner{width:14px; height:14px; border-radius:50%; border:2px solid rgba(255,255,255,.45); border-top-color:#fff; display:inline-block; flex-shrink:0}
+@media (prefers-reduced-motion: no-preference){
+  .spinner{animation:spin .7s linear infinite}
+  @keyframes spin{to{transform:rotate(360deg)}}
+}
 
 .filter{margin:12px 0 4px; width:100%; border:1px solid var(--line); background:var(--surface); border-radius:10px; padding:10px 12px}
 

@@ -1,4 +1,5 @@
 import asyncio
+import json
 
 import pytest
 
@@ -491,6 +492,104 @@ def test_daily_run_flags_it_when_discovery_and_scout_make_zero_web_searches(empt
 
     alerts = run(empty_db.all("SELECT * FROM alerts"))
     assert any(a["type"] == "claude_step_issue" for a in alerts)
+
+
+def test_run_records_sources_found_as_companies_with_a_useful_posting(empty_db, monkeypatch):
+    company_a = _insert_company(empty_db, name="Acme", feed_id="acme")
+    company_b = _insert_company(empty_db, name="Globex", feed_id="globex")
+
+    def fake_run_fetcher(company, session=None):
+        if company["id"] == company_a:
+            return FetchResult(
+                company_id=company["id"], company_name=company["name"],
+                postings=[FetchedPosting(
+                    company_name="Acme", title="MBA Product Manager Intern, Summer 2027",
+                    url="https://boards.greenhouse.io/acme/jobs/1", location_text="San Francisco, CA",
+                )],
+            )
+        return FetchResult(company_id=company["id"], company_name=company["name"], postings=[])
+
+    monkeypatch.setattr(run_module, "run_fetcher", fake_run_fetcher)
+
+    result = run(run_module.run(empty_db, kind="daily"))
+    assert result["sources_found"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Search now: linking a `search_requests` row to the daily run it started
+# ---------------------------------------------------------------------------
+
+def test_daily_run_claims_the_pending_search_request_and_marks_it_completed(empty_db, monkeypatch):
+    _insert_company(empty_db)
+    request_id = run(empty_db.run(
+        "INSERT INTO search_requests (requested_at, status) VALUES ('2026-09-25T08:00:00', 'pending')"
+    ))
+
+    def fake_run_fetcher(company, session=None):
+        return FetchResult(company_id=company["id"], company_name=company["name"], postings=[])
+
+    monkeypatch.setattr(run_module, "run_fetcher", fake_run_fetcher)
+    run(run_module.run(empty_db, kind="daily"))
+
+    request = run(empty_db.first("SELECT * FROM search_requests WHERE id = ?", request_id))
+    assert request["status"] == "completed"
+    assert request["run_id"] is not None
+    result = json.loads(request["result"])
+    assert result["kind"] == "daily"
+
+
+def test_daily_run_marks_the_search_request_failed_on_a_crash(empty_db, monkeypatch):
+    _insert_company(empty_db)
+    request_id = run(empty_db.run(
+        "INSERT INTO search_requests (requested_at, status) VALUES ('2026-09-25T08:00:00', 'pending')"
+    ))
+
+    def broken_fetcher(company, session=None):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(run_module, "run_fetcher", broken_fetcher)
+    with pytest.raises(RuntimeError):
+        run(run_module.run(empty_db, kind="daily"))
+
+    request = run(empty_db.first("SELECT * FROM search_requests WHERE id = ?", request_id))
+    assert request["status"] == "failed"
+    assert "boom" in json.loads(request["result"])["error"]
+
+
+def test_daily_run_without_a_pending_search_request_leaves_the_table_empty(empty_db, monkeypatch):
+    # A scheduled 8am run or a manual run from the Actions tab has no
+    # dashboard-side request to link -- must not create or touch one.
+    _insert_company(empty_db)
+
+    def fake_run_fetcher(company, session=None):
+        return FetchResult(company_id=company["id"], company_name=company["name"], postings=[])
+
+    monkeypatch.setattr(run_module, "run_fetcher", fake_run_fetcher)
+    run(run_module.run(empty_db, kind="daily"))
+
+    assert run(empty_db.all("SELECT * FROM search_requests")) == []
+
+
+def test_check_now_run_does_not_claim_a_pending_search_request(empty_db, monkeypatch):
+    # search_requests is for Search now (kind="daily") only; a Check now run
+    # (kind="check_now") must leave a pending search request alone.
+    company_id = _insert_company(empty_db)
+    request_id = run(empty_db.run(
+        "INSERT INTO search_requests (requested_at, status) VALUES ('2026-09-25T08:00:00', 'pending')"
+    ))
+    check_request_id = run(empty_db.run(
+        "INSERT INTO check_requests (company_ids, requested_at, status) VALUES (?, '2026-09-25T08:00:00', 'pending')",
+        f"[{company_id}]",
+    ))
+
+    def fake_run_fetcher(company, session=None):
+        return FetchResult(company_id=company["id"], company_name=company["name"], postings=[])
+
+    monkeypatch.setattr(run_module, "run_fetcher", fake_run_fetcher)
+    run(run_module.run_check_request(empty_db, check_request_id))
+
+    request = run(empty_db.first("SELECT * FROM search_requests WHERE id = ?", request_id))
+    assert request["status"] == "pending"
 
 
 def test_run_marks_run_row_failed_instead_of_leaving_it_running(empty_db, monkeypatch):

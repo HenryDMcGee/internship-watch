@@ -1,4 +1,13 @@
-from src.budgets import MODEL_FIELDS, NUMERIC_FIELDS, SHARE_FIELDS, linear_forecast, validate_budget_settings
+import pytest
+
+from src.budgets import (
+    MODEL_FIELDS,
+    NUMERIC_FIELDS,
+    SHARE_FIELDS,
+    daily_fraction_used,
+    linear_forecast,
+    validate_budget_settings,
+)
 
 
 def _valid_doc(**overrides):
@@ -56,3 +65,26 @@ def test_linear_forecast_projects_to_end_of_period():
 
 def test_linear_forecast_handles_zero_elapsed():
     assert linear_forecast(50, 0, 7) == 50
+
+
+def test_daily_fraction_used_subscription_mode_uses_tokens():
+    settings = _valid_doc()
+    fraction = daily_fraction_used(settings, tokens=3_200_000, searches=0, usd=0)
+    assert fraction == 0.80
+
+
+def test_daily_fraction_used_api_key_mode_uses_dollars():
+    settings = _valid_doc(billing_mode="api_key")
+    fraction = daily_fraction_used(settings, tokens=0, searches=0, usd=1.20)
+    assert fraction == pytest.approx(0.80)
+
+
+def test_daily_fraction_used_is_the_worse_of_tokens_and_searches():
+    settings = _valid_doc()
+    fraction = daily_fraction_used(settings, tokens=0, searches=35, usd=0)
+    assert fraction == 1.0
+
+
+def test_daily_fraction_used_zero_budget_never_divides_by_zero():
+    settings = _valid_doc(daily_token_budget=0, daily_search_budget=0)
+    assert daily_fraction_used(settings, tokens=100, searches=10, usd=0) == 0.0

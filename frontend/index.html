@@ -26,14 +26,21 @@
     <p id="subline"></p>
   </header>
 
-  <div class="tabs" role="tablist" aria-label="Postings">
-    <button class="tab" role="tab" id="tabToday" aria-selected="true" type="button">New today<span class="n" id="nToday"></span></button>
-    <button class="tab" role="tab" id="tabEarlier" aria-selected="false" type="button">Earlier<span class="n" id="nEarlier"></span></button>
-    <button class="tab" role="tab" id="tabSources" aria-selected="false" type="button">Sources<span class="n" id="nSources"></span></button>
-    <button class="tab" role="tab" id="tabArchived" aria-selected="false" type="button">Archived<span class="n" id="nArchived"></span></button>
-    <button class="tab" role="tab" id="tabAnalytics" aria-selected="false" type="button">Analytics</button>
-    <button class="tab" role="tab" id="tabProposals" aria-selected="false" type="button">Proposals</button>
+  <div class="tabs-row">
+    <div class="tabs" role="tablist" aria-label="Postings">
+      <button class="tab" role="tab" id="tabToday" aria-selected="true" type="button">New today<span class="n" id="nToday"></span></button>
+      <button class="tab" role="tab" id="tabEarlier" aria-selected="false" type="button">Earlier<span class="n" id="nEarlier"></span></button>
+      <button class="tab" role="tab" id="tabSources" aria-selected="false" type="button">Sources<span class="n" id="nSources"></span></button>
+      <button class="tab" role="tab" id="tabArchived" aria-selected="false" type="button">Archived<span class="n" id="nArchived"></span></button>
+      <button class="tab" role="tab" id="tabAnalytics" aria-selected="false" type="button">Analytics</button>
+      <button class="tab" role="tab" id="tabProposals" aria-selected="false" type="button">Proposals</button>
+    </div>
+    <button class="btn primary search-now-btn" id="searchNowBtn" type="button" aria-busy="false">
+      <span class="spinner" id="searchNowSpinner" hidden aria-hidden="true"></span>
+      <span id="searchNowLabel">Search now</span>
+    </button>
   </div>
+  <p class="search-status" id="searchStatus" role="status" aria-live="polite"></p>
   <input class="filter" id="filter" type="search" placeholder="Filter by company, title, or location" aria-label="Filter postings">
 
   <ul class="list" id="list" aria-live="polite"></ul>
