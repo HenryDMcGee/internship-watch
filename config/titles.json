@@ -317,6 +317,148 @@
       "group": "Industry-specific",
       "aliases": [],
       "active": false
+    },
+    {
+      "title": "Digital Strategy Intern",
+      "group": "Digital strategy and advisory",
+      "aliases": [
+        "MBA Summer Consultant, Digital"
+      ],
+      "active": true
+    },
+    {
+      "title": "Digital Strategy Analyst Intern",
+      "group": "Digital strategy and advisory",
+      "aliases": [
+        "Intern - Digital Strategy Analyst - Strategic Advisory"
+      ],
+      "active": true
+    },
+    {
+      "title": "Digital Transformation Intern",
+      "group": "Digital strategy and advisory",
+      "aliases": [
+        "Summer Associate, Digital Transformation"
+      ],
+      "active": true
+    },
+    {
+      "title": "Technology Strategy Intern",
+      "group": "Digital strategy and advisory",
+      "aliases": [
+        "Summer Associate, Technology Strategy"
+      ],
+      "active": true
+    },
+    {
+      "title": "Technology Consulting Intern",
+      "group": "Digital strategy and advisory",
+      "aliases": [
+        "Technology Consulting Summer Associate"
+      ],
+      "active": true
+    },
+    {
+      "title": "Strategic Advisory Intern",
+      "group": "Digital strategy and advisory",
+      "aliases": [],
+      "active": true
+    },
+    {
+      "title": "Strategy & Transformation Intern",
+      "group": "Digital strategy and advisory",
+      "aliases": [],
+      "active": true
+    },
+    {
+      "title": "Business Transformation Intern",
+      "group": "Digital strategy and advisory",
+      "aliases": [],
+      "active": true
+    },
+    {
+      "title": "IT Strategy Intern",
+      "group": "Digital strategy and advisory",
+      "aliases": [],
+      "active": true
+    },
+    {
+      "title": "AI Strategy Intern",
+      "group": "Digital strategy and advisory",
+      "aliases": [],
+      "active": true
+    },
+    {
+      "title": "Emerging Technology Strategy Intern",
+      "group": "Digital strategy and advisory",
+      "aliases": [],
+      "active": true
+    },
+    {
+      "title": "Enterprise Architecture Intern",
+      "group": "Enterprise architecture and IT",
+      "aliases": [
+        "MBA Intern, Enterprise Architecture"
+      ],
+      "active": true
+    },
+    {
+      "title": "Enterprise Architecture Analyst Intern",
+      "group": "Enterprise architecture and IT",
+      "aliases": [
+        "Intern - Enterprise Architecture Analyst"
+      ],
+      "active": true
+    },
+    {
+      "title": "Business Architecture Intern",
+      "group": "Enterprise architecture and IT",
+      "aliases": [],
+      "active": true
+    },
+    {
+      "title": "Solutions Architecture Intern",
+      "group": "Enterprise architecture and IT",
+      "aliases": [],
+      "active": true
+    },
+    {
+      "title": "Technology Architecture Analyst Intern",
+      "group": "Enterprise architecture and IT",
+      "aliases": [],
+      "active": true
+    },
+    {
+      "title": "IT Business Analyst Intern",
+      "group": "Enterprise architecture and IT",
+      "aliases": [],
+      "active": true
+    },
+    {
+      "title": "Systems Analyst Intern",
+      "group": "Enterprise architecture and IT",
+      "aliases": [],
+      "active": true
+    },
+    {
+      "title": "Cloud Strategy Intern",
+      "group": "Enterprise architecture and IT",
+      "aliases": [],
+      "active": true
+    },
+    {
+      "title": "Data Strategy Intern",
+      "group": "Enterprise architecture and IT",
+      "aliases": [],
+      "active": true
+    },
+    {
+      "title": "Technology Business Management Analyst Intern",
+      "group": "Enterprise architecture and IT",
+      "aliases": [
+        "TBM Analyst Intern"
+      ],
+      "active": true
     }
   ]
 }
