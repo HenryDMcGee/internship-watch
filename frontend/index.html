@@ -117,11 +117,10 @@
 </div>
 
 <dialog id="titlesDialog" aria-labelledby="titlesTitle">
-  <div class="sheet">
+  <div class="sheet titles-sheet">
     <h2 id="titlesTitle">Titles</h2>
     <p>Editing opens or updates a pull request that changes only <code>config/titles.json</code>. Nothing changes until you review and merge it.</p>
     <p id="titlesPending" class="pending-link" hidden><a id="titlesPendingLink" target="_blank" rel="noopener noreferrer">Pending change: see the open pull request</a></p>
-    <div id="titlesBody"></div>
 
     <h3>Add a title</h3>
     <div class="addform">
@@ -132,15 +131,21 @@
     <input id="titlesNewGroupName" type="text" placeholder="New group name" aria-label="New group name" hidden>
     <div class="msg" id="titlesAddMsg"></div>
 
-    <details id="titlesJsonDetails">
-      <summary>Edit as JSON</summary>
-      <textarea id="titlesJson" spellcheck="false" style="min-height:28vh" aria-label="Titles as JSON"></textarea>
-      <div class="row">
-        <button class="btn" id="titlesJsonApply" type="button">Apply JSON</button>
-      </div>
-    </details>
+    <input class="filter" id="titlesFilter" type="search" placeholder="Filter titles" aria-label="Filter titles">
 
-    <div class="row">
+    <div class="titles-scroll">
+      <div id="titlesBody"></div>
+
+      <details id="titlesJsonDetails">
+        <summary>Edit as JSON</summary>
+        <textarea id="titlesJson" spellcheck="false" style="min-height:28vh" aria-label="Titles as JSON"></textarea>
+        <div class="row">
+          <button class="btn" id="titlesJsonApply" type="button">Apply JSON</button>
+        </div>
+      </details>
+    </div>
+
+    <div class="row titles-footer">
       <span class="msg" id="titlesUnsaved"></span>
       <span class="spacer"></span>
       <button class="btn primary" id="titlesSave" type="button">Save (opens a pull request)</button>
