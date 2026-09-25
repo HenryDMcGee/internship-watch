@@ -55,6 +55,106 @@ def now_iso() -> str:
     return datetime.now(CENTRAL).isoformat() if CENTRAL else datetime.utcnow().isoformat()
 
 
+def _midnight_central(d: date) -> datetime:
+    return datetime.combine(d, datetime.min.time(), tzinfo=CENTRAL) if CENTRAL else datetime.combine(d, datetime.min.time())
+
+
+def _parse_central(value: str) -> datetime:
+    """Parses a stored `at`/`reset_at` timestamp. Both are written by
+    `now_iso()`, which always includes a Central offset in production;
+    naive strings (some test fixtures) are treated as already being
+    Central local time.
+    """
+    dt = datetime.fromisoformat(value)
+    if dt.tzinfo is None and CENTRAL is not None:
+        dt = dt.replace(tzinfo=CENTRAL)
+    return dt
+
+
+def _reset_cutoff(reset_rows: list[dict], window_start: datetime) -> datetime:
+    """The later of `window_start` and the most recent reset in
+    `reset_rows` -- usage before this cutoff doesn't count toward the
+    window's budget (issue #38).
+    """
+    latest = None
+    for row in reset_rows:
+        candidate = _parse_central(row["reset_at"])
+        if latest is None or candidate > latest:
+            latest = candidate
+    return max(latest, window_start) if latest else window_start
+
+
+async def _budget_cutoffs(db: Database, today_date: date) -> tuple[datetime, datetime, date]:
+    week_start_date = today_date - timedelta(days=today_date.weekday())
+    daily_rows = await db.all(
+        "SELECT reset_at FROM budget_resets WHERE scope = 'daily' AND substr(reset_at, 1, 10) = ?",
+        today_date.isoformat(),
+    )
+    weekly_rows = await db.all(
+        "SELECT reset_at FROM budget_resets WHERE scope = 'weekly' AND substr(reset_at, 1, 10) >= ? "
+        "AND substr(reset_at, 1, 10) <= ?",
+        week_start_date.isoformat(), today_date.isoformat(),
+    )
+    daily_cutoff = _reset_cutoff(daily_rows, _midnight_central(today_date))
+    weekly_cutoff = _reset_cutoff(weekly_rows, _midnight_central(week_start_date))
+    return daily_cutoff, weekly_cutoff, week_start_date
+
+
+async def _current_usage(db: Database, today_date: date) -> dict:
+    """Today's and this week's usage, counting only usage since the later
+    of the window's start or its most recent reset (issue #38).
+    """
+    daily_cutoff, weekly_cutoff, week_start_date = await _budget_cutoffs(db, today_date)
+    today = today_date.isoformat()
+    week_start = week_start_date.isoformat()
+
+    today_rows = await db.all(
+        "SELECT input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, web_searches, "
+        "est_cost_usd, at FROM usage WHERE substr(at, 1, 10) = ?",
+        today,
+    )
+    week_rows = await db.all(
+        "SELECT input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, at "
+        "FROM usage WHERE substr(at, 1, 10) >= ? AND substr(at, 1, 10) <= ?",
+        week_start, today,
+    )
+
+    daily_tokens = daily_searches = 0
+    daily_usd = 0.0
+    for row in today_rows:
+        if _parse_central(row["at"]) < daily_cutoff:
+            continue
+        daily_tokens += (
+            (row.get("input_tokens") or 0) + (row.get("output_tokens") or 0)
+            + (row.get("cache_read_tokens") or 0) + (row.get("cache_write_tokens") or 0)
+        )
+        daily_searches += row.get("web_searches") or 0
+        daily_usd += row.get("est_cost_usd") or 0
+
+    weekly_tokens = 0
+    for row in week_rows:
+        if _parse_central(row["at"]) < weekly_cutoff:
+            continue
+        weekly_tokens += (
+            (row.get("input_tokens") or 0) + (row.get("output_tokens") or 0)
+            + (row.get("cache_read_tokens") or 0) + (row.get("cache_write_tokens") or 0)
+        )
+
+    return {
+        "daily": {"tokens": daily_tokens, "searches": daily_searches, "usd": round(daily_usd, 4)},
+        "weekly": {"tokens": weekly_tokens},
+    }
+
+
+async def _latest_resets(db: Database) -> dict:
+    resets = {}
+    for scope in ("daily", "weekly"):
+        resets[scope] = await db.first(
+            "SELECT * FROM budget_resets WHERE scope = ? ORDER BY reset_at DESC LIMIT 1", scope
+        )
+    return resets
+
+
 app = FastAPI(title="Internship Watch API")
 app.state.db = None
 app.state.access_team_domain = os.environ.get("ACCESS_TEAM_DOMAIN", "")
@@ -462,16 +562,12 @@ async def start_search(body: SearchStartRequest, request: Request, db: Database 
 
     settings = await db.first("SELECT * FROM budget_settings WHERE id = 1") or {}
     today = central_today()
-    usage_row = await db.first(
-        "SELECT SUM(input_tokens + output_tokens + cache_read_tokens + cache_write_tokens) AS tokens, "
-        "SUM(web_searches) AS searches, SUM(est_cost_usd) AS usd FROM usage WHERE substr(at, 1, 10) = ?",
-        today,
-    )
+    usage = await _current_usage(db, date.fromisoformat(today))
     fraction = daily_fraction_used(
         settings,
-        tokens=(usage_row or {}).get("tokens") or 0,
-        searches=(usage_row or {}).get("searches") or 0,
-        usd=(usage_row or {}).get("usd") or 0,
+        tokens=usage["daily"]["tokens"],
+        searches=usage["daily"]["searches"],
+        usd=usage["daily"]["usd"],
     )
     if fraction >= SEARCH_BUDGET_WARN_FRACTION and not body.confirm_budget:
         raise HTTPException(
@@ -596,23 +692,18 @@ _BUDGET_FIELDS = (*NUMERIC_FIELDS, *MODEL_FIELDS, *SHARE_FIELDS, "billing_mode")
 async def _budget_forecast(db: Database, settings: dict) -> dict:
     today = central_today()
     today_date = date.fromisoformat(today)
-    week_start = (today_date - timedelta(days=today_date.weekday())).isoformat()
     month_start = today_date.replace(day=1).isoformat()
     days_in_month = (
         31 if today_date.month == 12
         else (date(today_date.year, today_date.month + 1, 1) - date(today_date.year, today_date.month, 1)).days
     )
 
-    week_row = await db.first(
-        "SELECT SUM(input_tokens + output_tokens + cache_read_tokens + cache_write_tokens) AS tokens "
-        "FROM usage WHERE substr(at, 1, 10) >= ? AND substr(at, 1, 10) <= ?",
-        week_start, today,
-    )
+    usage = await _current_usage(db, today_date)
     month_row = await db.first(
         "SELECT SUM(est_cost_usd) AS usd FROM usage WHERE substr(at, 1, 10) >= ? AND substr(at, 1, 10) <= ?",
         month_start, today,
     )
-    weekly_tokens = linear_forecast((week_row or {}).get("tokens") or 0, today_date.isoweekday(), 7)
+    weekly_tokens = linear_forecast(usage["weekly"]["tokens"], today_date.isoweekday(), 7)
     monthly_usd = linear_forecast((month_row or {}).get("usd") or 0, today_date.day, days_in_month)
     return {"weekly_tokens": round(weekly_tokens, 2), "monthly_usd": round(monthly_usd, 2)}
 
@@ -621,12 +712,19 @@ class BudgetsUpdate(BaseModel):
     doc: dict[str, Any]
 
 
+class BudgetResetCreate(BaseModel):
+    scope: str
+    note: str | None = None
+
+
 @router.get("/budgets")
 async def get_budgets(db: Database = Depends(get_db)):
     settings = await db.first("SELECT * FROM budget_settings WHERE id = 1")
     changes = await db.all("SELECT * FROM budget_changes ORDER BY id DESC LIMIT 50")
     forecast = await _budget_forecast(db, settings or {})
-    return {"settings": settings, "changes": changes, "forecast": forecast}
+    usage = await _current_usage(db, date.fromisoformat(central_today()))
+    resets = await _latest_resets(db)
+    return {"settings": settings, "changes": changes, "forecast": forecast, "usage": usage, "resets": resets}
 
 
 @router.put("/budgets")
@@ -654,7 +752,40 @@ async def update_budgets(body: BudgetsUpdate, db: Database = Depends(get_db)):
     settings = await db.first("SELECT * FROM budget_settings WHERE id = 1")
     changes = await db.all("SELECT * FROM budget_changes ORDER BY id DESC LIMIT 50")
     forecast = await _budget_forecast(db, settings or {})
-    return {"settings": settings, "changes": changes, "forecast": forecast}
+    usage = await _current_usage(db, date.fromisoformat(central_today()))
+    resets = await _latest_resets(db)
+    return {"settings": settings, "changes": changes, "forecast": forecast, "usage": usage, "resets": resets}
+
+
+@router.post("/budgets/resets", status_code=201)
+async def create_budget_reset(body: BudgetResetCreate, db: Database = Depends(get_db)):
+    if body.scope not in ("daily", "weekly"):
+        raise HTTPException(status_code=422, detail="scope must be 'daily' or 'weekly'")
+
+    today_date = date.fromisoformat(central_today())
+    usage = await _current_usage(db, today_date)
+    at = now_iso()
+
+    if body.scope == "daily":
+        old_value = f"{usage['daily']['tokens']:,} tokens, {usage['daily']['searches']} searches"
+    else:
+        old_value = f"{usage['weekly']['tokens']:,} tokens"
+
+    await db.run(
+        "INSERT INTO budget_resets (scope, reset_at, note) VALUES (?, ?, ?)",
+        body.scope, at, body.note,
+    )
+    await db.run(
+        "INSERT INTO budget_changes (changed_at, field, old_value, new_value) VALUES (?, ?, ?, ?)",
+        at, f"{body.scope}_reset", old_value, "0",
+    )
+
+    settings = await db.first("SELECT * FROM budget_settings WHERE id = 1")
+    changes = await db.all("SELECT * FROM budget_changes ORDER BY id DESC LIMIT 50")
+    forecast = await _budget_forecast(db, settings or {})
+    usage_after = await _current_usage(db, today_date)
+    resets = await _latest_resets(db)
+    return {"settings": settings, "changes": changes, "forecast": forecast, "usage": usage_after, "resets": resets}
 
 
 # ---------------------------------------------------------------------------
