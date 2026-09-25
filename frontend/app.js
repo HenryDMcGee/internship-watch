@@ -318,11 +318,49 @@
     e.classList.toggle("err", !!isError);
   }
 
+  var searchStartedAt = null;
+  var searchElapsedTimer = null;
+  var searchResultTimer = null;
+
+  function searchingLabel() {
+    if (!searchStartedAt) return "Searching…";
+    var mins = Math.floor((Date.now() - searchStartedAt) / 60000);
+    return mins < 1 ? "Searching…" : "Searching… " + mins + "m";
+  }
+
   function setSearchButtonBusy(busy) {
+    if (searchResultTimer) { clearTimeout(searchResultTimer); searchResultTimer = null; }
     $("searchNowBtn").disabled = busy;
     $("searchNowBtn").setAttribute("aria-busy", busy ? "true" : "false");
     $("searchNowSpinner").hidden = !busy;
-    $("searchNowLabel").textContent = busy ? "Searching…" : "Search now";
+    if (busy) {
+      if (!searchStartedAt) searchStartedAt = Date.now();
+      $("searchNowLabel").textContent = searchingLabel();
+      if (!searchElapsedTimer) searchElapsedTimer = setInterval(function () { $("searchNowLabel").textContent = searchingLabel(); }, 15000);
+    } else {
+      searchStartedAt = null;
+      if (searchElapsedTimer) { clearInterval(searchElapsedTimer); searchElapsedTimer = null; }
+      $("searchNowLabel").textContent = "Search now";
+    }
+  }
+
+  function briefSearchResult(result) {
+    if (!result) return "Done";
+    if (result.agent_outcome) {
+      var issues = (result.agent_outcome.steps_skipped || []).length + (result.agent_outcome.errors || []).length;
+      if (issues) return "Done, with issues";
+    }
+    var n = result.new_count || 0;
+    return n ? "Done: " + n + " new" : "Done: nothing new";
+  }
+
+  function showBriefSearchResult(text) {
+    $("searchNowLabel").textContent = text;
+    if (searchResultTimer) clearTimeout(searchResultTimer);
+    searchResultTimer = setTimeout(function () {
+      searchResultTimer = null;
+      $("searchNowLabel").textContent = "Search now";
+    }, 6000);
   }
 
   function formatSearchResult(result) {
@@ -347,6 +385,7 @@
       if (row.status === "completed") {
         setSearchButtonBusy(false);
         setSearchStatus(formatSearchResult(row.result));
+        showBriefSearchResult(briefSearchResult(row.result));
         loadPostings();
         return;
       }
@@ -354,6 +393,7 @@
         setSearchButtonBusy(false);
         var err = row.result && row.result.error ? row.result.error : "unknown error";
         setSearchStatus("Run failed: " + err, true);
+        showBriefSearchResult("Search failed");
         return;
       }
       setTimeout(function () { pollSearchRun(id); }, 5000);
@@ -782,10 +822,17 @@
   // Tabs and filter
   // -------------------------------------------------------------------
 
+  var MORE_TABS = ["sources", "analytics", "proposals"];
+
   function selectTab(t) {
     state.tab = t;
-    ["today", "earlier", "sources", "archived", "analytics", "proposals"].forEach(function (name) {
+    ["today", "earlier", "archived"].forEach(function (name) {
       $("tab" + name.charAt(0).toUpperCase() + name.slice(1)).setAttribute("aria-selected", t === name ? "true" : "false");
+    });
+    var isMore = MORE_TABS.indexOf(t) !== -1;
+    $("tabMore").setAttribute("aria-selected", isMore ? "true" : "false");
+    MORE_TABS.forEach(function (name) {
+      $("more" + name.charAt(0).toUpperCase() + name.slice(1)).setAttribute("aria-current", t === name ? "true" : "false");
     });
     setStatus("");
     if (t === "sources" && !state.sources.length) loadSources();
@@ -795,11 +842,72 @@
   }
   $("tabToday").addEventListener("click", function () { selectTab("today"); });
   $("tabEarlier").addEventListener("click", function () { selectTab("earlier"); });
-  $("tabSources").addEventListener("click", function () { selectTab("sources"); });
   $("tabArchived").addEventListener("click", function () { selectTab("archived"); });
-  $("tabAnalytics").addEventListener("click", function () { selectTab("analytics"); });
-  $("tabProposals").addEventListener("click", function () { selectTab("proposals"); });
   $("filter").addEventListener("input", function (e) { state.query = e.target.value.trim(); render(); });
+
+  // -------------------------------------------------------------------
+  // More menu (Sources, Analytics, Proposals)
+  // -------------------------------------------------------------------
+
+  function closeMoreMenu() {
+    $("moreMenu").hidden = true;
+    $("tabMore").setAttribute("aria-expanded", "false");
+  }
+
+  function openMoreMenu() {
+    $("moreMenu").hidden = false;
+    $("tabMore").setAttribute("aria-expanded", "true");
+  }
+
+  function isMoreMenuOpen() { return !$("moreMenu").hidden; }
+
+  $("tabMore").addEventListener("click", function () {
+    if (isMoreMenuOpen()) { closeMoreMenu(); return; }
+    openMoreMenu();
+    var items = $("moreMenu").querySelectorAll(".more-item");
+    if (items.length) items[0].focus();
+  });
+
+  $("tabMore").addEventListener("keydown", function (e) {
+    if (e.key === "ArrowDown" || e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      openMoreMenu();
+      var items = $("moreMenu").querySelectorAll(".more-item");
+      if (items.length) items[0].focus();
+    }
+  });
+
+  $("moreMenu").addEventListener("keydown", function (e) {
+    var items = Array.prototype.slice.call($("moreMenu").querySelectorAll(".more-item"));
+    var idx = items.indexOf(document.activeElement);
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      items[(idx + 1) % items.length].focus();
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      items[(idx - 1 + items.length) % items.length].focus();
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      closeMoreMenu();
+      $("tabMore").focus();
+    } else if (e.key === "Tab") {
+      closeMoreMenu();
+    }
+  });
+
+  MORE_TABS.forEach(function (name) {
+    $("more" + name.charAt(0).toUpperCase() + name.slice(1)).addEventListener("click", function () {
+      selectTab(name);
+      closeMoreMenu();
+      $("tabMore").focus();
+    });
+  });
+
+  document.addEventListener("click", function (e) {
+    if (!isMoreMenuOpen()) return;
+    if (e.target === $("tabMore") || $("tabMore").contains(e.target) || $("moreMenu").contains(e.target)) return;
+    closeMoreMenu();
+  });
 
   // -------------------------------------------------------------------
   // Titles
