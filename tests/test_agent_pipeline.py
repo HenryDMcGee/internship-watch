@@ -397,6 +397,64 @@ def test_run_agent_steps_records_last_scouted_at_for_the_batch_sent(empty_db):
     assert company["last_scouted_at"] == "2026-09-20T08:00:00"
 
 
+def test_run_agent_steps_records_last_source_found_at_even_without_a_recognized_feed(empty_db):
+    # A "Job boards" source Claude finds for a company isn't something
+    # `detect_feed` recognizes as an automatic feed, so `feed_type` stays
+    # empty -- but it's still proof the company is covered, which is what
+    # `scout.split_companies_by_coverage` needs to stop re-scouting it every
+    # run (issue #43).
+    company_id = _insert_company(empty_db, feed_type=None)
+    run_id = run(empty_db.run("INSERT INTO runs (kind, started_at, status) VALUES ('daily', '2026-09-20T08:00:00', 'running')"))
+
+    fake = _fake_run_claude({
+        "scout": (
+            '{"sources": [{"company_name": "Acme", "name": "Acme board", '
+            '"url": "https://boards.example/acme", "kind": "Job boards", "covers": "Acme"}]}'
+        ),
+        "improvement": '{"search_plan": null, "proposals": [], "title_suggestions": []}',
+    })
+
+    run(run_agent_steps(
+        empty_db, run_id=run_id, companies=[{"id": company_id, "name": "Acme", "feed_type": None}],
+        titles_doc=TITLES_DOC, locations_setting=LOCATIONS, budget_settings=SETTINGS,
+        status=_open_status(), today="2026-09-20", now_iso="2026-09-20T08:00:00", run_claude=fake,
+    ))
+
+    company = run(empty_db.first("SELECT * FROM companies WHERE id = ?", company_id))
+    assert company["feed_type"] is None
+    assert company["last_source_found_at"] == "2026-09-20T08:00:00"
+
+
+def test_run_agent_steps_skips_a_recently_covered_company_from_the_scout_batch(empty_db):
+    covered_id = _insert_company(
+        empty_db, name="Covered Co", feed_type=None, last_source_found_at="2026-09-19"
+    )
+    uncovered_id = _insert_company(empty_db, name="Uncovered Co", feed_type=None)
+    run_id = run(empty_db.run("INSERT INTO runs (kind, started_at, status) VALUES ('daily', '2026-09-20T08:00:00', 'running')"))
+
+    captured_prompts = {}
+
+    def fake(step, prompt, *, model):
+        captured_prompts[step] = prompt
+        web_searches = 3 if step == "scout" else 0
+        text = '{"sources": []}' if step == "scout" else '{"search_plan": null, "proposals": [], "title_suggestions": []}'
+        return ClaudeStepResult(step=step, model=model, text=text, web_searches=web_searches)
+
+    outcome = run(run_agent_steps(
+        empty_db, run_id=run_id,
+        companies=[
+            {"id": covered_id, "name": "Covered Co", "feed_type": None, "last_source_found_at": "2026-09-19"},
+            {"id": uncovered_id, "name": "Uncovered Co", "feed_type": None, "last_source_found_at": None},
+        ],
+        titles_doc=TITLES_DOC, locations_setting=LOCATIONS, budget_settings=SETTINGS,
+        status=_open_status(), today="2026-09-20", now_iso="2026-09-20T08:00:00", run_claude=fake,
+    ))
+
+    assert outcome["scout_skipped_count"] == 1
+    assert "Uncovered Co" in captured_prompts["scout"]
+    assert "Covered Co" not in captured_prompts["scout"]
+
+
 def test_run_agent_steps_does_not_record_last_scouted_at_when_scout_is_skipped(empty_db):
     company_id = _insert_company(empty_db, feed_type=None, rank=1)
     run_id = run(empty_db.run("INSERT INTO runs (kind, started_at, status) VALUES ('daily', '2026-09-20T08:00:00', 'running')"))

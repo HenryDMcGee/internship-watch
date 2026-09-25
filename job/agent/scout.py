@@ -7,6 +7,8 @@ needs Henry's approval, so that goes to `proposals` instead (see
 """
 from __future__ import annotations
 
+from datetime import date, timedelta
+
 from job.agent.client import ClaudeStepResult, resolve_model, run_claude_step
 from job.agent.schemas import (
     ClaudeOutputError,
@@ -18,6 +20,35 @@ from job.agent.schemas import (
 DEFAULT_SEARCH_LIMIT_PER_RUN = 35
 PROMOTE_AFTER_FOUND = 1  # a trial source becomes active after this many real open postings
 DEMOTE_AFTER_EMPTY_CHECKS = 3  # demoted after this many checks in a row finding nothing
+COVERAGE_STALE_AFTER_DAYS = 30  # a company found this recently isn't scouted again yet
+
+
+def split_companies_by_coverage(
+    companies: list[dict], *, today: date, stale_after_days: int = COVERAGE_STALE_AFTER_DAYS,
+) -> tuple[list[dict], int]:
+    """Splits `companies` (already filtered to those with no working feed)
+    into (needs_scout, skipped_count).
+
+    A company the scout already found a source for recently is covered even
+    though `feed_type` is still empty -- not every found source is a feed
+    the daily fetchers can read automatically (see
+    `pipeline._apply_scout_company_feed`), so `feed_type` alone isn't proof
+    a company still needs searching. Re-scouting it anyway is exactly what
+    wasted 58 of 64 sources found in run 26 (issue #43): Claude re-finding
+    the same source it already reported. `last_source_found_at` goes stale
+    after `stale_after_days` so a source that turned out to be dead gets
+    another look eventually.
+    """
+    cutoff = today - timedelta(days=stale_after_days)
+    needs_scout = []
+    skipped = 0
+    for company in companies:
+        found_at = company.get("last_source_found_at")
+        if found_at and date.fromisoformat(found_at[:10]) > cutoff:
+            skipped += 1
+            continue
+        needs_scout.append(company)
+    return needs_scout, skipped
 
 
 def order_companies_for_scout(companies: list[dict], *, limit: int | None = None) -> list[dict]:

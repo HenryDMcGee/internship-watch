@@ -1,3 +1,5 @@
+from datetime import date
+
 import pytest
 
 from job.agent.client import ClaudeStepResult
@@ -9,6 +11,7 @@ from job.agent.scout import (
     next_source_status,
     order_companies_for_scout,
     run_scout,
+    split_companies_by_coverage,
 )
 
 
@@ -136,3 +139,29 @@ def test_order_companies_for_scout_respects_the_limit():
     ordered = order_companies_for_scout(companies, limit=2)
     assert len(ordered) == 2
     assert [c["name"] for c in ordered] == ["Company 0", "Company 1"]
+
+
+def test_split_companies_by_coverage_skips_a_recently_found_company():
+    companies = [
+        {"name": "Covered", "last_source_found_at": "2026-09-20"},
+        {"name": "Uncovered", "last_source_found_at": None},
+    ]
+    needs_scout, skipped = split_companies_by_coverage(companies, today=date(2026, 9, 25))
+    assert [c["name"] for c in needs_scout] == ["Uncovered"]
+    assert skipped == 1
+
+
+def test_split_companies_by_coverage_rescout_after_30_days():
+    # A source found over 30 days ago might be dead by now -- it goes back
+    # into rotation instead of being skipped forever.
+    companies = [{"name": "Stale", "last_source_found_at": "2026-08-01"}]
+    needs_scout, skipped = split_companies_by_coverage(companies, today=date(2026, 9, 25))
+    assert [c["name"] for c in needs_scout] == ["Stale"]
+    assert skipped == 0
+
+
+def test_split_companies_by_coverage_never_scouted_needs_scout():
+    companies = [{"name": "New", "last_source_found_at": None}]
+    needs_scout, skipped = split_companies_by_coverage(companies, today=date(2026, 9, 25))
+    assert [c["name"] for c in needs_scout] == ["New"]
+    assert skipped == 0

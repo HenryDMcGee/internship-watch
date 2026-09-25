@@ -36,6 +36,7 @@ from budgets import (
 )
 from db import Database
 from github_client import GitHubApiError, GitHubClient
+from sql_helpers import in_json
 from titles import load_titles_doc, open_or_update_titles_pr, validate_titles_doc, BASE_BRANCH, TITLES_BRANCH
 
 REPO = "HenryDMcGee/internship-watch"
@@ -471,9 +472,8 @@ async def check_companies(body: CheckCompaniesRequest, request: Request, db: Dat
     if not body.company_ids:
         raise HTTPException(status_code=422, detail="company_ids is required")
 
-    found = await db.all(
-        f"SELECT id FROM companies WHERE id IN ({', '.join('?' for _ in body.company_ids)})", *body.company_ids
-    )
+    clause, param = in_json("id", body.company_ids)
+    found = await db.all(f"SELECT id FROM companies WHERE {clause}", param)
     if len(found) != len(set(body.company_ids)):
         raise HTTPException(status_code=404, detail="One or more companies were not found")
 

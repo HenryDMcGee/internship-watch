@@ -1,5 +1,6 @@
 import asyncio
 import json
+import sqlite3
 
 import pytest
 
@@ -607,3 +608,22 @@ def test_run_marks_run_row_failed_instead_of_leaving_it_running(empty_db, monkey
     assert len(runs) == 1
     assert runs[0]["status"] == "failed"
     assert "boom" in runs[0]["summary"]
+    # A crashed run must still get a finish time, or the dashboard's Search
+    # now button (gated on no run being "still running") stays locked forever.
+    assert runs[0]["finished_at"] is not None
+
+
+def test_verify_and_prune_survives_more_than_100_companies(empty_db):
+    # The daily run crashed in `_verify_and_prune` once the number of
+    # ranked/pinned companies passed D1's 100-bound-parameter limit (issue
+    # #43): the `company_id IN (?, ?, ...)` clause bound one parameter per
+    # company. Pinning the test connection's own SQLite variable limit to
+    # the same 100 makes this test fail the same way a real D1 query would
+    # if the `json_each`-based fix regresses.
+    empty_db._conn.setlimit(sqlite3.SQLITE_LIMIT_VARIABLE_NUMBER, 100)
+    companies = [{"id": _insert_company(empty_db, name=f"Company {i}")} for i in range(500)]
+
+    run(run_module._verify_and_prune(
+        empty_db, companies, feed_ok={}, current_urls={},
+        browser_budget=run_module.BrowserBudget(remaining=50),
+    ))
