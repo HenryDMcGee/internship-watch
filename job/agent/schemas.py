@@ -358,6 +358,48 @@ def split_scout_sources(payload: dict) -> tuple[list[dict], list[str]]:
 
 
 # ---------------------------------------------------------------------------
+# Careers page repair (issue #55)
+# ---------------------------------------------------------------------------
+
+def validate_repair_document(payload) -> list[str]:
+    """Shape-only check for a careers-repair reply, matching
+    `validate_scout_document`'s reasoning: one malformed replacement must
+    not sink every other real one the same call found. Per-item problems
+    are handled separately by `split_repair_replacements`.
+    """
+    if not isinstance(payload, dict):
+        return ["document must be a JSON object"]
+    if not isinstance(payload.get("replacements"), list):
+        return ["'replacements' must be a list"]
+    return []
+
+
+def validate_repair_replacement(item) -> list[str]:
+    if not isinstance(item, dict):
+        return ["must be an object"]
+    problems: list[str] = []
+    for field_name in ("company_name", "url"):
+        if not _is_nonempty_str(item.get(field_name)):
+            problems.append(f"{field_name} must be a non-empty string")
+    if not _is_str_or_none(item.get("note")):
+        problems.append("note must be a string")
+    return problems
+
+
+def split_repair_replacements(payload: dict) -> tuple[list[dict], list[str]]:
+    items = payload.get("replacements") or []
+    valid: list[dict] = []
+    problems: list[str] = []
+    for i, item in enumerate(items):
+        item_problems = validate_repair_replacement(item)
+        if item_problems:
+            problems.append(f"replacements[{i}]: " + "; ".join(item_problems))
+        else:
+            valid.append(item)
+    return valid, problems
+
+
+# ---------------------------------------------------------------------------
 # Daily improvement
 # ---------------------------------------------------------------------------
 

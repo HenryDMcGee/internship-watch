@@ -14,7 +14,7 @@ from __future__ import annotations
 import json
 from datetime import date
 
-from job.agent import discovery, improvement, scout
+from job.agent import careers_repair, discovery, improvement, scout
 from job.agent import classification as classification_mod
 from job.agent import unclear as unclear_mod
 from job.agent.budgets import BudgetStatus
@@ -45,7 +45,7 @@ async def run_agent_steps(
 ) -> dict:
     outcome = {
         "discovery_count": 0, "discovery_new_count": 0, "classification_count": 0, "scout_count": 0,
-        "scout_skipped_count": 0, "repeats_recognized": 0, "rejections_skipped": 0,
+        "scout_skipped_count": 0, "repeats_recognized": 0, "rejections_skipped": 0, "careers_repair_count": 0,
         "steps_skipped": [], "steps_succeeded": [], "claude_limit_hit": False, "errors": [], "title_pr": None,
     }
     settings_ver = fingerprint.settings_version(titles_doc, locations_setting)
@@ -176,6 +176,26 @@ async def run_agent_steps(
         )
         if "scout" in steps_succeeded:
             await _mark_companies_scouted(db, scout_batch, now_iso=now_iso)
+
+    # Companies whose careers page has failed 3 checks in a row
+    # (job/run.py's `_run_careers_pages`) -- the repair scout looks for a
+    # better page for each, preferring an internship-filtered listing page
+    # (issue #55).
+    flagged_companies = [c for c in companies if c.get("careers_page_flagged")]
+
+    async def do_careers_repair():
+        found, result = careers_repair.run_repair(
+            flagged_companies, model=budget_settings.get("model_scout", "sonnet"),
+            search_limit_per_run=search_limit_per_run, run_claude=run_claude,
+        )
+        await record("careers_repair", result)
+        return found
+
+    if flagged_companies:
+        replacements = await guarded("careers_repair", do_careers_repair) or []
+        outcome["careers_repair_count"] = await _store_careers_repair_proposals(
+            db, replacements, companies=flagged_companies, now_iso=now_iso,
+        )
 
     async def do_improvement():
         # Not `SELECT * FROM runs WHERE id = ?` -- at this point in the daily
@@ -426,6 +446,43 @@ async def _apply_scout_company_feed(db, found: dict, companies_by_name: dict) ->
         found["url"], feed_type, feed_id, company["id"],
     )
     return True
+
+
+async def _store_careers_repair_proposals(
+    db, replacements: list[dict], *, companies: list[dict], now_iso: str,
+) -> int:
+    """One `careers_repair` proposal per usable replacement (issue #55).
+    Skipped without a proposal (not an error) when Claude names a company
+    that wasn't in the flagged batch it was sent, proposes the company's
+    current URL back, or proposes a URL Henry already rejected for that
+    company -- `companies.careers_url_rejected`, updated by
+    `api/src/main.py`'s reject handler, is exactly what keeps that last case
+    from repeating run after run.
+    """
+    companies_by_name = {normalize_company_name(c["name"]): c for c in companies if c.get("name")}
+    stored = 0
+    for r in replacements:
+        company = companies_by_name.get(normalize_company_name(r.get("company_name") or ""))
+        if not company:
+            continue
+        new_url = (r.get("url") or "").strip()
+        if not new_url or new_url == company.get("careers_url"):
+            continue
+        rejected = company.get("careers_url_rejected")
+        if isinstance(rejected, str):
+            rejected = json.loads(rejected or "[]")
+        if new_url in (rejected or []):
+            continue
+        await db.run(
+            "INSERT INTO proposals (kind, payload, status, created_at) VALUES ('careers_repair', ?, 'pending', ?)",
+            json.dumps({
+                "company_id": company["id"], "company_name": company["name"],
+                "old_url": company.get("careers_url"), "new_url": new_url, "note": r.get("note"),
+            }),
+            now_iso,
+        )
+        stored += 1
+    return stored
 
 
 async def _mark_companies_scouted(db, companies: list[dict], *, now_iso: str) -> None:

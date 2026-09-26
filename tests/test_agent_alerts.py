@@ -2,6 +2,10 @@ import asyncio
 
 from job.agent.alerts import (
     ALERT_TYPES,
+    BROWSER_RUN_100,
+    BROWSER_RUN_80,
+    BROWSER_RUN_MONTH_100,
+    BROWSER_RUN_MONTH_80,
     BUDGET_100,
     BUDGET_80,
     CLAUDE_LIMIT,
@@ -9,11 +13,14 @@ from job.agent.alerts import (
     CLAUDE_STEP_ISSUE,
     RUN_FAILED,
     USAGE_SPIKE,
+    WORKERS_PAID_SUGGESTED,
     claude_limit_alert,
     claude_not_configured_alert,
     claude_step_issue_alert,
+    evaluate_browser_run_alerts,
     evaluate_budget_alerts,
     evaluate_spike_alert,
+    evaluate_workers_paid_suggestion,
     record_alerts,
     run_failed_alert,
 )
@@ -77,7 +84,68 @@ def test_claude_not_configured_alert_type_and_severity():
 def test_all_alert_types_registered():
     assert ALERT_TYPES == {
         BUDGET_80, BUDGET_100, USAGE_SPIKE, CLAUDE_LIMIT, RUN_FAILED, CLAUDE_NOT_CONFIGURED, CLAUDE_STEP_ISSUE,
+        BROWSER_RUN_80, BROWSER_RUN_100, BROWSER_RUN_MONTH_80, BROWSER_RUN_MONTH_100, WORKERS_PAID_SUGGESTED,
     }
+
+
+# -- Browser Run (issue #55) -------------------------------------------------
+
+def test_no_browser_run_alert_below_80_percent():
+    assert evaluate_browser_run_alerts(minutes_used_today=5.0, daily_minutes_budget=9.0) == []
+
+
+def test_browser_run_80_alert_at_80_percent_of_daily_budget():
+    alerts = evaluate_browser_run_alerts(minutes_used_today=7.2, daily_minutes_budget=9.0)
+    assert [a.type for a in alerts] == [BROWSER_RUN_80]
+
+
+def test_browser_run_100_alert_at_100_percent_not_also_80():
+    alerts = evaluate_browser_run_alerts(minutes_used_today=9.0, daily_minutes_budget=9.0)
+    assert [a.type for a in alerts] == [BROWSER_RUN_100]
+
+
+def test_browser_run_monthly_alert_only_on_paid_plan():
+    alerts = evaluate_browser_run_alerts(
+        minutes_used_today=1.0, daily_minutes_budget=9.0, plan="free",
+        hours_used_month=9.0, hours_included_month=10.0,
+    )
+    assert alerts == []
+
+
+def test_browser_run_monthly_80_alert_on_paid_plan():
+    alerts = evaluate_browser_run_alerts(
+        minutes_used_today=1.0, daily_minutes_budget=9.0, plan="paid",
+        hours_used_month=8.5, hours_included_month=10.0,
+    )
+    assert [a.type for a in alerts] == [BROWSER_RUN_MONTH_80]
+
+
+def test_browser_run_monthly_100_alert_on_paid_plan_not_also_80():
+    alerts = evaluate_browser_run_alerts(
+        minutes_used_today=1.0, daily_minutes_budget=9.0, plan="paid",
+        hours_used_month=10.5, hours_included_month=10.0,
+    )
+    assert [a.type for a in alerts] == [BROWSER_RUN_MONTH_100]
+
+
+def test_browser_run_daily_and_monthly_alerts_can_both_fire():
+    alerts = evaluate_browser_run_alerts(
+        minutes_used_today=9.0, daily_minutes_budget=9.0, plan="paid",
+        hours_used_month=10.5, hours_included_month=10.0,
+    )
+    assert {a.type for a in alerts} == {BROWSER_RUN_100, BROWSER_RUN_MONTH_100}
+
+
+def test_workers_paid_suggestion_needs_3_distinct_days():
+    assert evaluate_workers_paid_suggestion(["2026-09-20", "2026-09-21"]) is None
+    alert = evaluate_workers_paid_suggestion(["2026-09-20", "2026-09-21", "2026-09-22"])
+    assert alert is not None
+    assert alert.type == WORKERS_PAID_SUGGESTED
+
+
+def test_workers_paid_suggestion_dedupes_days():
+    # 3 runs the same day must not look like 3 distinct days.
+    assert evaluate_workers_paid_suggestion(["2026-09-20", "2026-09-20", "2026-09-20"]) is None
 
 
 def test_claude_step_issue_alert_is_a_warning_when_something_still_ran():

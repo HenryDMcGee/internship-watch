@@ -14,6 +14,11 @@ from __future__ import annotations
 import hashlib
 import re
 
+# After this many failed checks in a row, job/run.py flags the company as
+# "careers page not working" (companies.careers_page_flagged) for the
+# Sources tab and the repair scout (issue #55).
+FLAG_AFTER_CONSECUTIVE_FAILURES = 3
+
 
 def hash_page_text(text: str) -> str:
     """A stable fingerprint of a careers page's visible text: whitespace
@@ -54,7 +59,11 @@ async def record_changed(
         )
 
 
-async def record_failure(db, company_id: int, *, reason: str, now_iso: str, existing: dict | None) -> None:
+async def record_failure(db, company_id: int, *, reason: str, now_iso: str, existing: dict | None) -> int:
+    """Returns the new `consecutive_failures` count, so a caller (job/run.py)
+    can flag the company once it reaches the "careers page not working"
+    threshold (issue #55) without a second read of this row.
+    """
     consecutive = ((existing or {}).get("consecutive_failures") or 0) + 1
     if existing:
         await db.run(
@@ -68,3 +77,4 @@ async def record_failure(db, company_id: int, *, reason: str, now_iso: str, exis
             "VALUES (?, ?, 'failed', ?, ?)",
             company_id, now_iso, consecutive, reason,
         )
+    return consecutive

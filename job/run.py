@@ -32,8 +32,10 @@ from job.agent.alerts import (
     claude_limit_alert,
     claude_not_configured_alert,
     claude_step_issue_alert,
+    evaluate_browser_run_alerts,
     evaluate_budget_alerts,
     evaluate_spike_alert,
+    evaluate_workers_paid_suggestion,
     record_alerts,
     run_failed_alert,
 )
@@ -55,6 +57,15 @@ from job.verify.pipeline import verify_posting
 from sql_helpers import in_json
 
 CENTRAL = ZoneInfo("America/Chicago") if ZoneInfo else None
+
+# Workers Paid's included Browser Rendering hours per month, and Henry's own
+# daily budget default -- both from the issue text itself rather than
+# Cloudflare's docs (unreachable while building this, same gap as
+# `job/fetchers/careers_pages.py`'s module docstring; flagged there for
+# Henry to confirm). Duplicated in `api/src/browser_run_budgets.py` since the
+# deployed Worker only ships `api/src` (see `api/src/budgets.py`'s docstring
+# for the same reasoning).
+BROWSER_RUN_PAID_INCLUDED_MONTHLY_HOURS = 10.0
 
 
 def now_iso() -> str:
@@ -224,6 +235,13 @@ async def _run_careers_pages(
     companies_by_id = {c["id"]: c for c in candidates}
     covered_ids: set[int] = set()
     posting_ids: list[int] = []
+    # Per-method breakdown for `browser_run_usage` (issue #55) -- kept
+    # separate from `stats` (used for the run summary line only) since
+    # Analytics needs the changed/unchanged split by method too.
+    per_method = {
+        "browser_run": {"unchanged": 0, "changed": 0, "measured_by": set()},
+        "backup": {"unchanged": 0, "changed": 0},
+    }
 
     for page in outcome.pages:
         company = companies_by_id[page.company_id]
@@ -236,7 +254,13 @@ async def _run_careers_pages(
             # last_feed_status` isn't reused for it, since that column's own
             # CHECK constraint only allows the feed fetcher's three values
             # ('ok', 'error', 'no_source').
-            await careers_snapshot.record_failure(db, page.company_id, reason=page.reason, now_iso=now_iso(), existing=existing)
+            consecutive_failures = await careers_snapshot.record_failure(
+                db, page.company_id, reason=page.reason, now_iso=now_iso(), existing=existing
+            )
+            if consecutive_failures >= careers_snapshot.FLAG_AFTER_CONSECUTIVE_FAILURES:
+                await db.run(
+                    "UPDATE companies SET careers_page_flagged = 1 WHERE id = ?", page.company_id
+                )
             await db.run("UPDATE companies SET last_result_at = ? WHERE id = ?", now_iso(), page.company_id)
             continue
 
@@ -244,16 +268,20 @@ async def _run_careers_pages(
         await db.run("UPDATE companies SET last_result_at = ? WHERE id = ?", now_iso(), page.company_id)
         if page.method == "browser_run":
             stats["browser_run"] += 1
+            if page.measured_by:
+                per_method["browser_run"]["measured_by"].add(page.measured_by)
         else:
             stats["backup"] += 1
 
         content_hash = careers_snapshot.hash_page_text(page.text)
         if existing and existing.get("content_hash") == content_hash:
             stats["unchanged"] += 1
+            per_method[page.method]["unchanged"] += 1
             await careers_snapshot.record_unchanged(db, page.company_id, method=page.method, now_iso=now_iso())
             continue
 
         stats["changed"] += 1
+        per_method[page.method]["changed"] += 1
         await careers_snapshot.record_changed(
             db, page.company_id, content_hash, method=page.method, now_iso=now_iso(), existing=existing,
         )
@@ -299,7 +327,46 @@ async def _run_careers_pages(
             )
             posting_ids.append(new_id)
 
+    await _record_browser_run_usage(db, run_id=run_id, outcome=outcome, per_method=per_method, now_iso=now_iso())
     return covered_ids, posting_ids, stats
+
+
+async def _record_browser_run_usage(db, *, run_id: int, outcome, per_method: dict, now_iso: str) -> None:
+    """One `browser_run_usage` row per method actually used this run (issue
+    #55) -- skipped entirely for a method with nothing to show (no pages
+    loaded or failed via it), so a quiet run doesn't pile up empty rows.
+    """
+    measured_by_seen = per_method["browser_run"]["measured_by"]
+    # "elapsed" is the less accurate of the two, so a run that measured any
+    # page's time that way is labeled "elapsed" even if others in the same
+    # run got Cloudflare's own reported time (test case 13) -- rather than
+    # silently claiming a precision the run didn't actually have throughout.
+    if "elapsed" in measured_by_seen:
+        measured_by = "elapsed"
+    elif "cloudflare_header" in measured_by_seen:
+        measured_by = "cloudflare_header"
+    else:
+        measured_by = None
+
+    if outcome.browser_run_pages or outcome.browser_run_failures:
+        await db.run(
+            """INSERT INTO browser_run_usage
+               (run_id, at, method, pages, unchanged, changed, browser_ms, measured_by, failures, backup_reason)
+               VALUES (?, ?, 'browser_run', ?, ?, ?, ?, ?, ?, NULL)""",
+            run_id, now_iso, outcome.browser_run_pages,
+            per_method["browser_run"]["unchanged"], per_method["browser_run"]["changed"],
+            round(outcome.browser_run_minutes_used * 60000), measured_by, outcome.browser_run_failures,
+        )
+    if outcome.backup_pages or outcome.backup_failures:
+        backup_reason = outcome.switch_reason
+        await db.run(
+            """INSERT INTO browser_run_usage
+               (run_id, at, method, pages, unchanged, changed, browser_ms, measured_by, failures, backup_reason)
+               VALUES (?, ?, 'backup', ?, ?, ?, NULL, NULL, ?, ?)""",
+            run_id, now_iso, outcome.backup_pages,
+            per_method["backup"]["unchanged"], per_method["backup"]["changed"],
+            outcome.backup_failures, backup_reason,
+        )
 
 
 def _careers_pages_summary_line(stats: dict | None) -> str | None:
@@ -575,6 +642,40 @@ async def _seven_day_avg_tokens(db, today: str) -> float:
     return sum((r["tokens"] or 0) for r in rows) / 7.0
 
 
+async def _browser_run_alert_inputs(db, *, today: str) -> tuple[float, float, list[str]]:
+    """(minutes_used_today, hours_used_this_month, capacity_backup_days) for
+    the Browser Run alerts (issue #55) -- all from `browser_run_usage`,
+    bucketed by Central calendar day/month like every other budget here.
+    """
+    today_date = date.fromisoformat(today)
+    month_start = today_date.replace(day=1).isoformat()
+    week_start = (today_date - timedelta(days=6)).isoformat()
+
+    today_row = await db.first(
+        "SELECT SUM(browser_ms) AS ms FROM browser_run_usage "
+        "WHERE method = 'browser_run' AND substr(at, 1, 10) = ?",
+        today,
+    )
+    minutes_used_today = ((today_row or {}).get("ms") or 0) / 60000.0
+
+    month_row = await db.first(
+        "SELECT SUM(browser_ms) AS ms FROM browser_run_usage "
+        "WHERE method = 'browser_run' AND substr(at, 1, 10) >= ? AND substr(at, 1, 10) <= ?",
+        month_start, today,
+    )
+    hours_used_month = ((month_row or {}).get("ms") or 0) / 3600000.0
+
+    capacity_rows = await db.all(
+        "SELECT DISTINCT substr(at, 1, 10) AS d FROM browser_run_usage "
+        "WHERE method = 'backup' AND backup_reason IN ('minutes', 'quota') "
+        "AND substr(at, 1, 10) >= ? AND substr(at, 1, 10) <= ?",
+        week_start, today,
+    )
+    capacity_backup_days = [r["d"] for r in capacity_rows]
+
+    return minutes_used_today, hours_used_month, capacity_backup_days
+
+
 async def _finish_daily_run(db, *, run_status: str, run_reason: str | None, agent_outcome: dict | None = None) -> None:
     """Evaluates alerts and sends the daily Claude routine summary. Runs
     after every daily run, including failed ones, per `docs/plan.md`. Never
@@ -590,6 +691,20 @@ async def _finish_daily_run(db, *, run_status: str, run_reason: str | None, agen
         spike = evaluate_spike_alert(status.today.tokens, await _seven_day_avg_tokens(db, today_str))
         if spike:
             candidates.append(spike)
+
+        minutes_used_today, hours_used_month, capacity_backup_days = await _browser_run_alert_inputs(db, today=today_str)
+        candidates.extend(evaluate_browser_run_alerts(
+            minutes_used_today=minutes_used_today,
+            daily_minutes_budget=float(
+                budget_settings.get("browser_run_daily_minutes") or careers_pages.DEFAULT_BROWSER_RUN_DAILY_MINUTES
+            ),
+            plan=budget_settings.get("browser_run_plan") or "free",
+            hours_used_month=hours_used_month,
+            hours_included_month=BROWSER_RUN_PAID_INCLUDED_MONTHLY_HOURS,
+        ))
+        workers_paid_suggestion = evaluate_workers_paid_suggestion(capacity_backup_days)
+        if workers_paid_suggestion:
+            candidates.append(workers_paid_suggestion)
         if agent_outcome and agent_outcome.get("claude_limit_hit"):
             candidates.append(claude_limit_alert("; ".join(agent_outcome.get("errors") or []) or "usage limit reached"))
         if not claude_is_configured():

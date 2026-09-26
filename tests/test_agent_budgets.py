@@ -103,17 +103,19 @@ def test_cut_order_nothing_cut_below_80_percent():
 
 def test_cut_order_cuts_scout_first_at_80_percent():
     status = _status(today=UsageTotals(tokens=800))  # 80%
-    assert status.steps_to_cut() == ["scout"]
+    # careers_repair (issue #55) rides scout's own share and threshold, so
+    # it's cut at the same point scout is.
+    assert status.steps_to_cut() == ["scout", "careers_repair"]
 
 
 def test_cut_order_cuts_scout_and_low_yield_discovery_at_90_percent():
     status = _status(today=UsageTotals(tokens=900))  # 90%
-    assert status.steps_to_cut() == ["scout", "discovery_low_yield"]
+    assert status.steps_to_cut() == ["scout", "careers_repair", "discovery_low_yield"]
 
 
 def test_cut_order_cuts_everything_non_mandatory_at_100_percent():
     status = _status(today=UsageTotals(tokens=1000))  # 100%
-    assert status.steps_to_cut() == ["scout", "discovery_low_yield", "unclear_page", "improvement"]
+    assert status.steps_to_cut() == ["scout", "careers_repair", "discovery_low_yield", "unclear_page", "improvement"]
 
 
 def test_cut_order_never_includes_classification_or_pruning():

@@ -226,6 +226,141 @@ def test_backup_loaded_page_reuses_change_detection_across_runs(empty_db, monkey
     assert snapshot["status"] == "unchanged"
 
 
+def test_company_flagged_after_3_failures_in_a_row(empty_db, monkeypatch):
+    # issue #55 test case 1: 3 failures in a row flags the company; one
+    # success in between resets the count and prevents the flag.
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "test-token")
+    company_id = _insert_company(empty_db, name="Acme", feed_type=None, feed_id=None, careers_url="https://acme.example/careers")
+
+    call_count = {"n": 0}
+    outcomes = [
+        cp.PageOutcome(company_id=company_id, url="https://acme.example/careers", ok=False, reason=cp.REASON_TIMEOUT),
+        cp.PageOutcome(company_id=company_id, url="https://acme.example/careers", ok=True, text="jobs page",
+                       method="browser_run", browser_minutes=1.0),
+        cp.PageOutcome(company_id=company_id, url="https://acme.example/careers", ok=False, reason=cp.REASON_TIMEOUT),
+        cp.PageOutcome(company_id=company_id, url="https://acme.example/careers", ok=False, reason=cp.REASON_TIMEOUT),
+        cp.PageOutcome(company_id=company_id, url="https://acme.example/careers", ok=False, reason=cp.REASON_TIMEOUT),
+    ]
+
+    def fake_run_careers_pages(candidates, **kwargs):
+        page = outcomes[call_count["n"]]
+        call_count["n"] += 1
+        return cp.CareersRunOutcome(
+            pages=[page], browser_run_minutes_used=page.browser_minutes or 0.0, switch_reason=None,
+            browser_run_pages=1 if page.ok else 0, browser_run_failures=0 if page.ok else 1,
+        )
+
+    monkeypatch.setattr(run_module.careers_pages, "run_careers_pages", fake_run_careers_pages)
+
+    def fake_run_claude_step(step, prompt, *, model, **kwargs):
+        return ClaudeStepResult(step=step, model=model, text=_empty_discovery_scout_improvement(step, model),
+                                 web_searches=3 if step in ("discovery", "scout") else 0)
+
+    monkeypatch.setattr(agent_client, "run_claude_step", fake_run_claude_step)
+
+    # Failure 1 of a possible streak.
+    run(run_module.run(empty_db, kind="daily"))
+    company = run(empty_db.first("SELECT careers_page_flagged FROM companies WHERE id = ?", company_id))
+    assert company["careers_page_flagged"] == 0
+
+    # A success in between resets the streak.
+    run(run_module.run(empty_db, kind="daily"))
+    company = run(empty_db.first("SELECT careers_page_flagged FROM companies WHERE id = ?", company_id))
+    assert company["careers_page_flagged"] == 0
+
+    # 1 failure since the reset.
+    run(run_module.run(empty_db, kind="daily"))
+    company = run(empty_db.first("SELECT careers_page_flagged FROM companies WHERE id = ?", company_id))
+    assert company["careers_page_flagged"] == 0
+
+    # 2 failures in a row since the reset -- still not flagged.
+    run(run_module.run(empty_db, kind="daily"))
+    company = run(empty_db.first("SELECT careers_page_flagged FROM companies WHERE id = ?", company_id))
+    assert company["careers_page_flagged"] == 0
+
+    # 3rd failure in a row since the reset -- now flagged.
+    run(run_module.run(empty_db, kind="daily"))
+    company = run(empty_db.first("SELECT careers_page_flagged FROM companies WHERE id = ?", company_id))
+    assert company["careers_page_flagged"] == 1
+
+
+def test_browser_run_usage_recorded_per_method(empty_db, monkeypatch):
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "test-token")
+    browser_id = _insert_company(empty_db, name="Acme", feed_type=None, feed_id=None, careers_url="https://acme.example/careers")
+    backup_id = _insert_company(empty_db, name="Beta", feed_type=None, feed_id=None, careers_url="https://beta.example/careers")
+
+    def fake_run_careers_pages(candidates, **kwargs):
+        return cp.CareersRunOutcome(
+            pages=[
+                cp.PageOutcome(company_id=browser_id, url="https://acme.example/careers", ok=True, text="jobs",
+                               method="browser_run", browser_minutes=2.0, measured_by=cp.MEASURED_BY_ELAPSED),
+                cp.PageOutcome(company_id=backup_id, url="https://beta.example/careers", ok=True, text="jobs",
+                               method="backup"),
+            ],
+            browser_run_minutes_used=2.0, switch_reason="minutes",
+            browser_run_pages=1, browser_run_failures=0, backup_pages=1, backup_failures=0,
+        )
+
+    monkeypatch.setattr(run_module.careers_pages, "run_careers_pages", fake_run_careers_pages)
+
+    def fake_run_claude_step(step, prompt, *, model, **kwargs):
+        if step == "careers_extraction":
+            return ClaudeStepResult(step=step, model=model, text='{"listings": []}')
+        return ClaudeStepResult(step=step, model=model, text=_empty_discovery_scout_improvement(step, model),
+                                 web_searches=3 if step in ("discovery", "scout") else 0)
+
+    monkeypatch.setattr(agent_client, "run_claude_step", fake_run_claude_step)
+
+    run(run_module.run(empty_db, kind="daily"))
+
+    rows = run(empty_db.all("SELECT * FROM browser_run_usage ORDER BY method"))
+    assert len(rows) == 2
+    backup_row = next(r for r in rows if r["method"] == "backup")
+    browser_row = next(r for r in rows if r["method"] == "browser_run")
+
+    assert browser_row["pages"] == 1
+    assert browser_row["changed"] == 1
+    assert browser_row["browser_ms"] == 120000
+    assert browser_row["measured_by"] == "elapsed"
+    assert browser_row["failures"] == 0
+    assert browser_row["backup_reason"] is None
+
+    assert backup_row["pages"] == 1
+    assert backup_row["changed"] == 1
+    assert backup_row["browser_ms"] is None
+    assert backup_row["failures"] == 0
+    assert backup_row["backup_reason"] == "minutes"
+
+
+def test_browser_run_100_alert_fires_when_daily_minutes_budget_is_reached(empty_db, monkeypatch):
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "test-token")
+    company_id = _insert_company(empty_db, name="Acme", feed_type=None, feed_id=None, careers_url="https://acme.example/careers")
+
+    def fake_run_careers_pages(candidates, **kwargs):
+        return cp.CareersRunOutcome(
+            pages=[cp.PageOutcome(company_id=company_id, url="https://acme.example/careers", ok=True,
+                                   text="jobs", method="browser_run", browser_minutes=9.0,
+                                   measured_by=cp.MEASURED_BY_CLOUDFLARE_HEADER)],
+            browser_run_minutes_used=9.0, switch_reason=None,
+            browser_run_pages=1, browser_run_failures=0,
+        )
+
+    monkeypatch.setattr(run_module.careers_pages, "run_careers_pages", fake_run_careers_pages)
+
+    def fake_run_claude_step(step, prompt, *, model, **kwargs):
+        if step == "careers_extraction":
+            return ClaudeStepResult(step=step, model=model, text='{"listings": []}')
+        return ClaudeStepResult(step=step, model=model, text=_empty_discovery_scout_improvement(step, model),
+                                 web_searches=3 if step in ("discovery", "scout") else 0)
+
+    monkeypatch.setattr(agent_client, "run_claude_step", fake_run_claude_step)
+
+    run(run_module.run(empty_db, kind="daily"))
+
+    alerts = run(empty_db.all("SELECT * FROM alerts"))
+    assert any(a["type"] == "browser_run_100" for a in alerts)
+
+
 def _stats(**overrides) -> dict:
     row = {
         "browser_run": 0, "backup": 0, "unchanged": 0, "changed": 0, "failed": 0,

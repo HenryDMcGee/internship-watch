@@ -4,11 +4,14 @@ from job.agent.schemas import (
     ClaudeOutputError,
     parse_and_validate,
     split_classification_decisions,
+    split_repair_replacements,
     split_scout_sources,
     validate_classification_document,
     validate_classification_output,
     validate_discovery_output,
     validate_improvement_output,
+    validate_repair_document,
+    validate_repair_replacement,
     validate_scout_document,
     validate_scout_output,
     validate_scout_source,
@@ -210,6 +213,36 @@ def test_split_scout_sources_keeps_good_entries_and_reports_bad_ones():
     assert [s["name"] for s in valid] == ["Good"]
     assert len(problems) == 1
     assert "sources[1]" in problems[0]
+
+
+# -- careers page repair (issue #55) -------------------------------------
+
+def test_repair_document_only_checks_shape_not_items():
+    payload = {"replacements": [{"url": "https://x"}]}  # missing "company_name"
+    assert validate_repair_document(payload) == []
+
+
+def test_repair_document_rejects_non_list_replacements():
+    assert validate_repair_document({"replacements": "nope"}) != []
+
+
+def test_repair_replacement_accepts_a_valid_entry():
+    assert validate_repair_replacement({"company_name": "Acme", "url": "https://x", "note": "search page"}) == []
+
+
+def test_repair_replacement_rejects_missing_url():
+    assert validate_repair_replacement({"company_name": "Acme"}) != []
+
+
+def test_split_repair_replacements_keeps_good_entries_and_reports_bad_ones():
+    payload = {"replacements": [
+        {"company_name": "Good", "url": "https://good.example"},
+        {"url": "https://bad.example"},  # missing "company_name"
+    ]}
+    valid, problems = split_repair_replacements(payload)
+    assert [r["url"] for r in valid] == ["https://good.example"]
+    assert len(problems) == 1
+    assert "replacements[1]" in problems[0]
 
 
 # -- improvement --------------------------------------------------------
