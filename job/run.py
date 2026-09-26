@@ -41,7 +41,7 @@ from job.agent.pipeline import build_unclear_reader, run_agent_steps
 from job.agent.summary import build_summary_payload, send_daily_summary
 from job.agent.usage import record_usage
 from job.d1_client import D1HttpDatabase
-from job import fingerprint
+from job import feed_snapshot, fingerprint
 from job.fetchers import run_fetcher
 from job.locations import location_match
 from job.matching import classify_posting, cycle_status
@@ -64,7 +64,7 @@ def today_central():
 
 async def _fetch_and_store(
     db, companies: list[dict], titles_doc: dict, locations_setting: dict, run_id: int,
-) -> tuple[int, dict[int, bool], dict[int, set[str]], int, int, int, int, int]:
+) -> tuple[int, dict[int, bool], dict[int, set[str]], int, int, int, int, int, int]:
     new_count = 0
     feed_ok: dict[int, bool] = {}
     current_urls: dict[int, set[str]] = {}
@@ -73,6 +73,7 @@ async def _fetch_and_store(
     sources_found = 0
     repeats_recognized = 0
     rejections_skipped = 0
+    feeds_skipped = 0
     settings_ver = fingerprint.settings_version(titles_doc, locations_setting)
 
     for company in companies:
@@ -105,6 +106,24 @@ async def _fetch_and_store(
             "UPDATE companies SET last_result_at = ?, last_feed_status = ?, last_feed_error = ? WHERE id = ?",
             now_iso(), feed_status, feed_error_text, company["id"],
         )
+
+        # A feed that failed to load is never treated as unchanged -- the
+        # error is already recorded above, and the last good snapshot (if
+        # any) is left alone rather than read or overwritten here.
+        if feed_status == "ok":
+            content_hash = feed_snapshot.hash_postings(result.postings)
+            snapshot = await feed_snapshot.load_snapshot(db, company["id"])
+            if snapshot and snapshot["content_hash"] == content_hash:
+                feeds_skipped += 1
+                # Nothing in the feed changed, so nothing already on file for
+                # this company can have disappeared from it either -- the
+                # feed-based status check below must not report otherwise.
+                current_urls[company["id"]] = feed_snapshot.ALL_FOUND
+                await feed_snapshot.record_unchanged(db, company["id"], now_iso=now_iso())
+                continue
+            await feed_snapshot.record_changed(
+                db, company["id"], content_hash, now_iso=now_iso(), existing=snapshot,
+            )
 
         useful = 0
         for fetched in result.postings:
@@ -158,7 +177,7 @@ async def _fetch_and_store(
 
     return (
         new_count, feed_ok, current_urls, no_source_count, feed_error_count, sources_found,
-        repeats_recognized, rejections_skipped,
+        repeats_recognized, rejections_skipped, feeds_skipped,
     )
 
 
@@ -281,7 +300,7 @@ async def _run_body(db, run_id: int, started_at: str, kind: str, company_ids: li
 
     (
         new_count, feed_ok, current_urls, no_source_count, feed_error_count, sources_found,
-        repeats_recognized, rejections_skipped,
+        repeats_recognized, rejections_skipped, feeds_skipped,
     ) = await _fetch_and_store(db, companies, titles_doc, locations_setting, run_id)
 
     agent_outcome = None
@@ -331,7 +350,8 @@ async def _run_body(db, run_id: int, started_at: str, kind: str, company_ids: li
     summary = (
         f"Checked {len(companies)} companies, {new_count} new posting(s), "
         f"{feed_error_count} feed error(s), {no_source_count} with no source yet, "
-        f"{repeats_recognized} repeat(s) recognized, {rejections_skipped} remembered rejection(s) skipped."
+        f"{repeats_recognized} repeat(s) recognized, {rejections_skipped} remembered rejection(s) skipped, "
+        f"{feeds_skipped} feed(s) unchanged and skipped."
     )
     if kind == "daily" and not claude_configured:
         # Never let this go unsaid (issue #16): a run without Claude
@@ -364,6 +384,7 @@ async def _run_body(db, run_id: int, started_at: str, kind: str, company_ids: li
         "no_source_count": no_source_count,
         "repeats_recognized": repeats_recognized,
         "rejections_skipped": rejections_skipped,
+        "feeds_skipped": feeds_skipped,
         "ranking_refresh": ranking_summary,
         "summary": summary,
         "agent_outcome": agent_outcome,
