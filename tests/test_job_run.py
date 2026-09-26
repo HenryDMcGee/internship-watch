@@ -5,7 +5,7 @@ import sqlite3
 import pytest
 
 import job.run as run_module
-from job import config, fingerprint
+from job import config, feed_snapshot, fingerprint
 from job.agent import client as agent_client
 from job.agent.client import ClaudeStepResult
 from job.fetchers import FetchResult
@@ -713,3 +713,255 @@ def test_verify_and_prune_survives_more_than_100_companies(empty_db):
         empty_db, companies, feed_ok={}, current_urls={},
         browser_budget=run_module.BrowserBudget(remaining=50),
     ))
+
+
+# ---------------------------------------------------------------------------
+# Feed snapshots: skip unchanged feeds (issue #51)
+# ---------------------------------------------------------------------------
+
+def _greenhouse_postings(*, order=None, raw_variant=None):
+    jobs = [
+        FetchedPosting(
+            company_name="Acme", title="MBA Product Manager Intern", url="https://boards.greenhouse.io/acme/jobs/1",
+            location_text="San Francisco, CA", posted_date="2026-09-01", external_id="1",
+            raw={"updated_at": raw_variant or "2026-09-01T00:00:00Z"},
+        ),
+        FetchedPosting(
+            company_name="Acme", title="Product Strategy Intern", url="https://boards.greenhouse.io/acme/jobs/2",
+            location_text="Austin, TX", posted_date="2026-09-02", external_id="2",
+        ),
+    ]
+    if order == "reversed":
+        jobs.reverse()
+    return jobs
+
+
+def test_feed_with_no_snapshot_is_processed_and_a_snapshot_is_saved(empty_db, monkeypatch):
+    company_id = _insert_company(empty_db)
+    postings = _greenhouse_postings()
+
+    def fake_run_fetcher(company, session=None):
+        return FetchResult(company_id=company["id"], company_name=company["name"], postings=postings)
+
+    monkeypatch.setattr(run_module, "run_fetcher", fake_run_fetcher)
+    result = run(run_module.run(empty_db, kind="daily"))
+
+    assert result["feeds_skipped"] == 0
+    assert result["new_count"] == 2
+    snapshot = run(empty_db.first("SELECT * FROM feed_snapshots WHERE company_id = ?", company_id))
+    assert snapshot is not None
+    assert snapshot["content_hash"] == feed_snapshot.hash_postings(postings)
+
+
+def test_identical_feed_on_next_run_is_skipped_with_zero_parser_calls(empty_db, monkeypatch):
+    _insert_company(empty_db)
+
+    def fake_run_fetcher(company, session=None):
+        return FetchResult(company_id=company["id"], company_name=company["name"], postings=_greenhouse_postings())
+
+    monkeypatch.setattr(run_module, "run_fetcher", fake_run_fetcher)
+    run(run_module.run(empty_db, kind="daily"))  # first run: saves the snapshot
+
+    calls = []
+    real_classify = run_module.classify_posting
+
+    def counting_classify(*args, **kwargs):
+        calls.append(args)
+        return real_classify(*args, **kwargs)
+
+    monkeypatch.setattr(run_module, "classify_posting", counting_classify)
+    result = run(run_module.run(empty_db, kind="daily"))
+
+    assert calls == []
+    assert result["feeds_skipped"] == 1
+    assert result["new_count"] == 0
+
+
+def test_feed_differing_only_in_timestamps_is_skipped(empty_db, monkeypatch):
+    _insert_company(empty_db)
+
+    def fake_run_fetcher(company, session=None):
+        return FetchResult(company_id=company["id"], company_name=company["name"], postings=_greenhouse_postings())
+
+    monkeypatch.setattr(run_module, "run_fetcher", fake_run_fetcher)
+    run(run_module.run(empty_db, kind="daily"))
+
+    def fake_run_fetcher_new_timestamps(company, session=None):
+        return FetchResult(
+            company_id=company["id"], company_name=company["name"],
+            postings=_greenhouse_postings(raw_variant="2026-09-05T09:30:00Z"),
+        )
+
+    monkeypatch.setattr(run_module, "run_fetcher", fake_run_fetcher_new_timestamps)
+    result = run(run_module.run(empty_db, kind="daily"))
+
+    assert result["feeds_skipped"] == 1
+    assert result["new_count"] == 0
+
+
+def test_feed_with_same_jobs_reordered_is_skipped(empty_db, monkeypatch):
+    _insert_company(empty_db)
+
+    def fake_run_fetcher(company, session=None):
+        return FetchResult(company_id=company["id"], company_name=company["name"], postings=_greenhouse_postings())
+
+    monkeypatch.setattr(run_module, "run_fetcher", fake_run_fetcher)
+    run(run_module.run(empty_db, kind="daily"))
+
+    def fake_run_fetcher_reordered(company, session=None):
+        return FetchResult(
+            company_id=company["id"], company_name=company["name"],
+            postings=_greenhouse_postings(order="reversed"),
+        )
+
+    monkeypatch.setattr(run_module, "run_fetcher", fake_run_fetcher_reordered)
+    result = run(run_module.run(empty_db, kind="daily"))
+
+    assert result["feeds_skipped"] == 1
+    assert result["new_count"] == 0
+
+
+def test_feed_with_one_new_job_is_processed_and_snapshot_updates(empty_db, monkeypatch):
+    company_id = _insert_company(empty_db)
+
+    def fake_run_fetcher(company, session=None):
+        return FetchResult(company_id=company["id"], company_name=company["name"], postings=_greenhouse_postings())
+
+    monkeypatch.setattr(run_module, "run_fetcher", fake_run_fetcher)
+    run(run_module.run(empty_db, kind="daily"))
+    first_snapshot = run(empty_db.first("SELECT * FROM feed_snapshots WHERE company_id = ?", company_id))
+
+    new_job = FetchedPosting(
+        company_name="Acme", title="Business Development Intern", url="https://boards.greenhouse.io/acme/jobs/3",
+        location_text="New York, NY", posted_date="2026-09-06", external_id="3",
+    )
+
+    def fake_run_fetcher_with_new_job(company, session=None):
+        return FetchResult(
+            company_id=company["id"], company_name=company["name"],
+            postings=_greenhouse_postings() + [new_job],
+        )
+
+    monkeypatch.setattr(run_module, "run_fetcher", fake_run_fetcher_with_new_job)
+    result = run(run_module.run(empty_db, kind="daily"))
+
+    assert result["feeds_skipped"] == 0
+    assert result["new_count"] == 1
+    postings = run(empty_db.all("SELECT * FROM postings WHERE url = ?", new_job.url))
+    assert len(postings) == 1
+
+    second_snapshot = run(empty_db.first("SELECT * FROM feed_snapshots WHERE company_id = ?", company_id))
+    assert second_snapshot["content_hash"] != first_snapshot["content_hash"]
+
+
+def test_feed_load_failure_is_not_treated_as_unchanged_and_keeps_last_snapshot(empty_db, monkeypatch):
+    company_id = _insert_company(empty_db)
+
+    def fake_run_fetcher(company, session=None):
+        return FetchResult(company_id=company["id"], company_name=company["name"], postings=_greenhouse_postings())
+
+    monkeypatch.setattr(run_module, "run_fetcher", fake_run_fetcher)
+    run(run_module.run(empty_db, kind="daily"))
+    first_snapshot = run(empty_db.first("SELECT * FROM feed_snapshots WHERE company_id = ?", company_id))
+
+    def fake_run_fetcher_failing(company, session=None):
+        return FetchResult(
+            company_id=company["id"], company_name=company["name"], postings=[],
+            error="boards-api.greenhouse.io returned HTTP 500",
+        )
+
+    monkeypatch.setattr(run_module, "run_fetcher", fake_run_fetcher_failing)
+    result = run(run_module.run(empty_db, kind="daily"))
+
+    assert result["feeds_skipped"] == 0
+    assert result["feed_errors"] == 1
+
+    company = run(empty_db.first("SELECT * FROM companies WHERE id = ?", company_id))
+    assert company["last_feed_error"] == "boards-api.greenhouse.io returned HTTP 500"
+
+    snapshot = run(empty_db.first("SELECT * FROM feed_snapshots WHERE company_id = ?", company_id))
+    assert snapshot == first_snapshot
+
+
+def test_postings_in_a_skipped_feed_still_get_their_daily_status_check(empty_db, monkeypatch):
+    _insert_company(empty_db)
+    postings = _greenhouse_postings()
+
+    def fake_run_fetcher(company, session=None):
+        return FetchResult(company_id=company["id"], company_name=company["name"], postings=postings)
+
+    monkeypatch.setattr(run_module, "run_fetcher", fake_run_fetcher)
+    run(run_module.run(empty_db, kind="daily"))  # creates the two postings and the snapshot
+
+    stored = run(empty_db.all("SELECT * FROM postings ORDER BY id"))
+    assert len(stored) == 2
+    for row in stored:
+        run(empty_db.run("UPDATE postings SET verified_at = NULL, verified_via = NULL WHERE id = ?", row["id"]))
+
+    result = run(run_module.run(empty_db, kind="daily"))  # identical feed -> skipped
+    assert result["feeds_skipped"] == 1
+
+    reverified = run(empty_db.all("SELECT * FROM postings ORDER BY id"))
+    for row in reverified:
+        assert row["verified_at"] is not None
+        assert row["verified_via"] == "feed"
+        assert row["status"] == "open"
+
+
+def test_posting_missing_from_a_changed_feed_is_checked_immediately(empty_db, monkeypatch):
+    _insert_company(empty_db)
+    postings = _greenhouse_postings()
+
+    def fake_run_fetcher(company, session=None):
+        return FetchResult(company_id=company["id"], company_name=company["name"], postings=postings)
+
+    monkeypatch.setattr(run_module, "run_fetcher", fake_run_fetcher)
+    run(run_module.run(empty_db, kind="daily"))
+
+    def fake_run_fetcher_one_job_gone(company, session=None):
+        return FetchResult(company_id=company["id"], company_name=company["name"], postings=[postings[0]])
+
+    monkeypatch.setattr(run_module, "run_fetcher", fake_run_fetcher_one_job_gone)
+    result = run(run_module.run(empty_db, kind="daily"))
+
+    assert result["feeds_skipped"] == 0
+    gone = run(empty_db.first("SELECT * FROM postings WHERE url = ?", postings[1].url))
+    assert gone["status"] == "closed"
+    assert gone["archived_at"] is not None
+
+
+def test_run_summary_reports_correct_skipped_feed_count(empty_db, monkeypatch):
+    unchanged_ids = [_insert_company(empty_db, name=f"Unchanged{i}", feed_id=f"unchanged-{i}") for i in range(5)]
+    changed_ids = [_insert_company(empty_db, name=f"Changed{i}", feed_id=f"changed-{i}") for i in range(2)]
+
+    def postings_for(name):
+        return [FetchedPosting(
+            company_name=name, title="MBA Product Manager Intern",
+            url=f"https://boards.greenhouse.io/{name}/jobs/1", location_text="San Francisco, CA",
+            posted_date="2026-09-01", external_id="1",
+        )]
+
+    def fake_run_fetcher(company, session=None):
+        return FetchResult(company_id=company["id"], company_name=company["name"], postings=postings_for(company["name"]))
+
+    monkeypatch.setattr(run_module, "run_fetcher", fake_run_fetcher)
+    run(run_module.run(empty_db, kind="daily"))  # first run: all 7 processed, snapshots saved
+    assert unchanged_ids and changed_ids  # sanity: both groups exist
+
+    def fake_run_fetcher_second_run(company, session=None):
+        if company["id"] in changed_ids:
+            return FetchResult(
+                company_id=company["id"], company_name=company["name"],
+                postings=postings_for(company["name"]) + [FetchedPosting(
+                    company_name=company["name"], title="Product Strategy Intern",
+                    url=f"https://boards.greenhouse.io/{company['name']}/jobs/2",
+                    location_text="Austin, TX", posted_date="2026-09-02", external_id="2",
+                )],
+            )
+        return FetchResult(company_id=company["id"], company_name=company["name"], postings=postings_for(company["name"]))
+
+    monkeypatch.setattr(run_module, "run_fetcher", fake_run_fetcher_second_run)
+    result = run(run_module.run(empty_db, kind="daily"))
+
+    assert result["feeds_skipped"] == 5
+    assert "5 feed(s) unchanged and skipped" in result["summary"]
