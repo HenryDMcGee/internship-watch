@@ -577,6 +577,12 @@
       "group": "Industry-specific",
       "aliases": [],
       "active": true
+    },
+    {
+      "title": "Graduate Management Summer Internship",
+      "group": "Automotive",
+      "aliases": [],
+      "active": true
     }
   ]
 }
