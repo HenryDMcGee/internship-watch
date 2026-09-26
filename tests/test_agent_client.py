@@ -347,7 +347,9 @@ def test_resolve_model_rejects_unknown_name():
 
 
 def test_step_tools_covers_every_step():
-    assert set(STEP_TOOLS) == {"discovery", "scout", "classification", "unclear_page", "improvement"}
+    assert set(STEP_TOOLS) == {
+        "discovery", "scout", "classification", "unclear_page", "improvement", "careers_extraction",
+    }
     assert STEP_TOOLS["discovery"] == ("WebSearch", "WebFetch")
     assert STEP_TOOLS["classification"] == ()
 

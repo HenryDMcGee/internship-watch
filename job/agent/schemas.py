@@ -214,6 +214,50 @@ def split_classification_decisions(payload: dict) -> tuple[list[dict], list[str]
 
 
 # ---------------------------------------------------------------------------
+# Careers page extraction
+# ---------------------------------------------------------------------------
+
+def validate_careers_extraction_document(payload) -> list[str]:
+    """Shape-only check, matching `validate_classification_document`'s
+    reasoning: one malformed listing must not sink every other real one
+    Haiku found on the same page. Per-item problems are handled separately
+    by `split_careers_listings`.
+    """
+    if not isinstance(payload, dict):
+        return ["document must be a JSON object"]
+    if not isinstance(payload.get("listings"), list):
+        return ["'listings' must be a list"]
+    return []
+
+
+def validate_careers_listing(item) -> list[str]:
+    if not isinstance(item, dict):
+        return ["must be an object"]
+    problems: list[str] = []
+    for field_name in ("title", "location", "link"):
+        if not _is_nonempty_str(item.get(field_name)):
+            problems.append(f"{field_name} must be a non-empty string")
+    if not _is_str_or_none(item.get("posted_date")):
+        problems.append("posted_date must be a string")
+    if not _is_str_or_none(item.get("job_id")):
+        problems.append("job_id must be a string")
+    return problems
+
+
+def split_careers_listings(payload: dict) -> tuple[list[dict], list[str]]:
+    listings = payload.get("listings") or []
+    valid: list[dict] = []
+    problems: list[str] = []
+    for i, item in enumerate(listings):
+        item_problems = validate_careers_listing(item)
+        if item_problems:
+            problems.append(f"listings[{i}]: " + "; ".join(item_problems))
+        else:
+            valid.append(item)
+    return valid, problems
+
+
+# ---------------------------------------------------------------------------
 # Unclear-page reads
 # ---------------------------------------------------------------------------
 

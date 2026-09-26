@@ -64,6 +64,11 @@ jobs:
           CLOUDFLARE_D1_TOKEN: ${{ secrets.CLOUDFLARE_D1_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           D1_DATABASE_ID: ${{ secrets.D1_DATABASE_ID }}
+          # Cloudflare Browser Run, for reading careers pages (job/fetchers/careers_pages.py,
+          # phase 6 part 1). A token scoped to the Browser Rendering permission only. Missing
+          # this sends every careers page to the Playwright backup instead (see the daily
+          # summary's note when that happens).
+          CLOUDFLARE_BROWSER_TOKEN: ${{ secrets.CLOUDFLARE_BROWSER_TOKEN }}
           # Set only one of these two -- whichever is set is what the
           # `claude` CLI authenticates with (see job/agent/client.py).
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}

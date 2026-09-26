@@ -40,6 +40,7 @@ async def run_agent_steps(
     db, *, run_id: int, companies: list[dict], titles_doc: dict, locations_setting: dict,
     budget_settings: dict, status: BudgetStatus, today: str, now_iso: str,
     run_summary_so_far: dict | None = None,
+    careers_covered_ids: set[int] | None = None,
     run_claude=_default_run_claude,
 ) -> dict:
     outcome = {
@@ -89,10 +90,17 @@ async def run_agent_steps(
             return None
 
     no_feed_companies = [c for c in companies if not c.get("feed_type")]
+    # A company whose careers page loaded this run (issue #53, phase 6 part
+    # 1) already has today's answer -- discovery's web searches are the most
+    # expensive part of a run, and are only for companies still uncovered
+    # after feeds and careers pages. Scout's candidates are untouched: a
+    # careers page isn't a *feed*, so it doesn't stop the scout from still
+    # looking for one.
+    discovery_companies = [c for c in no_feed_companies if c["id"] not in (careers_covered_ids or set())]
 
     async def do_discovery():
         watchlist = await load_watchlist_setting(db)
-        ordered = discovery.order_companies(no_feed_companies, watchlist)
+        ordered = discovery.order_companies(discovery_companies, watchlist)
         search_plan = await load_search_plan(db, today)
         results, result = discovery.run_discovery(
             ordered, titles_doc, locations_setting, search_plan,
@@ -106,7 +114,7 @@ async def run_agent_steps(
 
     discovery_ids: list[int] = []
     discovery_pending: dict[int, tuple] = {}
-    if no_feed_companies:
+    if discovery_companies:
         discovery_results = await guarded("discovery", do_discovery) or []
         (
             outcome["discovery_count"], discovery_ids, discovery_pending,
@@ -141,7 +149,7 @@ async def run_agent_steps(
     # archive) in this very run. Only a discovered posting that came out of
     # classification matched and still isn't archived actually shows up on
     # the dashboard, so that's what should count as "new" for the summary.
-    outcome["discovery_new_count"] = await _count_visible_postings(db, discovery_ids)
+    outcome["discovery_new_count"] = await count_visible_postings(db, discovery_ids)
 
     search_limit_per_run = int(budget_settings.get("search_limit_per_run") or 35)
     scout_candidates, outcome["scout_skipped_count"] = scout.split_companies_by_coverage(
@@ -277,7 +285,7 @@ async def _store_discovery_results(
     return stored, inserted_ids, pending, repeats_recognized, rejections_skipped
 
 
-async def _count_visible_postings(db, ids: list[int]) -> int:
+async def count_visible_postings(db, ids: list[int]) -> int:
     """How many of `ids` are still on the dashboard: classified with a
     matched title and not archived. Used to count discovery's real
     contribution to a run's `new_count` only after classification has run.
