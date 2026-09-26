@@ -40,6 +40,7 @@ STEP_TOOLS: dict[str, tuple[str, ...]] = {
     "classification": (),
     "unclear_page": (),
     "improvement": (),
+    "careers_extraction": (),
 }
 
 # Discovery and the scout can each spend a whole run's search budget (up to

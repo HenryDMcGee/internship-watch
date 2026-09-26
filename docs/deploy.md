@@ -57,6 +57,14 @@ The daily job's Claude agent steps (`job/agent/`) run in GitHub Actions, not in 
 
 Until at least one of `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY` is set, the daily job still runs (feeds, matching, verification, pruning) but skips every Claude step -- and says so loudly rather than silently: the run's summary on the dashboard gets a "Claude steps skipped" note, and a `claude_not_configured` alert is recorded once a day for as long as neither secret is set.
 
+### 3c. GitHub Actions secret for reading careers pages
+
+`job/fetchers/careers_pages.py` (phase 6 part 1) reads a company's careers page through Cloudflare's Browser Rendering API when it has no recognized job feed. It needs one more repository secret, alongside the ones in 3b:
+
+- **`CLOUDFLARE_BROWSER_TOKEN`**: an API token scoped to only the **Browser Rendering** permission (Cloudflare dashboard, **My Profile**, **API Tokens**, **Create Token**) on the same account as `CLOUDFLARE_ACCOUNT_ID`.
+
+If it's left unset, the daily job still runs -- every careers page just goes to the Playwright backup instead of Browser Run for the whole run, and the run's summary says so.
+
 ### 4. DNS record for the subdomain
 
 The Worker's route needs a proxied DNS record to answer on the subdomain. The record doesn't point at a real server.

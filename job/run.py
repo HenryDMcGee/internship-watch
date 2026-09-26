@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 import sys
 from datetime import date, datetime, timedelta
 
@@ -25,6 +26,7 @@ except ImportError:  # pragma: no cover - zoneinfo is stdlib on 3.9+
     ZoneInfo = None  # type: ignore
 
 from job import config
+from job.agent import careers_extraction
 from job.agent import client as agent_client
 from job.agent.alerts import (
     claude_limit_alert,
@@ -37,12 +39,13 @@ from job.agent.alerts import (
 )
 from job.agent.budgets import load_budget_status, monthly_forecast, weekly_forecast
 from job.agent.client import is_configured as claude_is_configured
-from job.agent.pipeline import build_unclear_reader, run_agent_steps
+from job.agent.pipeline import build_unclear_reader, count_visible_postings, run_agent_steps
 from job.agent.summary import build_summary_payload, send_daily_summary
 from job.agent.usage import record_usage
 from job.d1_client import D1HttpDatabase
-from job import feed_snapshot, fingerprint
+from job import careers_snapshot, feed_snapshot, fingerprint
 from job.fetchers import run_fetcher
+from job.fetchers import careers_pages
 from job.locations import location_match
 from job.matching import classify_posting, cycle_status
 from job.pruning import decide_prune
@@ -181,6 +184,154 @@ async def _fetch_and_store(
     )
 
 
+async def _run_careers_pages(
+    db, companies: list[dict], budget_settings: dict, titles_doc: dict, locations_setting: dict,
+    *, run_id: int, run_claude,
+) -> tuple[set[int], list[int], dict]:
+    """Reads careers pages for companies with a `careers_url` on file and no
+    recognized feed (issue #53, phase 6 part 1), before discovery so a
+    company whose page loaded is skipped by it (the most expensive step).
+
+    Returns the set of company ids whose page loaded this run (so
+    `run_agent_steps` can exclude them from discovery) and a dict of counts
+    for the run summary.
+    """
+    candidates = [c for c in companies if c.get("careers_url") and not c.get("feed_type")]
+    stats = {
+        "browser_run": 0, "backup": 0, "unchanged": 0, "changed": 0, "failed": 0,
+        "browser_run_minutes": 0.0, "switch_reason": None,
+    }
+    if not candidates:
+        return set(), [], stats
+
+    outcome = careers_pages.run_careers_pages(
+        candidates,
+        account_id=os.environ.get("CLOUDFLARE_ACCOUNT_ID"),
+        token=os.environ.get("CLOUDFLARE_BROWSER_TOKEN"),
+        pages_per_run=int(budget_settings.get("careers_pages_per_run") or careers_pages.DEFAULT_CAREERS_PAGES_PER_RUN),
+        daily_minutes_budget=float(
+            budget_settings.get("browser_run_daily_minutes") or careers_pages.DEFAULT_BROWSER_RUN_DAILY_MINUTES
+        ),
+        backup_enabled=bool(budget_settings.get("careers_backup_enabled", True)),
+        backup_pages_per_run=int(
+            budget_settings.get("careers_backup_pages_per_run") or careers_pages.DEFAULT_CAREERS_BACKUP_PAGES_PER_RUN
+        ),
+    )
+    stats["browser_run_minutes"] = outcome.browser_run_minutes_used
+    stats["switch_reason"] = outcome.switch_reason
+
+    settings_ver = fingerprint.settings_version(titles_doc, locations_setting)
+    companies_by_id = {c["id"]: c for c in candidates}
+    covered_ids: set[int] = set()
+    posting_ids: list[int] = []
+
+    for page in outcome.pages:
+        company = companies_by_id[page.company_id]
+        existing = await careers_snapshot.load_snapshot(db, page.company_id)
+
+        if not page.ok:
+            stats["failed"] += 1
+            # `careers_page_snapshots.last_error` is where the reason lives
+            # (issue: "Record the reason on the company") -- `companies.
+            # last_feed_status` isn't reused for it, since that column's own
+            # CHECK constraint only allows the feed fetcher's three values
+            # ('ok', 'error', 'no_source').
+            await careers_snapshot.record_failure(db, page.company_id, reason=page.reason, now_iso=now_iso(), existing=existing)
+            await db.run("UPDATE companies SET last_result_at = ? WHERE id = ?", now_iso(), page.company_id)
+            continue
+
+        covered_ids.add(page.company_id)
+        await db.run("UPDATE companies SET last_result_at = ? WHERE id = ?", now_iso(), page.company_id)
+        if page.method == "browser_run":
+            stats["browser_run"] += 1
+        else:
+            stats["backup"] += 1
+
+        content_hash = careers_snapshot.hash_page_text(page.text)
+        if existing and existing.get("content_hash") == content_hash:
+            stats["unchanged"] += 1
+            await careers_snapshot.record_unchanged(db, page.company_id, method=page.method, now_iso=now_iso())
+            continue
+
+        stats["changed"] += 1
+        await careers_snapshot.record_changed(
+            db, page.company_id, content_hash, method=page.method, now_iso=now_iso(), existing=existing,
+        )
+
+        try:
+            listings, result = careers_extraction.run_extraction(
+                company["name"], page.text, model=budget_settings.get("model_classification", "haiku"),
+                run_claude=run_claude,
+            )
+        except Exception as exc:  # noqa: BLE001 - a bad extraction call must not stop the run, same as
+            # any other per-company failure in this loop (job/fetchers/__init__.py's run_fetcher).
+            print(f"careers_extraction: {company['name']}: {exc}")
+            continue
+        if result is not None:
+            await record_usage(db, run_id=run_id, step="careers_extraction", result=result, now_iso=now_iso())
+
+        for listing in listings:
+            fp_outcome = await fingerprint.match_incoming(
+                db, company_name=company["name"], title=listing["title"], url=listing.get("link"),
+                location_text=listing.get("location") or "", external_id=listing.get("job_id"),
+                settings_version=settings_ver, source="careers_page", now_iso=now_iso(),
+            )
+            if fp_outcome.kind in ("posting", "rejection"):
+                continue
+
+            loc_decision = location_match(listing.get("location") or "", locations_setting)
+            new_id = await db.run(
+                """INSERT INTO postings
+                   (company_id, company_name, title, url, source_name, locations, location_match,
+                    posted_date, first_seen, status)
+                   VALUES (?, ?, ?, ?, 'careers_page', ?, ?, ?, ?, 'unverified')""",
+                company["id"], company["name"], listing["title"], listing.get("link"),
+                json.dumps([listing["location"]] if listing.get("location") else []),
+                loc_decision, listing.get("posted_date"), today_central().isoformat(),
+            )
+            await db.run(
+                "INSERT INTO posting_events (posting_id, type, detail, at) VALUES (?, 'found', ?, ?)",
+                new_id, json.dumps({"source": "careers_page", "method": page.method}), now_iso(),
+            )
+            await fingerprint.record_posting(
+                db, fp_outcome.fp, posting_id=new_id, settings_version=settings_ver,
+                source="careers_page", now_iso=now_iso(), existing_id=fp_outcome.stale_fingerprint_id,
+            )
+            posting_ids.append(new_id)
+
+    return covered_ids, posting_ids, stats
+
+
+def _careers_pages_summary_line(stats: dict | None) -> str | None:
+    if not stats:
+        return None
+    total_loaded = stats["browser_run"] + stats["backup"]
+    if total_loaded == 0 and stats["failed"] == 0:
+        return None
+    parts = []
+    if stats["browser_run"]:
+        parts.append(f"{stats['browser_run']} via Browser Run ({stats['browser_run_minutes']:.1f} min)")
+    if stats["backup"]:
+        parts.append(f"{stats['backup']} via backup")
+    parts.append(f"{stats['unchanged']} unchanged")
+    parts.append(f"{stats['changed']} changed")
+    if stats["failed"]:
+        parts.append(f"{stats['failed']} failed")
+    line = "Careers pages: " + ", ".join(parts) + "."
+
+    switch_reason = stats.get("switch_reason")
+    if switch_reason in ("quota", "minutes"):
+        line += (
+            " Browser Run's free daily capacity ran out this run, so the rest used the backup -- "
+            "consider Workers Paid for more Browser Rendering minutes."
+        )
+    elif switch_reason == "missing_token":
+        line += " CLOUDFLARE_BROWSER_TOKEN isn't set, so every page used the backup."
+    elif switch_reason == "outage":
+        line += " Browser Run had an outage this run (3 failed requests in a row), so the rest used the backup."
+    return line
+
+
 async def _verify_and_prune(
     db, companies: list[dict], feed_ok: dict[int, bool], current_urls: dict[int, set[str]],
     browser_budget: BrowserBudget, *, unclear_reader=None,
@@ -306,13 +457,26 @@ async def _run_body(db, run_id: int, started_at: str, kind: str, company_ids: li
     agent_outcome = None
     unclear_reader = None
     unclear_results: list = []
+    careers_stats = None
     claude_configured = claude_is_configured()
     if kind == "daily" and claude_configured:
         today_str = today_central().isoformat()
         status = await load_budget_status(db, budget_settings, today=today_str)
+
+        try:
+            careers_covered_ids, careers_posting_ids, careers_stats = await _run_careers_pages(
+                db, companies, budget_settings, titles_doc, locations_setting,
+                run_id=run_id, run_claude=agent_client.run_claude_step,
+            )
+        except Exception as exc:  # noqa: BLE001 - a careers-pages bug must not stop the run, same as
+            # every other per-step isolation in this function.
+            print(f"careers_pages: {exc}")
+            careers_covered_ids, careers_posting_ids, careers_stats = set(), [], None
+
         agent_outcome = await run_agent_steps(
             db, run_id=run_id, companies=companies, titles_doc=titles_doc, locations_setting=locations_setting,
             budget_settings=budget_settings, status=status, today=today_str, now_iso=now_iso(),
+            careers_covered_ids=careers_covered_ids,
             run_summary_so_far={
                 "summary": (
                     f"Checked {len(companies)} companies, {new_count} new posting(s) so far, "
@@ -326,6 +490,7 @@ async def _run_body(db, run_id: int, started_at: str, kind: str, company_ids: li
             run_claude=agent_client.run_claude_step,
         )
         new_count += agent_outcome["discovery_new_count"]
+        new_count += await count_visible_postings(db, careers_posting_ids)
         repeats_recognized += agent_outcome.get("repeats_recognized", 0)
         rejections_skipped += agent_outcome.get("rejections_skipped", 0)
         unclear_reader = build_unclear_reader(
@@ -353,6 +518,9 @@ async def _run_body(db, run_id: int, started_at: str, kind: str, company_ids: li
         f"{repeats_recognized} repeat(s) recognized, {rejections_skipped} remembered rejection(s) skipped, "
         f"{feeds_skipped} feed(s) unchanged and skipped."
     )
+    careers_line = _careers_pages_summary_line(careers_stats)
+    if careers_line:
+        summary += " " + careers_line
     if kind == "daily" and not claude_configured:
         # Never let this go unsaid (issue #16): a run without Claude
         # credentials still completes, but discovery, classification, the
@@ -388,6 +556,7 @@ async def _run_body(db, run_id: int, started_at: str, kind: str, company_ids: li
         "ranking_refresh": ranking_summary,
         "summary": summary,
         "agent_outcome": agent_outcome,
+        "careers_pages": careers_stats,
     }
 
 
