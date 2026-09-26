@@ -115,6 +115,14 @@ Two options, depending on what's wrong:
 
 Neither option undoes database migrations. Any pull request that changes the database says how to reverse it.
 
+### One-time fingerprint backfill
+
+After migration `0007_posting_fingerprints.sql` has been applied to the real database (step 5), run the backfill once so existing postings, including archived ones, are fingerprinted and any duplicate already in the data is found and archived:
+```powershell
+python -m scripts.backfill_fingerprints
+```
+It uses the same `CLOUDFLARE_D1_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`, and `D1_DATABASE_ID` as the daily job. Add `--dry-run` first to see what it would do without writing anything. It's safe to run more than once.
+
 ## Backups
 
 `.github/workflows/backup.yml` runs nightly at 09:00 UTC (after the 08:00 America/Chicago daily job) and exports the database to the `internship-watch-backups` R2 bucket as `<date>.sql`, deleting backups older than 30 days. Run it by hand from the **Actions** tab (**Backup**, **Run workflow**) any time you want a backup right away, such as before a risky migration.

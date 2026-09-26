@@ -25,7 +25,7 @@ from job.agent.schemas import ClaudeOutputError
 from job.agent.titles_pr import open_title_suggestions_pr
 from job.agent.usage import record_usage
 from job.config import load_search_plan, load_watchlist_setting
-from job.dedup import find_duplicate_posting
+from job import fingerprint
 from job.locations import location_match as compute_location_match
 
 # `job.config` (imported above) adds `api/src` to `sys.path`, which this
@@ -44,9 +44,10 @@ async def run_agent_steps(
 ) -> dict:
     outcome = {
         "discovery_count": 0, "discovery_new_count": 0, "classification_count": 0, "scout_count": 0,
-        "scout_skipped_count": 0,
+        "scout_skipped_count": 0, "repeats_recognized": 0, "rejections_skipped": 0,
         "steps_skipped": [], "steps_succeeded": [], "claude_limit_hit": False, "errors": [], "title_pr": None,
     }
+    settings_ver = fingerprint.settings_version(titles_doc, locations_setting)
 
     async def record(step: str, result) -> None:
         if result is not None:
@@ -104,11 +105,18 @@ async def run_agent_steps(
         return results
 
     discovery_ids: list[int] = []
+    discovery_pending: dict[int, tuple] = {}
     if no_feed_companies:
         discovery_results = await guarded("discovery", do_discovery) or []
-        outcome["discovery_count"], discovery_ids = await _store_discovery_results(
-            db, discovery_results, now_iso=now_iso, locations_setting=locations_setting
+        (
+            outcome["discovery_count"], discovery_ids, discovery_pending,
+            discovery_repeats, discovery_rejections,
+        ) = await _store_discovery_results(
+            db, discovery_results, now_iso=now_iso, locations_setting=locations_setting,
+            settings_version=settings_ver,
         )
+        outcome["repeats_recognized"] += discovery_repeats
+        outcome["rejections_skipped"] += discovery_rejections
 
     unclassified = await db.all("SELECT * FROM postings WHERE matched_title IS NULL AND archived_at IS NULL")
 
@@ -123,7 +131,9 @@ async def run_agent_steps(
 
     if unclassified:
         decisions = await guarded("classification", do_classification) or []
-        outcome["classification_count"] = await _apply_classification_decisions(db, decisions, now_iso=now_iso)
+        outcome["classification_count"] = await _apply_classification_decisions(
+            db, decisions, now_iso=now_iso, pending=discovery_pending, settings_version=settings_ver,
+        )
 
     # `discovery_count` is every row discovery *stored*, before classification
     # has had a say -- adding that straight to the run's `new_count` (issue
@@ -223,20 +233,34 @@ def build_unclear_reader(*, status: BudgetStatus, model: str, on_usage, on_error
 # ---------------------------------------------------------------------------
 
 async def _store_discovery_results(
-    db, results: list[dict], *, now_iso: str, locations_setting: dict
-) -> tuple[int, list[int]]:
+    db, results: list[dict], *, now_iso: str, locations_setting: dict, settings_version: str,
+) -> tuple[int, list[int], dict[int, tuple], int, int]:
     stored = 0
     inserted_ids: list[int] = []
+    pending: dict[int, tuple] = {}
+    repeats_recognized = 0
+    rejections_skipped = 0
     for r in results:
         # A URL match is exact, but a company re-listing an already-known
-        # role under a new URL is common enough (issue #26: an NVIDIA role
-        # Henry had already marked applied came back under a different
-        # URL) that URL alone isn't enough -- `find_duplicate_posting` also
-        # matches on company + normalized title so that role never gets a
-        # second row.
-        existing = await find_duplicate_posting(db, company_name=r["company_name"], title=r["title"], url=r["url"])
-        if existing:
+        # role under a new URL is common enough (issue #26/#49: an NVIDIA
+        # role Henry had already marked applied came back under a
+        # different URL) that URL alone isn't enough --
+        # `fingerprint.match_incoming` also matches on the company's own
+        # job id and on company + normalized title + location so that
+        # role never gets a second row, and a result already rejected once
+        # (by Claude classification) is skipped without spending a call.
+        outcome = await fingerprint.match_incoming(
+            db, company_name=r["company_name"], title=r["title"], url=r["url"],
+            location_text=r.get("location_text") or "", settings_version=settings_version,
+            source="claude-discovery", now_iso=now_iso,
+        )
+        if outcome.kind == "posting":
+            repeats_recognized += 1
             continue
+        if outcome.kind == "rejection":
+            rejections_skipped += 1
+            continue
+
         loc_decision = compute_location_match(r.get("location_text") or "", locations_setting)
         new_id = await db.run(
             """INSERT INTO postings
@@ -249,7 +273,8 @@ async def _store_discovery_results(
         )
         stored += 1
         inserted_ids.append(new_id)
-    return stored, inserted_ids
+        pending[new_id] = (outcome.fp, outcome.stale_fingerprint_id)
+    return stored, inserted_ids, pending, repeats_recognized, rejections_skipped
 
 
 async def _count_visible_postings(db, ids: list[int]) -> int:
@@ -268,14 +293,34 @@ async def _count_visible_postings(db, ids: list[int]) -> int:
     return (row or {}).get("n") or 0
 
 
-async def _apply_classification_decisions(db, decisions: list[dict], *, now_iso: str) -> int:
+async def _apply_classification_decisions(
+    db, decisions: list[dict], *, now_iso: str, pending: dict[int, tuple] | None = None,
+    settings_version: str | None = None,
+) -> int:
+    pending = pending or {}
     applied = 0
     unmatched_ids = []
     for d in decisions:
-        posting = await db.first("SELECT id FROM postings WHERE id = ?", d.get("id"))
+        posting = await db.first("SELECT * FROM postings WHERE id = ?", d.get("id"))
         if not posting:
             unmatched_ids.append(d.get("id"))
             continue
+
+        pend = pending.get(posting["id"])
+        if pend:
+            fp, stale_fingerprint_id = pend
+        else:
+            # A posting classification only now gets to (e.g. because a
+            # previous run's classification step was skipped or failed) has
+            # no fingerprint recorded from this run's discovery pass --
+            # recompute it from the posting's own stored fields so it still
+            # gets remembered.
+            fp = fingerprint.compute_fingerprint(
+                company_name=posting.get("company_name") or "", title=posting.get("title") or "",
+                url=posting.get("url"),
+            )
+            stale_fingerprint_id = None
+
         if d["decision"] == "match":
             await db.run(
                 "UPDATE postings SET matched_title = ?, title_en = ?, location_match = COALESCE(?, location_match) "
@@ -283,11 +328,22 @@ async def _apply_classification_decisions(db, decisions: list[dict], *, now_iso:
                 d["matched_title"], d.get("title_en"), d.get("location_match"), posting["id"],
             )
             applied += 1
+            if settings_version is not None:
+                await fingerprint.record_posting(
+                    db, fp, posting_id=posting["id"], settings_version=settings_version,
+                    source="claude-classification", now_iso=now_iso, existing_id=stale_fingerprint_id,
+                )
         else:
+            reason = d.get("reason") or "not a match"
             await db.run(
                 "UPDATE postings SET archived_at = ?, archive_reason = ? WHERE id = ?",
-                now_iso, f"Claude classification: {d.get('reason') or 'not a match'}", posting["id"],
+                now_iso, f"Claude classification: {reason}", posting["id"],
             )
+            if settings_version is not None:
+                await fingerprint.record_rejection(
+                    db, fp, reason=reason, settings_version=settings_version,
+                    source="claude-classification", now_iso=now_iso, existing_id=stale_fingerprint_id,
+                )
     if unmatched_ids:
         print(f"classification: {len(unmatched_ids)} decision(s) referenced unknown posting id(s): {unmatched_ids}")
     return applied

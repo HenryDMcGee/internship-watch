@@ -1,5 +1,6 @@
 import asyncio
 
+from job import fingerprint
 from job.agent.budgets import BudgetStatus, UsageTotals
 from job.agent.client import ClaudeStepResult
 from job.agent.pipeline import build_unclear_reader, run_agent_steps
@@ -225,6 +226,239 @@ def test_run_agent_steps_does_not_store_a_discovery_result_matching_an_existing_
     assert len(postings) == 1
     assert postings[0]["url"] == "https://acme.example/old"
     assert postings[0]["applied"] == 1
+
+
+def test_run_agent_steps_recognizes_a_mirror_site_repeat_via_fingerprint(empty_db):
+    # issue #49's NVIDIA case: an existing posting found through a Workday
+    # URL (so it has a job id on file) is rediscovered at a mirror site with
+    # no job id at all, under the same company/title/location -- must match
+    # by fingerprint, not create a second row, and never reach classification.
+    _insert_company(empty_db, name="NVIDIA", feed_type=None)
+    run_id = run(empty_db.run("INSERT INTO runs (kind, started_at, status) VALUES ('daily', '2026-09-20T08:00:00', 'running')"))
+
+    workday_url = (
+        "https://nvidia.wd5.myworkdayjobs.com/en-US/NvidiaExternalCareerSite/job/US-Site/"
+        "XD-Product-Manager-Intern_JR2025670"
+    )
+    posting_id = run(empty_db.run(
+        """INSERT INTO postings (company_name, title, matched_title, url, locations, location_match,
+           first_seen, status)
+           VALUES ('NVIDIA', 'Product Management MBA Intern, Data Center GPU', 'PM Intern', ?,
+                   '["Santa Clara, CA"]', 'match', '2026-09-18', 'open')""",
+        workday_url,
+    ))
+    settings_ver = fingerprint.settings_version(TITLES_DOC, LOCATIONS)
+    fp = fingerprint.compute_fingerprint(
+        company_name="NVIDIA", title="Product Management MBA Intern, Data Center GPU",
+        location_text="Santa Clara, CA", url=workday_url,
+    )
+    run(fingerprint.record_posting(
+        empty_db, fp, posting_id=posting_id, settings_version=settings_ver, source="workday",
+        now_iso="2026-09-18T08:00:00",
+    ))
+
+    fake = _fake_run_claude({
+        "discovery": '{"results": [{"company_name": "NVIDIA", '
+                     '"title": "Product Management MBA Intern, Data Center GPU", '
+                     '"url": "https://mirror.example/nvidia/123", "location_text": "Santa Clara, CA"}]}',
+        "scout": '{"sources": []}',
+        "improvement": '{"search_plan": null, "proposals": [], "title_suggestions": []}',
+    })
+
+    outcome = run(run_agent_steps(
+        empty_db, run_id=run_id, companies=[{"id": 1, "name": "NVIDIA", "feed_type": None}],
+        titles_doc=TITLES_DOC, locations_setting=LOCATIONS, budget_settings=SETTINGS,
+        status=_open_status(), today="2026-09-20", now_iso="2026-09-20T08:00:00", run_claude=fake,
+    ))
+
+    assert "classification" not in fake.calls
+    assert outcome["repeats_recognized"] == 1
+    postings = run(empty_db.all("SELECT * FROM postings"))
+    assert len(postings) == 1
+
+    fp_row = run(empty_db.first("SELECT * FROM posting_fingerprints WHERE posting_id = ?", posting_id))
+    assert fp_row["last_source"] == "claude-discovery"
+    assert fp_row["last_seen"] == "2026-09-20T08:00:00"
+
+
+def test_run_agent_steps_skips_a_remembered_rejection_with_no_claude_call(empty_db):
+    _insert_company(empty_db, feed_type=None)
+    run_id = run(empty_db.run("INSERT INTO runs (kind, started_at, status) VALUES ('daily', '2026-09-20T08:00:00', 'running')"))
+
+    settings_ver = fingerprint.settings_version(TITLES_DOC, LOCATIONS)
+    fp = fingerprint.compute_fingerprint(
+        company_name="Acme", title="Software Engineer Intern", location_text="SF", url="https://acme.example/1",
+    )
+    run(fingerprint.record_rejection(
+        empty_db, fp, reason="not a PM role", settings_version=settings_ver,
+        source="claude-discovery", now_iso="2026-09-19T08:00:00",
+    ))
+
+    fake = _fake_run_claude({
+        "discovery": '{"results": [{"company_name": "Acme", "title": "Software Engineer Intern", '
+                     '"url": "https://acme.example/1", "location_text": "SF"}]}',
+        "scout": '{"sources": []}',
+        "improvement": '{"search_plan": null, "proposals": [], "title_suggestions": []}',
+    })
+
+    outcome = run(run_agent_steps(
+        empty_db, run_id=run_id, companies=[{"id": 1, "name": "Acme", "feed_type": None}],
+        titles_doc=TITLES_DOC, locations_setting=LOCATIONS, budget_settings=SETTINGS,
+        status=_open_status(), today="2026-09-20", now_iso="2026-09-20T08:00:00", run_claude=fake,
+    ))
+
+    assert "classification" not in fake.calls
+    assert outcome["rejections_skipped"] == 1
+    assert run(empty_db.all("SELECT * FROM postings")) == []
+
+
+def test_run_agent_steps_keeps_remembering_a_rejection_when_only_budgets_change(empty_db):
+    # Budgets aren't part of the settings version -- changing them must
+    # never re-judge a remembered rejection.
+    _insert_company(empty_db, feed_type=None)
+    run_id = run(empty_db.run("INSERT INTO runs (kind, started_at, status) VALUES ('daily', '2026-09-20T08:00:00', 'running')"))
+
+    settings_ver = fingerprint.settings_version(TITLES_DOC, LOCATIONS)
+    fp = fingerprint.compute_fingerprint(
+        company_name="Acme", title="Software Engineer Intern", location_text="SF", url="https://acme.example/1",
+    )
+    run(fingerprint.record_rejection(
+        empty_db, fp, reason="not a PM role", settings_version=settings_ver,
+        source="claude-discovery", now_iso="2026-09-19T08:00:00",
+    ))
+
+    different_budget_settings = dict(SETTINGS, search_limit_per_run=5, model_discovery="haiku")
+    fake = _fake_run_claude({
+        "discovery": '{"results": [{"company_name": "Acme", "title": "Software Engineer Intern", '
+                     '"url": "https://acme.example/1", "location_text": "SF"}]}',
+        "scout": '{"sources": []}',
+        "improvement": '{"search_plan": null, "proposals": [], "title_suggestions": []}',
+    })
+
+    outcome = run(run_agent_steps(
+        empty_db, run_id=run_id, companies=[{"id": 1, "name": "Acme", "feed_type": None}],
+        titles_doc=TITLES_DOC, locations_setting=LOCATIONS, budget_settings=different_budget_settings,
+        status=_open_status(), today="2026-09-20", now_iso="2026-09-20T08:00:00", run_claude=fake,
+    ))
+
+    assert "classification" not in fake.calls
+    assert outcome["rejections_skipped"] == 1
+
+
+def test_run_agent_steps_rejudges_a_stale_rejection_after_a_title_is_added(empty_db):
+    _insert_company(empty_db, feed_type=None)
+    run_id = run(empty_db.run("INSERT INTO runs (kind, started_at, status) VALUES ('daily', '2026-09-20T08:00:00', 'running')"))
+
+    old_version = fingerprint.settings_version(TITLES_DOC, LOCATIONS)
+    fp = fingerprint.compute_fingerprint(
+        company_name="Acme", title="Growth Product Manager Intern", location_text="SF",
+        url="https://acme.example/1",
+    )
+    run(fingerprint.record_rejection(
+        empty_db, fp, reason="no active title or alias matched", settings_version=old_version,
+        source="claude-discovery", now_iso="2026-09-19T08:00:00",
+    ))
+
+    new_titles_doc = {
+        "titles": [
+            {"title": "PM Intern", "active": True},
+            {"title": "Growth Product Manager Intern", "active": True},
+        ],
+        "exclude_words": [],
+    }
+    assert fingerprint.settings_version(new_titles_doc, LOCATIONS) != old_version
+
+    fake = _fake_run_claude({
+        "discovery": '{"results": [{"company_name": "Acme", "title": "Growth Product Manager Intern", '
+                     '"url": "https://acme.example/1", "location_text": "SF"}]}',
+        "classification": '{"decisions": [{"id": 1, "decision": "match", '
+                           '"matched_title": "Growth Product Manager Intern", "title_en": null}]}',
+        "scout": '{"sources": []}',
+        "improvement": '{"search_plan": null, "proposals": [], "title_suggestions": []}',
+    })
+
+    outcome = run(run_agent_steps(
+        empty_db, run_id=run_id, companies=[{"id": 1, "name": "Acme", "feed_type": None}],
+        titles_doc=new_titles_doc, locations_setting=LOCATIONS, budget_settings=SETTINGS,
+        status=_open_status(), today="2026-09-20", now_iso="2026-09-20T08:00:00", run_claude=fake,
+    ))
+
+    assert fake.calls.count("classification") == 1
+    assert outcome["classification_count"] == 1
+    postings = run(empty_db.all("SELECT * FROM postings"))
+    assert len(postings) == 1
+    assert postings[0]["matched_title"] == "Growth Product Manager Intern"
+
+    # The rejection is overwritten in place, not duplicated into a second row.
+    fingerprints = run(empty_db.all("SELECT * FROM posting_fingerprints"))
+    assert len(fingerprints) == 1
+    assert fingerprints[0]["rejection_reason"] is None
+    assert fingerprints[0]["posting_id"] == postings[0]["id"]
+
+
+def test_run_agent_steps_rejudges_a_stale_rejection_after_a_location_country_is_added(empty_db):
+    _insert_company(empty_db, feed_type=None)
+    run_id = run(empty_db.run("INSERT INTO runs (kind, started_at, status) VALUES ('daily', '2026-09-20T08:00:00', 'running')"))
+
+    old_version = fingerprint.settings_version(TITLES_DOC, LOCATIONS)
+    fp = fingerprint.compute_fingerprint(
+        company_name="Acme", title="PM Intern", location_text="Tokyo, Japan", url="https://acme.example/1",
+    )
+    run(fingerprint.record_rejection(
+        empty_db, fp, reason="outside locations", settings_version=old_version,
+        source="claude-discovery", now_iso="2026-09-19T08:00:00",
+    ))
+
+    new_locations = {"countries": ["US", "JP"], "include_remote": False}
+    assert fingerprint.settings_version(TITLES_DOC, new_locations) != old_version
+
+    fake = _fake_run_claude({
+        "discovery": '{"results": [{"company_name": "Acme", "title": "PM Intern", '
+                     '"url": "https://acme.example/1", "location_text": "Tokyo, Japan"}]}',
+        "classification": '{"decisions": [{"id": 1, "decision": "match", '
+                           '"matched_title": "PM Intern", "title_en": null, "location_match": "match"}]}',
+        "scout": '{"sources": []}',
+        "improvement": '{"search_plan": null, "proposals": [], "title_suggestions": []}',
+    })
+
+    outcome = run(run_agent_steps(
+        empty_db, run_id=run_id, companies=[{"id": 1, "name": "Acme", "feed_type": None}],
+        titles_doc=TITLES_DOC, locations_setting=new_locations, budget_settings=SETTINGS,
+        status=_open_status(), today="2026-09-20", now_iso="2026-09-20T08:00:00", run_claude=fake,
+    ))
+
+    assert fake.calls.count("classification") == 1
+    assert outcome["classification_count"] == 1
+
+
+def test_run_agent_steps_never_rejudges_a_posting_henry_marked_applied(empty_db):
+    # Settings-version staleness only ever applies to remembered rejections
+    # -- a posting Henry has already marked applied, open, or closed must
+    # never be pulled back into classification, even after titles change.
+    run_id = run(empty_db.run("INSERT INTO runs (kind, started_at, status) VALUES ('daily', '2026-09-20T08:00:00', 'running')"))
+    run(empty_db.run(
+        """INSERT INTO postings (company_name, title, matched_title, url, locations, location_match,
+           first_seen, status, applied)
+           VALUES ('Acme', 'PM Intern', 'PM Intern', 'https://acme.example/1', '[]', 'match',
+                   '2026-09-18', 'open', 1)"""
+    ))
+
+    new_titles_doc = {
+        "titles": [{"title": "PM Intern", "active": True}, {"title": "APM Intern", "active": True}],
+        "exclude_words": [],
+    }
+    fake = _fake_run_claude({"improvement": '{"search_plan": null, "proposals": [], "title_suggestions": []}'})
+
+    outcome = run(run_agent_steps(
+        empty_db, run_id=run_id, companies=[], titles_doc=new_titles_doc, locations_setting=LOCATIONS,
+        budget_settings=SETTINGS, status=_open_status(), today="2026-09-20", now_iso="2026-09-20T08:00:00",
+        run_claude=fake,
+    ))
+
+    assert "classification" not in fake.calls
+    assert outcome["classification_count"] == 0
+    posting = run(empty_db.first("SELECT * FROM postings WHERE applied = 1"))
+    assert posting["matched_title"] == "PM Intern"
 
 
 def test_run_agent_steps_classification_keeps_good_decisions_when_one_entry_is_invalid(empty_db):

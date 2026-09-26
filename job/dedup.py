@@ -7,6 +7,13 @@ enough -- issue #26 saw a company re-list an already-known role under a
 new URL, which discovery then saved as a second, brand-new posting
 alongside the original Henry had already marked applied. Company +
 normalized title is the fallback for exactly that case.
+
+`job.fingerprint.match_incoming` (issue #49) is the primary entry point
+the feed, discovery, and classification paths call now -- it checks the
+`posting_fingerprints` table (job id, cleaned URL, then company + title +
+location) before falling back to this module's plain URL/title scan, which
+still matters for postings that predate that table (or that a test seeds
+directly without going through it).
 """
 from __future__ import annotations
 
