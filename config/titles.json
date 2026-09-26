@@ -85,6 +85,39 @@
       "active": true
     },
     {
+      "title": "Product Planning Intern",
+      "group": "Automotive",
+      "aliases": [
+        "MBA Intern, Product Planning",
+        "Vehicle Product Planning Intern"
+      ],
+      "active": true
+    },
+    {
+      "title": "Vehicle Program Manager Intern",
+      "group": "Automotive",
+      "aliases": [
+        "Vehicle Program Management Intern"
+      ],
+      "active": true
+    },
+    {
+      "title": "Connected Vehicle Product Manager Intern",
+      "group": "Automotive",
+      "aliases": [
+        "Connected Vehicle Product Management Intern"
+      ],
+      "active": true
+    },
+    {
+      "title": "Software Product Manager Intern",
+      "group": "Automotive",
+      "aliases": [
+        "Software Product Management Intern"
+      ],
+      "active": true
+    },
+    {
       "title": "Program Manager Intern",
       "group": "Company-specific names",
       "aliases": [
