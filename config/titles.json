@@ -26,7 +26,9 @@
     {
       "title": "MBA Product Manager Intern",
       "group": "Core PM",
-      "aliases": [],
+      "aliases": [
+        "Product Manager MBA Intern"
+      ],
       "active": true
     },
     {
@@ -85,39 +87,6 @@
       "active": true
     },
     {
-      "title": "Product Planning Intern",
-      "group": "Automotive",
-      "aliases": [
-        "MBA Intern, Product Planning",
-        "Vehicle Product Planning Intern"
-      ],
-      "active": true
-    },
-    {
-      "title": "Vehicle Program Manager Intern",
-      "group": "Automotive",
-      "aliases": [
-        "Vehicle Program Management Intern"
-      ],
-      "active": true
-    },
-    {
-      "title": "Connected Vehicle Product Manager Intern",
-      "group": "Automotive",
-      "aliases": [
-        "Connected Vehicle Product Management Intern"
-      ],
-      "active": true
-    },
-    {
-      "title": "Software Product Manager Intern",
-      "group": "Automotive",
-      "aliases": [
-        "Software Product Management Intern"
-      ],
-      "active": true
-    },
-    {
       "title": "Program Manager Intern",
       "group": "Company-specific names",
       "aliases": [
@@ -158,7 +127,8 @@
       "group": "MBA programs",
       "aliases": [
         "Graduate Summer Internship Program - Product Development",
-        "Graduate Summer Internship Program - Digital Product Management"
+        "Graduate Summer Internship Program - Digital Product Management",
+        "MBA Product Development and Management Intern"
       ],
       "active": true
     },
@@ -172,6 +142,24 @@
       "title": "Business Leadership Course Intern",
       "group": "MBA programs",
       "aliases": [],
+      "active": true
+    },
+    {
+      "title": "MBA Intern",
+      "group": "MBA programs",
+      "aliases": [
+        "MBA Summer Intern",
+        "MBA Summer Internship Program"
+      ],
+      "active": true
+    },
+    {
+      "title": "MBA Business Intern",
+      "group": "MBA programs",
+      "aliases": [
+        "MBA Business Internship",
+        "Business Intern, MBA"
+      ],
       "active": true
     },
     {
@@ -292,7 +280,11 @@
     {
       "title": "AI/ML Product Manager Intern",
       "group": "Technical and data-adjacent",
-      "aliases": [],
+      "aliases": [
+        "AI Product Manager Intern",
+        "Generative AI Product Manager Intern",
+        "AI Agent Product Manager Intern"
+      ],
       "active": true
     },
     {
@@ -302,52 +294,61 @@
       "active": true
     },
     {
-      "title": "Digital Product Manager Intern",
-      "group": "Industry-specific",
+      "title": "Payments Product Manager Intern",
+      "group": "Fintech and payments",
+      "aliases": [],
+      "active": true
+    },
+    {
+      "title": "Fintech Product Manager Intern",
+      "group": "Fintech and payments",
+      "aliases": [],
+      "active": true
+    },
+    {
+      "title": "Deployment Strategist Intern",
+      "group": "Government and defense tech",
       "aliases": [
-        "Digital Product: Product Management (MBA)"
+        "Deployment Strategist, Internship"
       ],
       "active": true
     },
     {
-      "title": "Product Development Associate Intern",
-      "group": "Industry-specific",
-      "aliases": [],
+      "title": "Solutions Engineer Intern",
+      "group": "Technical go-to-market",
+      "aliases": [
+        "MBA Intern, Solutions Engineering"
+      ],
       "active": true
     },
     {
-      "title": "Product Development Intern",
-      "group": "Industry-specific",
-      "aliases": [],
+      "title": "Corporate Development Intern",
+      "group": "Corporate development and ventures",
+      "aliases": [
+        "Corporate Development MBA Intern",
+        "Corporate Development & Ventures Intern"
+      ],
       "active": true
     },
     {
-      "title": "Category Manager Intern",
-      "group": "Industry-specific",
-      "aliases": [],
+      "title": "Venture Associate MBA Intern",
+      "group": "Corporate development and ventures",
+      "aliases": [
+        "Venture Associate Intern"
+      ],
       "active": true
     },
     {
-      "title": "Merchandising Intern",
-      "group": "Industry-specific",
-      "aliases": [],
-      "active": false
-    },
-    {
-      "title": "Portfolio Manager Intern",
-      "group": "Industry-specific",
-      "aliases": [],
+      "title": "International Product Manager Intern",
+      "group": "International",
+      "aliases": [
+        "Global Product Manager Intern"
+      ],
       "active": true
     },
     {
-      "title": "Offering Manager Intern",
-      "group": "Industry-specific",
-      "aliases": [],
-      "active": true
-    },
-    {
-      "title": "Platform Manager Intern",
-      "group": "Industry-specific",
+      "title": "International Strategy & Operations Intern",
+      "group": "International",
       "aliases": [],
       "active": true
     },
@@ -387,7 +388,8 @@
       "title": "Technology Consulting Intern",
       "group": "Digital strategy and advisory",
       "aliases": [
-        "Technology Consulting Summer Associate"
+        "Technology Consulting Summer Associate",
+        "Technology Consulting MBA Intern"
       ],
       "active": true
     },
@@ -491,6 +493,89 @@
       "aliases": [
         "TBM Analyst Intern"
       ],
+      "active": true
+    },
+    {
+      "title": "Product Planning Intern",
+      "group": "Automotive",
+      "aliases": [
+        "MBA Intern, Product Planning",
+        "Vehicle Product Planning Intern"
+      ],
+      "active": true
+    },
+    {
+      "title": "Vehicle Program Manager Intern",
+      "group": "Automotive",
+      "aliases": [
+        "Vehicle Program Management Intern"
+      ],
+      "active": true
+    },
+    {
+      "title": "Connected Vehicle Product Manager Intern",
+      "group": "Automotive",
+      "aliases": [
+        "Connected Vehicle Product Management Intern"
+      ],
+      "active": true
+    },
+    {
+      "title": "Software Product Manager Intern",
+      "group": "Automotive",
+      "aliases": [
+        "Software Product Management Intern"
+      ],
+      "active": true
+    },
+    {
+      "title": "Digital Product Manager Intern",
+      "group": "Industry-specific",
+      "aliases": [
+        "Digital Product: Product Management (MBA)"
+      ],
+      "active": true
+    },
+    {
+      "title": "Product Development Associate Intern",
+      "group": "Industry-specific",
+      "aliases": [],
+      "active": true
+    },
+    {
+      "title": "Product Development Intern",
+      "group": "Industry-specific",
+      "aliases": [],
+      "active": true
+    },
+    {
+      "title": "Category Manager Intern",
+      "group": "Industry-specific",
+      "aliases": [],
+      "active": true
+    },
+    {
+      "title": "Merchandising Intern",
+      "group": "Industry-specific",
+      "aliases": [],
+      "active": true
+    },
+    {
+      "title": "Portfolio Manager Intern",
+      "group": "Industry-specific",
+      "aliases": [],
+      "active": true
+    },
+    {
+      "title": "Offering Manager Intern",
+      "group": "Industry-specific",
+      "aliases": [],
+      "active": true
+    },
+    {
+      "title": "Platform Manager Intern",
+      "group": "Industry-specific",
+      "aliases": [],
       "active": true
     }
   ]
