@@ -1,3 +1,4 @@
+releases: apples 9-21-2026: first working implementation bananas 9-22-2026: fixed bugs in origional implementation and added auto backup coconuts 9-24: fixed up ui for adding titles daiquiri 9-25: added phase 5 optimization for searches
 # Internship Watch
 
 Finds Summer 2027 MBA product internships every morning and shows them on a private dashboard. Claude Code builds it through GitHub Actions, and every change goes through a pull request you review.
