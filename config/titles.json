@@ -72,7 +72,7 @@
       "title": "Group Product Manager Intern",
       "group": "Core PM",
       "aliases": [],
-      "active": false
+      "active": true
     },
     {
       "title": "Platform Product Manager Intern",
@@ -114,7 +114,7 @@
       "title": "Product Lead Intern",
       "group": "Company-specific names",
       "aliases": [],
-      "active": false
+      "active": true
     },
     {
       "title": "Chase Associate Program Summer Associate",
@@ -142,6 +142,24 @@
       "title": "Business Leadership Course Intern",
       "group": "MBA programs",
       "aliases": [],
+      "active": true
+    },
+    {
+      "title": "MBA Intern",
+      "group": "MBA programs",
+      "aliases": [
+        "MBA Summer Intern",
+        "MBA Summer Internship Program"
+      ],
+      "active": true
+    },
+    {
+      "title": "MBA Business Intern",
+      "group": "MBA programs",
+      "aliases": [
+        "MBA Business Internship",
+        "Business Intern, MBA"
+      ],
       "active": true
     },
     {
@@ -276,54 +294,63 @@
       "active": true
     },
     {
-      "title": "Digital Product Manager Intern",
-      "group": "Industry-specific",
+      "title": "Payments Product Manager Intern",
+      "group": "Fintech and payments",
+      "aliases": [],
+      "active": true
+    },
+    {
+      "title": "Fintech Product Manager Intern",
+      "group": "Fintech and payments",
+      "aliases": [],
+      "active": true
+    },
+    {
+      "title": "Deployment Strategist Intern",
+      "group": "Government and defense tech",
       "aliases": [
-        "Digital Product: Product Management (MBA)"
+        "Deployment Strategist, Internship"
       ],
       "active": true
     },
     {
-      "title": "Product Development Associate Intern",
-      "group": "Industry-specific",
-      "aliases": [],
+      "title": "Solutions Engineer Intern",
+      "group": "Technical go-to-market",
+      "aliases": [
+        "MBA Intern, Solutions Engineering"
+      ],
       "active": true
     },
     {
-      "title": "Product Development Intern",
-      "group": "Industry-specific",
-      "aliases": [],
+      "title": "Corporate Development Intern",
+      "group": "Corporate development and ventures",
+      "aliases": [
+        "Corporate Development MBA Intern",
+        "Corporate Development & Ventures Intern"
+      ],
       "active": true
     },
     {
-      "title": "Category Manager Intern",
-      "group": "Industry-specific",
-      "aliases": [],
-      "active": false
+      "title": "Venture Associate MBA Intern",
+      "group": "Corporate development and ventures",
+      "aliases": [
+        "Venture Associate Intern"
+      ],
+      "active": true
     },
     {
-      "title": "Merchandising Intern",
-      "group": "Industry-specific",
-      "aliases": [],
-      "active": false
+      "title": "International Product Manager Intern",
+      "group": "International",
+      "aliases": [
+        "Global Product Manager Intern"
+      ],
+      "active": true
     },
     {
-      "title": "Portfolio Manager Intern",
-      "group": "Industry-specific",
+      "title": "International Strategy & Operations Intern",
+      "group": "International",
       "aliases": [],
-      "active": false
-    },
-    {
-      "title": "Offering Manager Intern",
-      "group": "Industry-specific",
-      "aliases": [],
-      "active": false
-    },
-    {
-      "title": "Platform Manager Intern",
-      "group": "Industry-specific",
-      "aliases": [],
-      "active": false
+      "active": true
     },
     {
       "title": "Digital Strategy Intern",
@@ -502,80 +529,53 @@
       "active": true
     },
     {
-      "title": "MBA Intern",
-      "group": "MBA programs",
+      "title": "Digital Product Manager Intern",
+      "group": "Industry-specific",
       "aliases": [
-        "MBA Summer Intern",
-        "MBA Summer Internship Program"
+        "Digital Product: Product Management (MBA)"
       ],
       "active": true
     },
     {
-      "title": "Payments Product Manager Intern",
-      "group": "Fintech and payments",
+      "title": "Product Development Associate Intern",
+      "group": "Industry-specific",
       "aliases": [],
       "active": true
     },
     {
-      "title": "Fintech Product Manager Intern",
-      "group": "Fintech and payments",
+      "title": "Product Development Intern",
+      "group": "Industry-specific",
       "aliases": [],
       "active": true
     },
     {
-      "title": "Deployment Strategist Intern",
-      "group": "Government and defense tech",
-      "aliases": [
-        "Deployment Strategist, Internship"
-      ],
-      "active": true
-    },
-    {
-      "title": "Solutions Engineer Intern",
-      "group": "Technical go-to-market",
-      "aliases": [
-        "MBA Intern, Solutions Engineering"
-      ],
-      "active": true
-    },
-    {
-      "title": "Corporate Development Intern",
-      "group": "Corporate development and ventures",
-      "aliases": [
-        "Corporate Development MBA Intern",
-        "Corporate Development & Ventures Intern"
-      ],
-      "active": true
-    },
-    {
-      "title": "Venture Associate MBA Intern",
-      "group": "Corporate development and ventures",
-      "aliases": [
-        "Venture Associate Intern"
-      ],
-      "active": true
-    },
-    {
-      "title": "International Product Manager Intern",
-      "group": "International",
-      "aliases": [
-        "Global Product Manager Intern"
-      ],
-      "active": true
-    },
-    {
-      "title": "International Strategy & Operations Intern",
-      "group": "International",
+      "title": "Category Manager Intern",
+      "group": "Industry-specific",
       "aliases": [],
       "active": true
     },
     {
-      "title": "MBA Business Intern",
-      "group": "MBA programs",
-      "aliases": [
-        "MBA Business Internship",
-        "Business Intern, MBA"
-      ],
+      "title": "Merchandising Intern",
+      "group": "Industry-specific",
+      "aliases": [],
+      "active": true
+    },
+    {
+      "title": "Portfolio Manager Intern",
+      "group": "Industry-specific",
+      "aliases": [],
+      "active": true
+    },
+    {
+      "title": "Offering Manager Intern",
+      "group": "Industry-specific",
+      "aliases": [],
+      "active": true
+    },
+    {
+      "title": "Platform Manager Intern",
+      "group": "Industry-specific",
+      "aliases": [],
       "active": true
     }
   ]
