@@ -26,6 +26,7 @@ except ImportError:  # pragma: no cover - zoneinfo is stdlib on 3.9+
 
 import companies as companies_logic
 from access import ACCESS_HEADER, AccessTokenError, fetch_jwks, verify_access_token
+from browser_run_budgets import summarize as summarize_browser_run_usage
 from budgets import (
     MODEL_FIELDS,
     NUMERIC_FIELDS,
@@ -317,10 +318,52 @@ class SourceCreate(BaseModel):
     kind: str = "Added by you"
 
 
+# The two failure reasons job/fetchers/careers_pages.py's REASON_BLOCKED and
+# REASON_DISALLOWED use, surfaced as their own status on the Sources tab
+# instead of a generic "failed" (issue #55) -- literal strings rather than
+# an import, since api/src can't import from job/ (the deployed Worker only
+# ships api/src; see CLAUDE.md).
+_CAREERS_PAGE_BLOCKED_ERROR = "blocked"
+_CAREERS_PAGE_DISALLOWED_ERROR = "disallowed by robots.txt"
+
+
+def _careers_page_status(snapshot_status: str | None, last_error: str | None) -> str:
+    if snapshot_status is None:
+        return "working"  # a careers_url on file that hasn't been checked yet
+    if snapshot_status in ("changed", "unchanged"):
+        return snapshot_status
+    if last_error == _CAREERS_PAGE_BLOCKED_ERROR:
+        return "blocked"
+    if last_error == _CAREERS_PAGE_DISALLOWED_ERROR:
+        return "disallowed"
+    return "failed"
+
+
+def _careers_page_out(row: dict) -> dict:
+    return {
+        "company_id": row["company_id"],
+        "name": row["name"],
+        "careers_url": row["careers_url"],
+        "flagged": bool(row["careers_page_flagged"]),
+        "status": _careers_page_status(row.get("status"), row.get("last_error")),
+        "method": row.get("method"),
+        "last_checked": row.get("last_checked"),
+        "last_error": row.get("last_error"),
+        "consecutive_failures": row.get("consecutive_failures") or 0,
+    }
+
+
 @router.get("/sources")
 async def list_sources(db: Database = Depends(get_db)):
     rows = await db.all("SELECT * FROM sources ORDER BY kind ASC, found_count DESC, name ASC")
-    return {"sources": rows}
+    careers_page_rows = await db.all(
+        """SELECT c.id AS company_id, c.name, c.careers_url, c.careers_page_flagged,
+                  s.status, s.method, s.last_checked, s.last_error, s.consecutive_failures
+           FROM companies c LEFT JOIN careers_page_snapshots s ON s.company_id = c.id
+           WHERE c.careers_url IS NOT NULL AND c.status IN ('ranked', 'pinned') AND c.feed_type IS NULL
+           ORDER BY c.careers_page_flagged DESC, c.name ASC"""
+    )
+    return {"sources": rows, "careers_pages": [_careers_page_out(r) for r in careers_page_rows]}
 
 
 @router.post("/sources", status_code=201)
@@ -717,14 +760,33 @@ class BudgetResetCreate(BaseModel):
     note: str | None = None
 
 
+async def _browser_run_summary(db: Database, settings: dict) -> dict:
+    """The Budgets panel's Browser Run section (issue #55). 60 days of
+    `browser_run_usage` easily covers this month, the 7-day series, and the
+    last 10 runs, while keeping the query bounded as the table grows over
+    the life of the project.
+    """
+    cutoff = (date.fromisoformat(central_today()) - timedelta(days=60)).isoformat()
+    rows = await db.all("SELECT * FROM browser_run_usage WHERE substr(at, 1, 10) >= ? ORDER BY at DESC", cutoff)
+    return summarize_browser_run_usage(rows, settings=settings, now=datetime.now(CENTRAL) if CENTRAL else datetime.utcnow())
+
+
+async def _budgets_payload(db: Database, settings: dict, usage: dict) -> dict:
+    changes = await db.all("SELECT * FROM budget_changes ORDER BY id DESC LIMIT 50")
+    forecast = await _budget_forecast(db, settings or {})
+    resets = await _latest_resets(db)
+    browser_run = await _browser_run_summary(db, settings or {})
+    return {
+        "settings": settings, "changes": changes, "forecast": forecast, "usage": usage, "resets": resets,
+        "browser_run": browser_run,
+    }
+
+
 @router.get("/budgets")
 async def get_budgets(db: Database = Depends(get_db)):
     settings = await db.first("SELECT * FROM budget_settings WHERE id = 1")
-    changes = await db.all("SELECT * FROM budget_changes ORDER BY id DESC LIMIT 50")
-    forecast = await _budget_forecast(db, settings or {})
     usage = await _current_usage(db, date.fromisoformat(central_today()))
-    resets = await _latest_resets(db)
-    return {"settings": settings, "changes": changes, "forecast": forecast, "usage": usage, "resets": resets}
+    return await _budgets_payload(db, settings, usage)
 
 
 @router.put("/budgets")
@@ -750,11 +812,8 @@ async def update_budgets(body: BudgetsUpdate, db: Database = Depends(get_db)):
         *[body.doc[field] for field in _BUDGET_FIELDS], at,
     )
     settings = await db.first("SELECT * FROM budget_settings WHERE id = 1")
-    changes = await db.all("SELECT * FROM budget_changes ORDER BY id DESC LIMIT 50")
-    forecast = await _budget_forecast(db, settings or {})
     usage = await _current_usage(db, date.fromisoformat(central_today()))
-    resets = await _latest_resets(db)
-    return {"settings": settings, "changes": changes, "forecast": forecast, "usage": usage, "resets": resets}
+    return await _budgets_payload(db, settings, usage)
 
 
 @router.post("/budgets/resets", status_code=201)
@@ -781,16 +840,30 @@ async def create_budget_reset(body: BudgetResetCreate, db: Database = Depends(ge
     )
 
     settings = await db.first("SELECT * FROM budget_settings WHERE id = 1")
-    changes = await db.all("SELECT * FROM budget_changes ORDER BY id DESC LIMIT 50")
-    forecast = await _budget_forecast(db, settings or {})
     usage_after = await _current_usage(db, today_date)
-    resets = await _latest_resets(db)
-    return {"settings": settings, "changes": changes, "forecast": forecast, "usage": usage_after, "resets": resets}
+    return await _budgets_payload(db, settings, usage_after)
 
 
 # ---------------------------------------------------------------------------
 # Analytics
 # ---------------------------------------------------------------------------
+
+def _source_category(source_name: str | None) -> str | None:
+    """Buckets a posting's `source_name` into the categories Analytics
+    reports postings-found-per-source by (issue #55): a recognized feed
+    type (Greenhouse, Lever, ...), the careers-page reader, Claude
+    discovery, or email alerts (a future source, always 0 for now). `None`
+    for a posting with no source recorded at all -- excluded from the
+    per-source breakdown rather than silently counted as a feed.
+    """
+    if source_name == "careers_page":
+        return "careers_page"
+    if source_name == "claude-discovery":
+        return "discovery"
+    if not source_name:
+        return None
+    return "feed"
+
 
 @router.get("/analytics")
 async def get_analytics(db: Database = Depends(get_db)):
@@ -831,6 +904,28 @@ async def get_analytics(db: Database = Depends(get_db)):
     settings = await db.first("SELECT * FROM budget_settings WHERE id = 1")
     forecast = await _budget_forecast(db, settings or {})
 
+    postings_by_source_row = await db.all(
+        "SELECT source_name, COUNT(*) AS n FROM postings WHERE archived_at IS NULL GROUP BY source_name"
+    )
+    postings_per_source = {"feed": 0, "careers_page": 0, "discovery": 0, "email": 0}
+    for r in postings_by_source_row:
+        category = _source_category(r["source_name"])
+        if category:
+            postings_per_source[category] += r["n"] or 0
+
+    careers_pages_per_run = await db.all(
+        "SELECT run_id, at, method, pages, unchanged, changed, failures FROM browser_run_usage "
+        "ORDER BY run_id DESC LIMIT 60"
+    )
+    careers_pages_per_run.reverse()
+
+    discovery_searches_per_run = await db.all(
+        "SELECT u.run_id AS run_id, r.started_at AS started_at, SUM(u.web_searches) AS searches "
+        "FROM usage u JOIN runs r ON r.id = u.run_id WHERE u.step = 'discovery' "
+        "GROUP BY u.run_id, r.started_at ORDER BY u.run_id DESC LIMIT 60"
+    )
+    discovery_searches_per_run.reverse()
+
     return {
         "coverage": coverage,
         "sources": sources,
@@ -840,6 +935,9 @@ async def get_analytics(db: Database = Depends(get_db)):
         "unconfirmed_count": (unconfirmed_row or {}).get("n") or 0,
         "pruned": pruned,
         "usage_by_step": usage_by_step,
+        "postings_per_source": postings_per_source,
+        "careers_pages_per_run": careers_pages_per_run,
+        "discovery_searches_per_run": discovery_searches_per_run,
         "budgets": settings,
         "forecast": forecast,
         "alerts": alerts,
@@ -894,9 +992,46 @@ async def _apply_source_retire_proposal(db: Database, payload: dict) -> None:
         await db.run("DELETE FROM sources WHERE id = ?", source_id)
 
 
+async def _apply_careers_repair_proposal(db: Database, payload: dict, at: str) -> None:
+    """Approving a repair replaces `careers_url`, clears the "careers page
+    not working" flag, and resets the consecutive-failure count (issue #55)
+    -- but leaves `feed_type`/`feed_id` alone, since the replacement is a
+    listing page for the careers-page reader, not necessarily a feed
+    platform `detect_feed` would recognize.
+    """
+    company_id = payload.get("company_id")
+    new_url = payload.get("new_url")
+    if not company_id or not new_url:
+        return
+    await db.run(
+        "UPDATE companies SET careers_url = ?, careers_page_flagged = 0 WHERE id = ?", new_url, company_id,
+    )
+    await db.run(
+        "UPDATE careers_page_snapshots SET consecutive_failures = 0, last_error = NULL WHERE company_id = ?",
+        company_id,
+    )
+
+
+async def _reject_careers_repair_proposal(db: Database, payload: dict) -> None:
+    """Rejecting leaves the company flagged, and remembers the URL so the
+    scout never proposes it again (issue #55) -- `companies.careers_url_rejected`,
+    read back by `job/agent/careers_repair.py`'s prompt.
+    """
+    company_id = payload.get("company_id")
+    new_url = payload.get("new_url")
+    if not company_id or not new_url:
+        return
+    row = await db.first("SELECT careers_url_rejected FROM companies WHERE id = ?", company_id)
+    rejected = json.loads((row or {}).get("careers_url_rejected") or "[]")
+    if new_url not in rejected:
+        rejected.append(new_url)
+    await db.run("UPDATE companies SET careers_url_rejected = ? WHERE id = ?", json.dumps(rejected), company_id)
+
+
 _PROPOSAL_APPLIERS = {
     "company": _apply_company_proposal,
     "source": _apply_source_proposal,
+    "careers_repair": _apply_careers_repair_proposal,
 }
 
 
@@ -937,6 +1072,9 @@ async def reject_proposal(proposal_id: int, db: Database = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Proposal not found")
     if row["status"] != "pending":
         raise HTTPException(status_code=409, detail="This proposal was already decided")
+    if row["kind"] == "careers_repair":
+        payload = json.loads(row["payload"]) if row.get("payload") else {}
+        await _reject_careers_repair_proposal(db, payload)
     await db.run("UPDATE proposals SET status = 'rejected', decided_at = ? WHERE id = ?", now_iso(), proposal_id)
     return _proposal_out(await db.first("SELECT * FROM proposals WHERE id = ?", proposal_id))
 

@@ -9,6 +9,7 @@
     query: "",
     postings: { today: [], earlier: [], archived: [] },
     sources: [],
+    careersPages: [],
     companies: [],
     analytics: null,
     proposals: [],
@@ -481,13 +482,44 @@
     try {
       var body = await apiGet("/sources");
       state.sources = body.sources;
+      state.careersPages = body.careers_pages || [];
     } catch (e) {
       setStatus("Couldn't load sources. " + e.message);
     }
     render();
   }
 
+  var CP_STATUS_LABELS = {
+    working: "Working", unchanged: "Unchanged", changed: "Changed",
+    failed: "Failed", blocked: "Blocked", disallowed: "Disallowed by robots.txt"
+  };
+  var CP_METHOD_LABELS = { browser_run: "Browser Run", backup: "backup" };
+
+  function renderCareersPages() {
+    var panel = $("careersPagesPanel");
+    var list = $("careersPagesList");
+    list.textContent = "";
+    panel.hidden = !state.careersPages.length;
+    if (!state.careersPages.length) return;
+    state.careersPages.forEach(function (c) {
+      var li = el("li");
+      var status = el("span", "cp-status " + c.status, CP_STATUS_LABELS[c.status] || c.status);
+      li.appendChild(status);
+      if (c.flagged) li.appendChild(el("span", "cp-flag", "Careers page not working"));
+      var name = el("div", null);
+      name.appendChild(el("b", null, c.name));
+      li.appendChild(name);
+      var tail = [];
+      if (c.method) tail.push("via " + (CP_METHOD_LABELS[c.method] || c.method));
+      if (c.last_checked) tail.push("checked " + fmtDateTime(c.last_checked));
+      if (c.last_error) tail.push(c.last_error);
+      if (tail.length) li.appendChild(el("div", null, tail.join(" · ")));
+      list.appendChild(li);
+    });
+  }
+
   function renderSources() {
+    renderCareersPages();
     var wrap = $("srcGroups");
     wrap.textContent = "";
     if (!state.sources.length) {
@@ -634,6 +666,33 @@
     fillList("alertHistoryList", a.alerts, "No alerts.", function (al) {
       return al.type + " (" + al.severity + "): " + al.message + " — " + fmtDate((al.created_at || "").slice(0, 10));
     });
+
+    var perSource = a.postings_per_source || {};
+    fillList("postingsPerSourceList", [
+      { label: "Feeds", n: perSource.feed || 0 },
+      { label: "Careers pages", n: perSource.careers_page || 0 },
+      { label: "Discovery", n: perSource.discovery || 0 },
+      { label: "Email alerts", n: perSource.email || 0 },
+    ], "No postings yet.", function (s) { return s.label + ": " + s.n; });
+
+    var perRun = {};
+    (a.careers_pages_per_run || []).forEach(function (r) {
+      var entry = perRun[r.run_id] || { run_id: r.run_id, at: r.at, browser_run: null, backup: null };
+      entry[r.method] = r;
+      perRun[r.run_id] = entry;
+    });
+    var perRunRows = Object.keys(perRun).map(function (k) { return perRun[k]; })
+      .sort(function (x, y) { return y.run_id - x.run_id; }).slice(0, 10);
+    fillList("careersPagesPerRunList", perRunRows, "No careers-page runs yet.", function (r) {
+      var parts = [fmtDateTime(r.at)];
+      if (r.browser_run) parts.push("Browser Run: " + r.browser_run.pages + " loaded (" + r.browser_run.changed + " changed, " + r.browser_run.unchanged + " unchanged, " + r.browser_run.failures + " failed)");
+      if (r.backup) parts.push("backup: " + r.backup.pages + " loaded (" + r.backup.failures + " failed)");
+      return parts.join(" — ");
+    });
+
+    fillList("discoverySearchesPerRunList", a.discovery_searches_per_run || [], "No discovery runs yet.", function (r) {
+      return fmtDateTime(r.started_at) + ": " + (r.searches || 0) + (r.searches === 1 ? " search" : " searches");
+    });
   }
 
   // -------------------------------------------------------------------
@@ -655,6 +714,7 @@
     if (p.kind === "company") return "Company: " + (payload.action || "change") + " — " + (payload.name || "");
     if (p.kind === "source") return "New source: " + (payload.name || "") + (payload.url ? " (" + payload.url + ")" : "");
     if (p.kind === "source_retire") return "Retire source #" + payload.source_id;
+    if (p.kind === "careers_repair") return "Replace careers page: " + (payload.company_name || "") + " — " + (payload.new_url || "");
     return p.kind;
   }
 
@@ -761,6 +821,81 @@
       " tokens. Forecast this month: " + fmtUsd(body.forecast.monthly_usd) + ".";
     renderBudgetsUsage(body);
     renderBudgetsHistory(body.changes || []);
+    renderBrowserRun(body.browser_run);
+  }
+
+  function fmtMin(n) { return (n || 0).toFixed(1) + " min"; }
+  function fmtHrs(n) { return (n || 0).toFixed(1) + " hours"; }
+
+  function renderBrowserRun(br) {
+    if (!br) return;
+    $("browserRunPlan").textContent = "Plan: " + (br.plan === "paid" ? "Paid" : "Free") + ".";
+    $("browserRunToday").textContent = "Today: " + fmtMin(br.today.minutes_used) + " of " +
+      fmtMin(br.today.minutes_budget) + " used · " + fmtMin(br.today.minutes_left) + " left.";
+    $("browserRunCloudflareFree").textContent = "Cloudflare free allowance: " + br.cloudflare_free.daily_minutes +
+      " min/day (" + fmtMin(br.cloudflare_free.minutes_used) + " used), resets at " + fmtDateTime(br.cloudflare_free.reset_at) + " Central.";
+
+    var monthEl = $("browserRunMonth");
+    if (br.month) {
+      monthEl.hidden = false;
+      var monthText = "This month: " + fmtHrs(br.month.hours_used) + " of " + fmtHrs(br.month.hours_included) +
+        " used · " + fmtHrs(br.month.hours_left) + " left.";
+      if (br.month.overage_usd > 0) monthText += " Estimated overage: " + fmtUsd(br.month.overage_usd) + ".";
+      monthEl.textContent = monthText;
+    } else {
+      monthEl.hidden = true;
+    }
+
+    var backup = br.backup_today || { pages: 0, pages_cap: 0, reasons: [] };
+    var backupText = "Backup today: " + backup.pages + " of " + backup.pages_cap + " pages used";
+    backupText += backup.reasons.length ? " (" + backup.reasons.join(", ") + ")." : ".";
+    $("browserRunBackupToday").textContent = backupText;
+
+    renderBrowserRunChart(br.series_7d || [], br.today.minutes_budget);
+    renderBrowserRunRunsTable(br.last_runs || []);
+  }
+
+  function renderBrowserRunChart(series, dailyLimit) {
+    var chart = $("browserRunChart");
+    chart.textContent = "";
+    var max = Math.max(dailyLimit || 0, 1, Math.max.apply(null, series.map(function (d) { return d.minutes; }).concat([0])));
+    series.forEach(function (d) {
+      var col = el("div", "br-bar-col");
+      var bar = el("div", "br-bar");
+      bar.style.height = Math.max(2, Math.round((d.minutes / max) * 84)) + "px";
+      bar.title = d.date + ": " + fmtMin(d.minutes);
+      col.appendChild(bar);
+      col.appendChild(el("span", "d", fmtDate(d.date)));
+      chart.appendChild(col);
+    });
+    if (dailyLimit) {
+      var line = el("div", "br-limit-line");
+      line.style.bottom = Math.round((dailyLimit / max) * 84) + "px";
+      line.title = "Daily budget: " + fmtMin(dailyLimit);
+      chart.appendChild(line);
+    }
+  }
+
+  function renderBrowserRunRunsTable(runs) {
+    var tbody = $("browserRunRunsBody");
+    tbody.textContent = "";
+    if (!runs.length) {
+      var tr = el("tr");
+      var td = el("td", null, "No runs recorded yet.");
+      td.colSpan = 5;
+      tr.appendChild(td);
+      tbody.appendChild(tr);
+      return;
+    }
+    runs.forEach(function (r) {
+      var tr = el("tr");
+      tr.appendChild(el("td", null, fmtDateTime(r.at)));
+      tr.appendChild(el("td", null, String(r.browser_run_pages || 0)));
+      tr.appendChild(el("td", null, fmtMin(r.browser_run_minutes)));
+      tr.appendChild(el("td", null, String(r.backup_pages || 0)));
+      tr.appendChild(el("td", null, String(r.failures || 0)));
+      tbody.appendChild(tr);
+    });
   }
 
   async function loadBudgets() {

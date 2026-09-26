@@ -227,6 +227,22 @@ dialog::backdrop{background:rgba(20,16,30,.55)}
 .check-status{font-size:13px; color:var(--muted)}
 .check-status.err{color:var(--danger)}
 
+.cp-status{display:inline-block; font-size:12px; font-weight:700; border-radius:999px; padding:1px 8px; margin-right:6px}
+.cp-status.working, .cp-status.unchanged, .cp-status.changed{background:var(--ok-soft); color:var(--ok)}
+.cp-status.failed, .cp-status.blocked, .cp-status.disallowed{background:transparent; border:1px dashed var(--danger); color:var(--danger)}
+.cp-flag{display:inline-block; font-size:12px; font-weight:700; border-radius:999px; padding:1px 8px; background:var(--danger); color:#fff; margin-left:6px}
+
+.br-chart{display:flex; align-items:flex-end; gap:6px; height:100px; margin:10px 0; position:relative; padding-top:4px}
+.br-bar-col{flex:1; display:flex; flex-direction:column; align-items:center; justify-content:flex-end; height:100%; gap:4px}
+.br-bar{width:100%; max-width:28px; background:var(--accent); border-radius:4px 4px 0 0; min-height:2px}
+.br-bar-col .d{font-size:11px; color:var(--muted)}
+.br-chart .br-limit-line{position:absolute; left:0; right:0; border-top:1px dashed var(--danger)}
+
+.br-table-wrap{overflow-x:auto; margin-top:6px}
+.br-table{width:100%; border-collapse:collapse; font-size:13px}
+.br-table th{text-align:left; color:var(--muted); font-weight:700; padding:4px 6px; border-bottom:1px solid var(--line); white-space:nowrap}
+.br-table td{padding:6px; border-bottom:1px solid var(--line); white-space:nowrap}
+
 @media (prefers-reduced-motion: no-preference){
   .item.flash{animation:flash 1.2s ease-out 1}
   @keyframes flash{from{background:var(--accent-soft)} to{background:var(--surface)}}

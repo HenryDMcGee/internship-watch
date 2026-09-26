@@ -39,7 +39,7 @@ def _fake_run_claude(responses):
 
     def fake(step, prompt, *, model):
         calls.append(step)
-        web_searches = 3 if step in ("discovery", "scout") else 0
+        web_searches = 3 if step in ("discovery", "scout", "careers_repair") else 0
         return ClaudeStepResult(step=step, model=model, text=responses[step], web_searches=web_searches)
 
     fake.calls = calls
@@ -165,6 +165,68 @@ def test_run_agent_steps_stores_discovery_results_and_classifies_them(empty_db):
     plans = run(empty_db.all("SELECT * FROM search_plans"))
     assert len(plans) == 1
     assert plans[0]["plan_date"] == "2026-09-21"
+
+
+def test_run_agent_steps_stores_careers_repair_proposals_for_flagged_companies(empty_db):
+    # issue #55: a company flagged with a broken careers page gets a
+    # `careers_repair` proposal for each usable replacement Claude finds.
+    company_id = run(empty_db.run(
+        "INSERT INTO companies (name, status, feed_type, careers_url, careers_page_flagged) "
+        "VALUES ('Acme', 'pinned', NULL, 'https://acme.example/careers', 1)"
+    ))
+    run_id = run(empty_db.run("INSERT INTO runs (kind, started_at, status) VALUES ('daily', '2026-09-20T08:00:00', 'running')"))
+
+    fake = _fake_run_claude({
+        "discovery": '{"results": []}',
+        "scout": '{"sources": []}',
+        "careers_repair": (
+            '{"replacements": [{"company_name": "Acme", "url": "https://acme.example/careers?q=intern", '
+            '"note": "internship search"}]}'
+        ),
+        "improvement": '{"search_plan": null, "proposals": [], "title_suggestions": []}',
+    })
+
+    company = {
+        "id": company_id, "name": "Acme", "feed_type": None,
+        "careers_url": "https://acme.example/careers", "careers_page_flagged": 1,
+        "careers_url_rejected": "[]",
+    }
+    outcome = run(run_agent_steps(
+        empty_db, run_id=run_id, companies=[company],
+        titles_doc=TITLES_DOC, locations_setting=LOCATIONS, budget_settings=SETTINGS,
+        status=_open_status(), today="2026-09-20", now_iso="2026-09-20T08:00:00", run_claude=fake,
+    ))
+
+    assert outcome["careers_repair_count"] == 1
+    assert "careers_repair" in fake.calls
+
+    proposals = run(empty_db.all("SELECT * FROM proposals WHERE kind = 'careers_repair'"))
+    assert len(proposals) == 1
+    import json
+    payload = json.loads(proposals[0]["payload"])
+    assert payload["company_id"] == company_id
+    assert payload["new_url"] == "https://acme.example/careers?q=intern"
+    assert payload["old_url"] == "https://acme.example/careers"
+
+
+def test_run_agent_steps_skips_careers_repair_when_nothing_is_flagged(empty_db):
+    _insert_company(empty_db, feed_type=None)
+    run_id = run(empty_db.run("INSERT INTO runs (kind, started_at, status) VALUES ('daily', '2026-09-20T08:00:00', 'running')"))
+
+    fake = _fake_run_claude({
+        "discovery": '{"results": []}',
+        "scout": '{"sources": []}',
+        "improvement": '{"search_plan": null, "proposals": [], "title_suggestions": []}',
+    })
+
+    outcome = run(run_agent_steps(
+        empty_db, run_id=run_id, companies=[{"id": 1, "name": "Acme", "feed_type": None}],
+        titles_doc=TITLES_DOC, locations_setting=LOCATIONS, budget_settings=SETTINGS,
+        status=_open_status(), today="2026-09-20", now_iso="2026-09-20T08:00:00", run_claude=fake,
+    ))
+
+    assert outcome["careers_repair_count"] == 0
+    assert "careers_repair" not in fake.calls
 
 
 def test_run_agent_steps_discovery_new_count_excludes_a_classification_reject(empty_db):

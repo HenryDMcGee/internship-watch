@@ -30,19 +30,23 @@ ALWAYS_RUN = frozenset({"classification", "pruning"})
 # Cut thresholds are fractions of the daily budget used. Once usage reaches
 # a step's threshold, that step (and everything before it in the tuple) is
 # skipped for the rest of the run.
-CUT_ORDER: tuple[str, ...] = ("scout", "discovery_low_yield", "unclear_page", "improvement")
+CUT_ORDER: tuple[str, ...] = ("scout", "careers_repair", "discovery_low_yield", "unclear_page", "improvement")
 CUT_THRESHOLDS: dict[str, float] = {
     "scout": 0.80,
+    "careers_repair": 0.80,
     "discovery_low_yield": 0.90,
     "unclear_page": 1.00,
     "improvement": 1.00,
 }
 
 # Which `budget_settings` share field funds a step's per-step budget.
-# unclear_page has no dedicated share, so it rides classification's.
+# unclear_page has no dedicated share, so it rides classification's;
+# careers_repair (issue #55) rides scout's, since it's also search-heavy
+# source-finding work with no dedicated share setting of its own.
 SHARE_SETTING: dict[str, str] = {
     "discovery": "share_discovery",
     "scout": "share_scout",
+    "careers_repair": "share_scout",
     "classification": "share_classification",
     "unclear_page": "share_classification",
     "improvement": "share_improvement",

@@ -48,6 +48,9 @@ REASON_BACKUP_DISABLED = "Browser Run unavailable and the backup is off"
 REASON_BACKUP_CAPACITY = "backup page cap reached for this run"
 REASON_ERROR = "error"
 
+MEASURED_BY_CLOUDFLARE_HEADER = "cloudflare_header"
+MEASURED_BY_ELAPSED = "elapsed"
+
 _QUOTA_PHRASES = ("quota", "usage limit", "rate limit")
 
 
@@ -111,12 +114,14 @@ def _looks_like_quota_message(message: str) -> bool:
 def fetch_via_browser_run(
     url: str, *, account_id: str, token: str, session: "requests.Session | None" = None,
     timeout: int = BROWSER_RUN_TIMEOUT_SECONDS,
-) -> tuple[str, float | None]:
+) -> tuple[str, float | None, str]:
     """POSTs to Cloudflare's Browser Rendering `/markdown` endpoint. Returns
-    `(markdown_text, browser_minutes)` -- `browser_minutes` is Cloudflare's
-    own reported browser time when the response includes it, otherwise this
-    call's own elapsed wall-clock time (the issue's fallback for when the
-    response doesn't say).
+    `(markdown_text, browser_minutes, measured_by)` -- `browser_minutes` is
+    Cloudflare's own reported browser time when the response includes it
+    (`measured_by = "cloudflare_header"`), otherwise this call's own elapsed
+    wall-clock time (`measured_by = "elapsed"`, the issue's fallback for when
+    the response doesn't say -- recorded as such in `browser_run_usage`,
+    issue #55).
     """
     session = session or requests
     endpoint = f"https://api.cloudflare.com/client/v4/accounts/{account_id}/browser-rendering/markdown"
@@ -158,28 +163,31 @@ def fetch_via_browser_run(
     result = payload.get("result")
     if isinstance(result, str):
         text = result
-        browser_minutes = None
+        seconds = None
     elif isinstance(result, dict):
         text = result.get("markdown") or result.get("content") or ""
         seconds = result.get("browserTimeSeconds") or (result.get("meta") or {}).get("browserTimeSeconds")
-        browser_minutes = (float(seconds) / 60.0) if seconds is not None else None
     else:
         text = ""
-        browser_minutes = None
+        seconds = None
 
-    if browser_minutes is None:
+    if seconds is not None:
+        browser_minutes = float(seconds) / 60.0
+        measured_by = MEASURED_BY_CLOUDFLARE_HEADER
+    else:
         browser_minutes = elapsed_minutes
+        measured_by = MEASURED_BY_ELAPSED
 
     if not text or not text.strip():
         raise BrowserRunEmpty(f"Browser Run returned empty content for {url}")
 
-    return text, browser_minutes
+    return text, browser_minutes, measured_by
 
 
 def fetch_via_browser_run_with_retry(
     url: str, *, account_id: str, token: str, session: "requests.Session | None" = None,
     timeout: int = BROWSER_RUN_TIMEOUT_SECONDS,
-) -> tuple[str, float | None]:
+) -> tuple[str, float | None, str]:
     """One retry, and only for a timeout (issue: "60-second timeout per page,
     with one retry"). Every other failure (blocked, quota, a server error,
     empty content) is a real answer from Browser Run, not a fluke worth
@@ -226,6 +234,11 @@ class PageOutcome:
     method: str | None = None  # "browser_run" or "backup"
     browser_minutes: float | None = None
     reason: str | None = None
+    # "cloudflare_header" or "elapsed" -- only ever set for a successful
+    # browser_run page (issue #55, test case 13). None for a backup page (it
+    # doesn't draw on the Browser Run minutes budget at all) and for a
+    # failure (nothing was measured).
+    measured_by: str | None = None
 
 
 @dataclass
@@ -237,24 +250,46 @@ class CareersRunOutcome:
     # Paid capacity problem; the daily summary's suggestion is limited to
     # those (issue #53, test case 24).
     switch_reason: str | None = None
+    # Pages successfully loaded/failed via each method this run -- "failed"
+    # here means an attempt was actually made and came back an error, not a
+    # page that never reached that method at all (disallowed by robots.txt,
+    # or backup skipped because it's disabled/at its per-run cap). Used to
+    # write `browser_run_usage` (issue #55); kept on the outcome rather than
+    # recomputed from `pages` because a blocked/disallowed page deliberately
+    # has no `method` set (see PageOutcome.method), so it can't be
+    # reconstructed from `pages` alone.
+    browser_run_pages: int = 0
+    browser_run_failures: int = 0
+    backup_pages: int = 0
+    backup_failures: int = 0
 
 
-def _classify_browser_run_call(url: str, *, account_id: str, token: str, session, fetch) -> tuple[str, str | None, float | None, str | None]:
+def _classify_browser_run_call(
+    url: str, *, account_id: str, token: str, session, fetch,
+) -> tuple[str, str | None, float | None, str | None, str | None]:
     try:
-        text, minutes = fetch(url, account_id=account_id, token=token, session=session)
-        return ("ok", text, minutes, None)
+        result = fetch(url, account_id=account_id, token=token, session=session)
+        # Tolerates a caller's (or test's) fetch callable still returning the
+        # older `(text, minutes)` shape -- only the real `fetch_via_browser_run`
+        # itself is required to report `measured_by` (issue #55).
+        if len(result) >= 3:
+            text, minutes, measured_by = result[0], result[1], result[2]
+        else:
+            text, minutes = result
+            measured_by = None
+        return ("ok", text, minutes, measured_by, None)
     except BrowserRunBlocked as exc:
-        return ("blocked", None, None, str(exc))
+        return ("blocked", None, None, None, str(exc))
     except BrowserRunQuotaExceeded as exc:
-        return ("quota_exceeded", None, None, str(exc))
+        return ("quota_exceeded", None, None, None, str(exc))
     except BrowserRunTimeout as exc:
-        return ("timeout", None, None, str(exc))
+        return ("timeout", None, None, None, str(exc))
     except BrowserRunEmpty as exc:
-        return ("no_content", None, None, str(exc))
+        return ("no_content", None, None, None, str(exc))
     except BrowserRunServerError as exc:
-        return ("server_error", None, None, str(exc))
+        return ("server_error", None, None, None, str(exc))
     except Exception as exc:  # noqa: BLE001 - an unexpected Browser Run bug must not stop the run
-        return ("server_error", None, None, str(exc))
+        return ("server_error", None, None, None, str(exc))
 
 
 def _run_browser_run_batch(urls: list[str], *, account_id, token, session, fetch, max_workers: int):
@@ -321,6 +356,10 @@ def run_careers_pages(
     minutes_used = 0.0
     consecutive_server_errors = 0
     backup_used = 0
+    browser_run_ok = 0
+    browser_run_failed = 0
+    backup_ok = 0
+    backup_failed = 0
 
     i = 0
     n = len(allowed)
@@ -332,16 +371,22 @@ def run_careers_pages(
                 urls, account_id=account_id, token=token, session=session,
                 fetch=browser_run_fetch, max_workers=max_concurrency,
             )
-            for company, (kind, text, minutes, _err) in zip(batch, results):
+            for company, (kind, text, minutes, measured_by, _err) in zip(batch, results):
                 company_id, url = company["id"], company["careers_url"]
                 if kind == "ok":
                     minutes_used += minutes or 0.0
-                    pages.append(PageOutcome(company_id, url, ok=True, text=text, method="browser_run", browser_minutes=minutes))
+                    browser_run_ok += 1
+                    pages.append(PageOutcome(
+                        company_id, url, ok=True, text=text, method="browser_run",
+                        browser_minutes=minutes, measured_by=measured_by,
+                    ))
                     consecutive_server_errors = 0
                     if minutes_used >= daily_minutes_budget:
                         mode = "backup"
                         switch_reason = switch_reason or "minutes"
-                elif kind == "blocked":
+                    continue
+                browser_run_failed += 1
+                if kind == "blocked":
                     pages.append(PageOutcome(company_id, url, ok=False, reason=REASON_BLOCKED))
                 elif kind == "timeout":
                     pages.append(PageOutcome(company_id, url, ok=False, reason=REASON_TIMEOUT))
@@ -370,12 +415,19 @@ def run_careers_pages(
                 try:
                     text = backup_fetch(url)
                 except Exception as exc:  # noqa: BLE001 - a blocked/unavailable site must not stop the run
+                    backup_failed += 1
                     pages.append(PageOutcome(company_id, url, ok=False, reason=REASON_ERROR))
                 else:
                     if not text or not text.strip():
+                        backup_failed += 1
                         pages.append(PageOutcome(company_id, url, ok=False, reason=REASON_NO_CONTENT))
                     else:
+                        backup_ok += 1
                         pages.append(PageOutcome(company_id, url, ok=True, text=text, method="backup"))
             i += 1
 
-    return CareersRunOutcome(pages=pages, browser_run_minutes_used=minutes_used, switch_reason=switch_reason)
+    return CareersRunOutcome(
+        pages=pages, browser_run_minutes_used=minutes_used, switch_reason=switch_reason,
+        browser_run_pages=browser_run_ok, browser_run_failures=browser_run_failed,
+        backup_pages=backup_ok, backup_failures=backup_failed,
+    )

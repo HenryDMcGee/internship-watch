@@ -17,10 +17,22 @@ CLAUDE_LIMIT = "claude_limit"
 RUN_FAILED = "run_failed"
 CLAUDE_NOT_CONFIGURED = "claude_not_configured"
 CLAUDE_STEP_ISSUE = "claude_step_issue"
+BROWSER_RUN_80 = "browser_run_80"
+BROWSER_RUN_100 = "browser_run_100"
+BROWSER_RUN_MONTH_80 = "browser_run_month_80"
+BROWSER_RUN_MONTH_100 = "browser_run_month_100"
+WORKERS_PAID_SUGGESTED = "workers_paid_suggested"
 
 ALERT_TYPES = frozenset({
     BUDGET_80, BUDGET_100, USAGE_SPIKE, CLAUDE_LIMIT, RUN_FAILED, CLAUDE_NOT_CONFIGURED, CLAUDE_STEP_ISSUE,
+    BROWSER_RUN_80, BROWSER_RUN_100, BROWSER_RUN_MONTH_80, BROWSER_RUN_MONTH_100, WORKERS_PAID_SUGGESTED,
 })
+
+# Days within a trailing week the backup has to have taken over for minutes-
+# or quota-capacity reasons before the daily summary suggests Workers Paid
+# (issue #55). An outage-caused switch never counts -- that's a site/network
+# problem, not a Browser Run capacity one.
+WORKERS_PAID_SUGGESTION_DAYS = 3
 
 
 @dataclass
@@ -45,6 +57,63 @@ def evaluate_spike_alert(tokens_today: int, seven_day_avg_tokens: float) -> Aler
             USAGE_SPIKE, "warning",
             f"Today's token usage ({tokens_today:,}) is more than double the 7-day average "
             f"({seven_day_avg_tokens:,.0f}).",
+        )
+    return None
+
+
+def evaluate_browser_run_alerts(
+    *, minutes_used_today: float, daily_minutes_budget: float,
+    plan: str = "free", hours_used_month: float | None = None, hours_included_month: float | None = None,
+) -> list[AlertCandidate]:
+    """Browser Run minutes at 80%/100% of the job's own daily budget, and --
+    on the Paid plan only -- 80%/100% of the monthly included hours (issue
+    #55). Each fires at most once a day, same as every other alert here
+    (`record_alerts`'s de-duplication, not this function).
+    """
+    candidates: list[AlertCandidate] = []
+    daily_fraction = (minutes_used_today / daily_minutes_budget) if daily_minutes_budget > 0 else 0.0
+    if daily_fraction >= 1.0:
+        candidates.append(AlertCandidate(
+            BROWSER_RUN_100, "critical",
+            f"Browser Run's daily minutes budget is at {daily_fraction:.0%} ({minutes_used_today:.1f} of "
+            f"{daily_minutes_budget:.1f} min).",
+        ))
+    elif daily_fraction >= 0.8:
+        candidates.append(AlertCandidate(
+            BROWSER_RUN_80, "warning",
+            f"Browser Run's daily minutes budget is at {daily_fraction:.0%} ({minutes_used_today:.1f} of "
+            f"{daily_minutes_budget:.1f} min).",
+        ))
+
+    if plan == "paid" and hours_included_month and hours_included_month > 0 and hours_used_month is not None:
+        monthly_fraction = hours_used_month / hours_included_month
+        if monthly_fraction >= 1.0:
+            candidates.append(AlertCandidate(
+                BROWSER_RUN_MONTH_100, "critical",
+                f"Browser Run's included monthly hours are at {monthly_fraction:.0%} ({hours_used_month:.1f} of "
+                f"{hours_included_month:.1f} hours) -- extra usage is billed as overage.",
+            ))
+        elif monthly_fraction >= 0.8:
+            candidates.append(AlertCandidate(
+                BROWSER_RUN_MONTH_80, "warning",
+                f"Browser Run's included monthly hours are at {monthly_fraction:.0%} ({hours_used_month:.1f} of "
+                f"{hours_included_month:.1f} hours).",
+            ))
+    return candidates
+
+
+def evaluate_workers_paid_suggestion(capacity_backup_days: "set[str] | list[str]") -> AlertCandidate | None:
+    """Suggests Workers Paid once the backup has taken over for a capacity
+    reason ('minutes' or 'quota', never 'outage' or 'missing_token') on at
+    least `WORKERS_PAID_SUGGESTION_DAYS` distinct days within a trailing
+    week (issue #55).
+    """
+    if len(set(capacity_backup_days)) >= WORKERS_PAID_SUGGESTION_DAYS:
+        return AlertCandidate(
+            WORKERS_PAID_SUGGESTED, "warning",
+            f"The backup took over because Browser Run's minutes or quota ran out on "
+            f"{len(set(capacity_backup_days))} of the last 7 days. Consider Workers Paid for more Browser "
+            f"Rendering minutes.",
         )
     return None
 
