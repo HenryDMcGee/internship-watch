@@ -41,7 +41,7 @@ from job.agent.pipeline import build_unclear_reader, run_agent_steps
 from job.agent.summary import build_summary_payload, send_daily_summary
 from job.agent.usage import record_usage
 from job.d1_client import D1HttpDatabase
-from job.dedup import find_duplicate_posting
+from job import fingerprint
 from job.fetchers import run_fetcher
 from job.locations import location_match
 from job.matching import classify_posting, cycle_status
@@ -62,13 +62,18 @@ def today_central():
     return datetime.now(CENTRAL).date() if CENTRAL else datetime.utcnow().date()
 
 
-async def _fetch_and_store(db, companies: list[dict], titles_doc: dict, locations_setting: dict, run_id: int) -> tuple[int, dict[int, bool], dict[int, set[str]], int, int, int]:
+async def _fetch_and_store(
+    db, companies: list[dict], titles_doc: dict, locations_setting: dict, run_id: int,
+) -> tuple[int, dict[int, bool], dict[int, set[str]], int, int, int, int, int]:
     new_count = 0
     feed_ok: dict[int, bool] = {}
     current_urls: dict[int, set[str]] = {}
     no_source_count = 0
     feed_error_count = 0
     sources_found = 0
+    repeats_recognized = 0
+    rejections_skipped = 0
+    settings_ver = fingerprint.settings_version(titles_doc, locations_setting)
 
     for company in companies:
         result = run_fetcher(company)
@@ -103,14 +108,25 @@ async def _fetch_and_store(db, companies: list[dict], titles_doc: dict, location
 
         useful = 0
         for fetched in result.postings:
-            match = classify_posting(fetched.title, "", titles_doc)
-            if match.decision == "reject":
+            source_name = company.get("feed_type") or "feed"
+            outcome = await fingerprint.match_incoming(
+                db, company_name=company["name"], title=fetched.title, url=fetched.url,
+                location_text=fetched.location_text, external_id=fetched.external_id,
+                settings_version=settings_ver, source=source_name, now_iso=now_iso(),
+            )
+            if outcome.kind == "posting":
+                repeats_recognized += 1
+                continue
+            if outcome.kind == "rejection":
+                rejections_skipped += 1
                 continue
 
-            existing = await find_duplicate_posting(
-                db, company_name=company["name"], title=fetched.title, url=fetched.url
-            )
-            if existing:
+            match = classify_posting(fetched.title, "", titles_doc)
+            if match.decision == "reject":
+                await fingerprint.record_rejection(
+                    db, outcome.fp, reason=match.reason, settings_version=settings_ver,
+                    source=source_name, now_iso=now_iso(), existing_id=outcome.stale_fingerprint_id,
+                )
                 continue
 
             loc_decision = location_match(fetched.location_text, locations_setting)
@@ -131,12 +147,19 @@ async def _fetch_and_store(db, companies: list[dict], titles_doc: dict, location
                 "INSERT INTO posting_events (posting_id, type, detail, at) VALUES (?, 'found', ?, ?)",
                 new_id, json.dumps({"feed_type": company.get("feed_type")}), now_iso(),
             )
+            await fingerprint.record_posting(
+                db, outcome.fp, posting_id=new_id, settings_version=settings_ver,
+                source=source_name, now_iso=now_iso(), existing_id=outcome.stale_fingerprint_id,
+            )
 
         if useful:
             await db.run("UPDATE run_stats SET useful = ? WHERE id = ?", useful, run_stats_id)
             sources_found += 1
 
-    return new_count, feed_ok, current_urls, no_source_count, feed_error_count, sources_found
+    return (
+        new_count, feed_ok, current_urls, no_source_count, feed_error_count, sources_found,
+        repeats_recognized, rejections_skipped,
+    )
 
 
 async def _verify_and_prune(
@@ -256,9 +279,10 @@ async def _run_body(db, run_id: int, started_at: str, kind: str, company_ids: li
     else:
         companies = await config.load_companies(db)
 
-    new_count, feed_ok, current_urls, no_source_count, feed_error_count, sources_found = await _fetch_and_store(
-        db, companies, titles_doc, locations_setting, run_id
-    )
+    (
+        new_count, feed_ok, current_urls, no_source_count, feed_error_count, sources_found,
+        repeats_recognized, rejections_skipped,
+    ) = await _fetch_and_store(db, companies, titles_doc, locations_setting, run_id)
 
     agent_outcome = None
     unclear_reader = None
@@ -283,6 +307,8 @@ async def _run_body(db, run_id: int, started_at: str, kind: str, company_ids: li
             run_claude=agent_client.run_claude_step,
         )
         new_count += agent_outcome["discovery_new_count"]
+        repeats_recognized += agent_outcome.get("repeats_recognized", 0)
+        rejections_skipped += agent_outcome.get("rejections_skipped", 0)
         unclear_reader = build_unclear_reader(
             status=status, model=budget_settings.get("model_classification", "haiku"),
             on_usage=unclear_results.append,
@@ -291,7 +317,7 @@ async def _run_body(db, run_id: int, started_at: str, kind: str, company_ids: li
     elif kind == "daily":
         agent_outcome = {
             "discovery_count": 0, "discovery_new_count": 0, "classification_count": 0, "scout_count": 0,
-            "scout_skipped_count": 0,
+            "scout_skipped_count": 0, "repeats_recognized": 0, "rejections_skipped": 0,
             "steps_skipped": [{"step": "all", "reason": "Claude isn't configured (no "
                                                           "CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY)"}],
             "steps_succeeded": [], "claude_limit_hit": False, "errors": [], "title_pr": None,
@@ -304,7 +330,8 @@ async def _run_body(db, run_id: int, started_at: str, kind: str, company_ids: li
 
     summary = (
         f"Checked {len(companies)} companies, {new_count} new posting(s), "
-        f"{feed_error_count} feed error(s), {no_source_count} with no source yet."
+        f"{feed_error_count} feed error(s), {no_source_count} with no source yet, "
+        f"{repeats_recognized} repeat(s) recognized, {rejections_skipped} remembered rejection(s) skipped."
     )
     if kind == "daily" and not claude_configured:
         # Never let this go unsaid (issue #16): a run without Claude
@@ -335,6 +362,8 @@ async def _run_body(db, run_id: int, started_at: str, kind: str, company_ids: li
         "companies_checked": len(companies),
         "feed_errors": feed_error_count,
         "no_source_count": no_source_count,
+        "repeats_recognized": repeats_recognized,
+        "rejections_skipped": rejections_skipped,
         "ranking_refresh": ranking_summary,
         "summary": summary,
         "agent_outcome": agent_outcome,

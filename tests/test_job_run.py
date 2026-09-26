@@ -5,6 +5,7 @@ import sqlite3
 import pytest
 
 import job.run as run_module
+from job import config, fingerprint
 from job.agent import client as agent_client
 from job.agent.client import ClaudeStepResult
 from job.fetchers import FetchResult
@@ -159,6 +160,91 @@ def test_run_overrides_user_mark_open_once_posting_leaves_feed(empty_db, monkeyp
     assert posting["status"] == "closed"
     assert posting["verified_via"] == "feed"
     assert posting["archived_at"] is not None
+
+
+def test_run_recognizes_a_feed_repeat_and_still_verifies_it(empty_db, monkeypatch):
+    # A posting the company's own feed lists again today (found via
+    # fingerprint match rather than an exact URL) must not become a second
+    # row, and must still get its normal daily status check in this same run.
+    company_id = _insert_company(empty_db)
+    posting_id = run(empty_db.run(
+        """INSERT INTO postings (company_id, company_name, title, matched_title, url, locations,
+           location_match, first_seen, status)
+           VALUES (?, 'Acme', 'MBA Product Manager Intern', 'MBA Product Manager Intern',
+                   'https://boards.greenhouse.io/acme/jobs/1', '[]', 'match', '2026-09-18', 'unverified')""",
+        company_id,
+    ))
+
+    def fake_run_fetcher(company, session=None):
+        return FetchResult(
+            company_id=company["id"], company_name=company["name"],
+            postings=[FetchedPosting(
+                company_name="Acme", title="MBA Product Manager Intern",
+                url="https://boards.greenhouse.io/acme/jobs/1", location_text="San Francisco, CA",
+            )],
+        )
+
+    monkeypatch.setattr(run_module, "run_fetcher", fake_run_fetcher)
+    result = run(run_module.run(empty_db, kind="daily"))
+
+    assert result["repeats_recognized"] == 1
+    assert result["new_count"] == 0
+    postings = run(empty_db.all("SELECT * FROM postings"))
+    assert len(postings) == 1
+    assert postings[0]["id"] == posting_id
+    assert postings[0]["status"] == "open"
+    assert postings[0]["verified_via"] == "feed"
+    assert postings[0]["verified_at"] is not None
+
+
+def test_run_summary_reports_repeats_recognized_and_rejections_skipped(empty_db, monkeypatch):
+    company_id = _insert_company(empty_db)
+
+    existing_urls = [f"https://boards.greenhouse.io/acme/jobs/{i}" for i in range(3)]
+    for i, url in enumerate(existing_urls):
+        run(empty_db.run(
+            """INSERT INTO postings (company_id, company_name, title, matched_title, url, locations,
+               location_match, first_seen, status)
+               VALUES (?, 'Acme', ?, ?, ?, '[]', 'match', '2026-09-18', 'unverified')""",
+            company_id, f"MBA Product Manager Intern {i}", f"MBA Product Manager Intern {i}", url,
+        ))
+
+    settings_ver = fingerprint.settings_version(config.load_titles(), config.DEFAULT_LOCATIONS)
+    rejection_urls = [f"https://boards.greenhouse.io/acme/jobs/rejected-{i}" for i in range(2)]
+    for i, url in enumerate(rejection_urls):
+        fp = fingerprint.compute_fingerprint(
+            company_name="Acme", title=f"Marketing Intern {i}", location_text="San Francisco, CA", url=url,
+        )
+        run(fingerprint.record_rejection(
+            empty_db, fp, reason="excluded word 'marketing'", settings_version=settings_ver,
+            source="greenhouse", now_iso="2026-09-19T08:00:00",
+        ))
+
+    def fake_run_fetcher(company, session=None):
+        postings = [
+            FetchedPosting(
+                company_name="Acme", title=f"MBA Product Manager Intern {i}", url=existing_urls[i],
+                location_text="San Francisco, CA",
+            )
+            for i in range(3)
+        ] + [
+            FetchedPosting(
+                company_name="Acme", title=f"Marketing Intern {i}", url=rejection_urls[i],
+                location_text="San Francisco, CA",
+            )
+            for i in range(2)
+        ]
+        return FetchResult(company_id=company["id"], company_name=company["name"], postings=postings)
+
+    monkeypatch.setattr(run_module, "run_fetcher", fake_run_fetcher)
+    result = run(run_module.run(empty_db, kind="daily"))
+
+    assert result["repeats_recognized"] == 3
+    assert result["rejections_skipped"] == 2
+    assert "3 repeat(s) recognized" in result["summary"]
+    assert "2 remembered rejection(s) skipped" in result["summary"]
+    # The remembered rejections must not have created any new postings.
+    assert len(run(empty_db.all("SELECT * FROM postings"))) == 3
 
 
 def test_run_prunes_wrong_cycle_posting_even_when_still_open(empty_db, monkeypatch):
