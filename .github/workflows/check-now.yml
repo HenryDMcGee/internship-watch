@@ -45,4 +45,5 @@ jobs:
           CLOUDFLARE_D1_TOKEN: ${{ secrets.CLOUDFLARE_D1_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           D1_DATABASE_ID: ${{ secrets.D1_DATABASE_ID }}
+          CLOUDFLARE_BROWSER_TOKEN: ${{ secrets.CLOUDFLARE_BROWSER_TOKEN }}
         run: python -m job.run --request-id "${{ inputs.request_id }}"
