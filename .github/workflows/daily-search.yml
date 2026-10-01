@@ -76,4 +76,5 @@ jobs:
           # preview; see job/agent/summary.py). Leave unset to skip it.
           CLAUDE_ROUTINE_URL: ${{ secrets.CLAUDE_ROUTINE_URL }}
           CLAUDE_ROUTINE_TOKEN: ${{ secrets.CLAUDE_ROUTINE_TOKEN }}
+          CLOUDFLARE_BROWSER_TOKEN: ${{ secrets.CLOUDFLARE_BROWSER_TOKEN }}
         run: python -m job.run
