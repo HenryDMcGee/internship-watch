@@ -16,6 +16,14 @@ def run(coro):
     return asyncio.run(coro)
 
 
+@pytest.fixture(autouse=True)
+def _not_a_ranking_refresh_day(monkeypatch):
+    # These tests count companies and postings from a single fake feed. On the
+    # first weekday of a quarter a daily run also imports the 100-company
+    # ranking, so they failed on those real calendar days; pin the date.
+    monkeypatch.setattr(run_module, "is_quarterly_refresh_day", lambda _day: False)
+
+
 def _insert_company(db, **overrides):
     row = {"name": "Acme", "status": "pinned", "feed_type": "greenhouse", "feed_id": "acme"}
     row.update(overrides)

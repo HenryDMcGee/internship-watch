@@ -27,6 +27,7 @@ from job.agent.usage import record_usage
 from job.config import load_search_plan, load_watchlist_setting
 from job import fingerprint
 from job.locations import location_match as compute_location_match
+from job.matching import reconsider_rejection
 
 # `job.config` (imported above) adds `api/src` to `sys.path`, which this
 # import needs -- see `job/feeds/detect.py`'s docstring for why company
@@ -141,6 +142,7 @@ async def run_agent_steps(
         decisions = await guarded("classification", do_classification) or []
         outcome["classification_count"] = await _apply_classification_decisions(
             db, decisions, now_iso=now_iso, pending=discovery_pending, settings_version=settings_ver,
+            titles_doc=titles_doc, locations_setting=locations_setting,
         )
 
     # `discovery_count` is every row discovery *stored*, before classification
@@ -321,9 +323,19 @@ async def count_visible_postings(db, ids: list[int]) -> int:
     return (row or {}).get("n") or 0
 
 
+def _posting_location_text(posting: dict) -> str:
+    locations = posting.get("locations")
+    if isinstance(locations, str):
+        try:
+            locations = json.loads(locations)
+        except (TypeError, ValueError):
+            locations = []
+    return ", ".join(locations) if isinstance(locations, list) else ""
+
+
 async def _apply_classification_decisions(
     db, decisions: list[dict], *, now_iso: str, pending: dict[int, tuple] | None = None,
-    settings_version: str | None = None,
+    settings_version: str | None = None, titles_doc: dict | None = None, locations_setting: dict | None = None,
 ) -> int:
     pending = pending or {}
     applied = 0
@@ -348,6 +360,21 @@ async def _apply_classification_decisions(
                 url=posting.get("url"),
             )
             stale_fingerprint_id = None
+
+        # A rejection about location, hiring cycle, or an unmatched title is
+        # checked against the plain rules before it sticks: a missing or
+        # unrecognizable location never rejects, and a reason that admits
+        # the title matches is treated as unclear (issue #60).
+        if d["decision"] == "reject" and titles_doc is not None:
+            recovered = reconsider_rejection(
+                d.get("reason"), posting.get("title") or "", _posting_location_text(posting),
+                titles_doc, locations_setting or {},
+            )
+            if recovered is not None:
+                d = {
+                    **d, "decision": "match", "matched_title": recovered.matched_title,
+                    "location_match": recovered.location_match,
+                }
 
         if d["decision"] == "match":
             await db.run(

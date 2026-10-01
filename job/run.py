@@ -50,6 +50,7 @@ from job.fetchers import run_fetcher
 from job.fetchers import careers_pages
 from job.locations import location_match
 from job.matching import classify_posting, cycle_status
+from job.restore_rejections import restore_rejections, summary_line as restore_summary_line
 from job.pruning import decide_prune
 from job.ranking import is_quarterly_refresh_day, refresh_ranking
 from job.verify.browser import BrowserBudget
@@ -511,6 +512,17 @@ async def _run_body(db, run_id: int, started_at: str, kind: str, company_ids: li
     budget_settings = await config.load_budget_settings(db)
     browser_budget = BrowserBudget(remaining=int(budget_settings.get("browser_checks_per_run") or 50))
 
+    # Rejections the old location, cycle, and title rules got wrong are
+    # judged again before the feeds are read (issue #60).
+    restore_line = None
+    try:
+        restored = await restore_rejections(
+            db, titles_doc=titles_doc, locations_setting=locations_setting, now_iso=now_iso(),
+        )
+        restore_line = restore_summary_line(restored)
+    except Exception as exc:  # noqa: BLE001 - cleanup must never stop the run
+        print(f"restore_rejections: {exc}")
+
     if company_ids is not None:
         companies = await config.load_companies_by_ids(db, company_ids)
     else:
@@ -585,6 +597,8 @@ async def _run_body(db, run_id: int, started_at: str, kind: str, company_ids: li
         f"{repeats_recognized} repeat(s) recognized, {rejections_skipped} remembered rejection(s) skipped, "
         f"{feeds_skipped} feed(s) unchanged and skipped."
     )
+    if restore_line:
+        summary += f" {restore_line}"
     careers_line = _careers_pages_summary_line(careers_stats)
     if careers_line:
         summary += " " + careers_line
