@@ -344,6 +344,7 @@ def _careers_page_out(row: dict) -> dict:
         "company_id": row["company_id"],
         "name": row["name"],
         "careers_url": row["careers_url"],
+        "note": row.get("careers_note"),
         "flagged": bool(row["careers_page_flagged"]),
         "status": _careers_page_status(row.get("status"), row.get("last_error")),
         "method": row.get("method"),
@@ -357,7 +358,7 @@ def _careers_page_out(row: dict) -> dict:
 async def list_sources(db: Database = Depends(get_db)):
     rows = await db.all("SELECT * FROM sources ORDER BY kind ASC, found_count DESC, name ASC")
     careers_page_rows = await db.all(
-        """SELECT c.id AS company_id, c.name, c.careers_url, c.careers_page_flagged,
+        """SELECT c.id AS company_id, c.name, c.careers_url, c.careers_note, c.careers_page_flagged,
                   s.status, s.method, s.last_checked, s.last_error, s.consecutive_failures
            FROM companies c LEFT JOIN careers_page_snapshots s ON s.company_id = c.id
            WHERE c.careers_url IS NOT NULL AND c.status IN ('ranked', 'pinned') AND c.feed_type IS NULL
@@ -456,9 +457,10 @@ async def add_company(body: CompanyCreate, db: Database = Depends(get_db)):
         raise HTTPException(status_code=409, detail=f"{name} is already on the list")
     feed_type, feed_id = companies_logic.detect_feed(body.careers_url)
     new_id = await db.run(
-        """INSERT INTO companies (name, aliases, status, careers_url, feed_type, feed_id, added_by, added_at)
-           VALUES (?, '[]', 'pinned', ?, ?, ?, 'henry', ?)""",
-        name, body.careers_url, feed_type, feed_id, now_iso(),
+        """INSERT INTO companies (name, aliases, status, careers_url, careers_url_approved, feed_type, feed_id,
+           added_by, added_at)
+           VALUES (?, '[]', 'pinned', ?, ?, ?, ?, 'henry', ?)""",
+        name, body.careers_url, 1 if body.careers_url else 0, feed_type, feed_id, now_iso(),
     )
     return _company_out(await db.first("SELECT * FROM companies WHERE id = ?", new_id))
 
@@ -487,9 +489,10 @@ async def save_pasted_companies(body: PasteSaveRequest, db: Database = Depends(g
         seen_normalized.add(normalized)
         feed_type, feed_id = companies_logic.detect_feed(entry.url)
         new_id = await db.run(
-            """INSERT INTO companies (name, aliases, status, careers_url, feed_type, feed_id, added_by, added_at)
-               VALUES (?, '[]', 'pinned', ?, ?, ?, 'paste', ?)""",
-            name, entry.url, feed_type, feed_id, now_iso(),
+            """INSERT INTO companies (name, aliases, status, careers_url, careers_url_approved, feed_type, feed_id,
+               added_by, added_at)
+               VALUES (?, '[]', 'pinned', ?, ?, ?, ?, 'paste', ?)""",
+            name, entry.url, 1 if entry.url else 0, feed_type, feed_id, now_iso(),
         )
         saved.append(_company_out(await db.first("SELECT * FROM companies WHERE id = ?", new_id)))
     return {"saved": saved}
@@ -926,7 +929,12 @@ async def get_analytics(db: Database = Depends(get_db)):
     )
     discovery_searches_per_run.reverse()
 
+    recent_runs = await db.all(
+        "SELECT id, kind, started_at, status, new_count, summary FROM runs ORDER BY id DESC LIMIT 10"
+    )
+
     return {
+        "recent_runs": recent_runs,
         "coverage": coverage,
         "sources": sources,
         "first_to_find": first_to_find,
@@ -966,9 +974,10 @@ async def _apply_company_proposal(db: Database, payload: dict, at: str) -> None:
             return
         feed_type, feed_id = companies_logic.detect_feed(payload.get("careers_url"))
         await db.run(
-            """INSERT INTO companies (name, aliases, status, careers_url, feed_type, feed_id, added_by, added_at)
-               VALUES (?, '[]', 'pinned', ?, ?, ?, 'claude', ?)""",
-            name, payload.get("careers_url"), feed_type, feed_id, at,
+            """INSERT INTO companies (name, aliases, status, careers_url, careers_url_approved, feed_type, feed_id,
+               added_by, added_at)
+               VALUES (?, '[]', 'pinned', ?, ?, ?, ?, 'claude', ?)""",
+            name, payload.get("careers_url"), 1 if payload.get("careers_url") else 0, feed_type, feed_id, at,
         )
     elif action == "remove" and payload.get("company_id"):
         await db.run("UPDATE companies SET status = 'removed' WHERE id = ?", payload["company_id"])
@@ -1004,7 +1013,9 @@ async def _apply_careers_repair_proposal(db: Database, payload: dict, at: str) -
     if not company_id or not new_url:
         return
     await db.run(
-        "UPDATE companies SET careers_url = ?, careers_page_flagged = 0 WHERE id = ?", new_url, company_id,
+        "UPDATE companies SET careers_url = ?, careers_url_approved = 1, careers_note = NULL, "
+        "careers_page_flagged = 0 WHERE id = ?",
+        new_url, company_id,
     )
     await db.run(
         "UPDATE careers_page_snapshots SET consecutive_failures = 0, last_error = NULL WHERE company_id = ?",

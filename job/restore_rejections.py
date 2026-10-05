@@ -135,6 +135,26 @@ async def restore_rejections(
     return result
 
 
+_DUPLICATE_REJECTIONS_WHERE = (
+    "rejection_reason IS NOT NULL AND posting_id IS NULL AND EXISTS ("
+    "SELECT 1 FROM posting_fingerprints twin WHERE twin.title_key = posting_fingerprints.title_key "
+    "AND twin.id != posting_fingerprints.id AND twin.rejection_reason IS NULL)"
+)
+
+
+async def delete_duplicate_rejections(db, *, dry_run: bool = False) -> int:
+    """Deletes remembered rejections that have a non-rejected twin with the same
+    title_key (issue #63): a restored or re-matched copy already exists, so the
+    old rejection only sits next to it. Only `posting_fingerprints` rows go;
+    postings are never deleted. Returns how many were (or would be) deleted.
+    """
+    row = await db.first(f"SELECT COUNT(*) AS n FROM posting_fingerprints WHERE {_DUPLICATE_REJECTIONS_WHERE}")
+    count = (row or {}).get("n") or 0
+    if count and not dry_run:
+        await db.run(f"DELETE FROM posting_fingerprints WHERE {_DUPLICATE_REJECTIONS_WHERE}")
+    return count
+
+
 def summary_line(result: dict) -> str | None:
     if not result["considered"]:
         return None

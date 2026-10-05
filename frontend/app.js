@@ -373,6 +373,10 @@
       });
       (result.agent_outcome.errors || []).forEach(function (e) { issues.push(e); });
     }
+    if (result.run_status === "degraded") {
+      var failed = ((result.health || {}).failed_checks || []).map(function (c) { return c.message; });
+      return "Degraded: " + (failed.length ? failed.join("; ") : "a health check failed") + ".";
+    }
     if (issues.length) return "Finished, but some steps were skipped: " + issues.join("; ") + ".";
     var newCount = result.new_count || 0;
     if (!newCount) return "Done: nothing new.";
@@ -692,6 +696,16 @@
 
     fillList("discoverySearchesPerRunList", a.discovery_searches_per_run || [], "No discovery runs yet.", function (r) {
       return fmtDateTime(r.started_at) + ": " + (r.searches || 0) + (r.searches === 1 ? " search" : " searches");
+    });
+
+    fillList("recentRunsList", a.recent_runs || [], "No runs yet.", function (r) {
+      var line = fmtDateTime(r.started_at) + ": " + (r.status === "degraded" ? "Degraded" : (r.status || "unknown")) +
+        ", " + (r.new_count || 0) + " new";
+      if (r.status === "degraded" && r.summary) {
+        var at = r.summary.indexOf("Run degraded");
+        if (at >= 0) line += ". " + r.summary.slice(at).split(". No new postings")[0];
+      }
+      return line;
     });
   }
 

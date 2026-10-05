@@ -1,4 +1,3 @@
-from datetime import date
 
 import pytest
 
@@ -141,27 +140,17 @@ def test_order_companies_for_scout_respects_the_limit():
     assert [c["name"] for c in ordered] == ["Company 0", "Company 1"]
 
 
-def test_split_companies_by_coverage_skips_a_recently_found_company():
-    companies = [
-        {"name": "Covered", "last_source_found_at": "2026-09-20"},
-        {"name": "Uncovered", "last_source_found_at": None},
-    ]
-    needs_scout, skipped = split_companies_by_coverage(companies, today=date(2026, 9, 25))
+def test_split_companies_by_coverage_skips_only_covered_ids():
+    companies = [{"id": 1, "name": "Covered"}, {"id": 2, "name": "Uncovered"}]
+    needs_scout, covered = split_companies_by_coverage(companies, covered_ids={1})
     assert [c["name"] for c in needs_scout] == ["Uncovered"]
-    assert skipped == 1
+    assert covered == 1
 
 
-def test_split_companies_by_coverage_rescout_after_30_days():
-    # A source found over 30 days ago might be dead by now -- it goes back
-    # into rotation instead of being skipped forever.
-    companies = [{"name": "Stale", "last_source_found_at": "2026-08-01"}]
-    needs_scout, skipped = split_companies_by_coverage(companies, today=date(2026, 9, 25))
-    assert [c["name"] for c in needs_scout] == ["Stale"]
-    assert skipped == 0
-
-
-def test_split_companies_by_coverage_never_scouted_needs_scout():
-    companies = [{"name": "New", "last_source_found_at": None}]
-    needs_scout, skipped = split_companies_by_coverage(companies, today=date(2026, 9, 25))
-    assert [c["name"] for c in needs_scout] == ["New"]
-    assert skipped == 0
+def test_split_companies_by_coverage_ignores_a_recent_last_source_found_at():
+    # A source the scout found recently is not coverage (issue #63): only a working feed
+    # or a careers page that loaded counts, and those arrive as `covered_ids`.
+    companies = [{"id": 1, "name": "Found Before", "last_source_found_at": "2026-09-24"}]
+    needs_scout, covered = split_companies_by_coverage(companies, covered_ids=set())
+    assert [c["name"] for c in needs_scout] == ["Found Before"]
+    assert covered == 0

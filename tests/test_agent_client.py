@@ -1,3 +1,4 @@
+import json
 import subprocess
 
 import pytest
@@ -348,10 +349,21 @@ def test_resolve_model_rejects_unknown_name():
 
 def test_step_tools_covers_every_step():
     assert set(STEP_TOOLS) == {
-        "discovery", "scout", "classification", "unclear_page", "improvement", "careers_extraction",
+        "discovery", "scout", "careers_repair", "classification", "unclear_page", "improvement",
+        "careers_extraction",
     }
     assert STEP_TOOLS["discovery"] == ("WebSearch", "WebFetch")
+    assert STEP_TOOLS["careers_repair"] == ("WebSearch", "WebFetch")
     assert STEP_TOOLS["classification"] == ()
+
+
+def test_careers_repair_runs_without_an_unknown_step_error():
+    # Issue #63: every run logged "unknown agent step 'careers_repair'".
+    def runner(args, **kwargs):
+        return subprocess.CompletedProcess(args, 0, stdout=json.dumps({"result": "{}"}), stderr="")
+
+    result = run_claude_step("careers_repair", SAMPLE_PROMPT, model="sonnet", runner=runner)
+    assert result.step == "careers_repair"
 
 
 def test_is_configured_checks_either_env_var(monkeypatch):

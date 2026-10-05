@@ -7,8 +7,6 @@ needs Henry's approval, so that goes to `proposals` instead (see
 """
 from __future__ import annotations
 
-from datetime import date, timedelta
-
 from job.agent.client import ClaudeStepResult, resolve_model, run_claude_step
 from job.agent.schemas import (
     ClaudeOutputError,
@@ -20,35 +18,22 @@ from job.agent.schemas import (
 DEFAULT_SEARCH_LIMIT_PER_RUN = 35
 PROMOTE_AFTER_FOUND = 1  # a trial source becomes active after this many real open postings
 DEMOTE_AFTER_EMPTY_CHECKS = 3  # demoted after this many checks in a row finding nothing
-COVERAGE_STALE_AFTER_DAYS = 30  # a company found this recently isn't scouted again yet
+SCOUT_COMPANIES_PER_RUN = 35  # uncovered companies the scout works through each run
 
 
 def split_companies_by_coverage(
-    companies: list[dict], *, today: date, stale_after_days: int = COVERAGE_STALE_AFTER_DAYS,
+    companies: list[dict], *, covered_ids: set[int],
 ) -> tuple[list[dict], int]:
-    """Splits `companies` (already filtered to those with no working feed)
-    into (needs_scout, skipped_count).
+    """Splits `companies` into (needs_scout, covered_count).
 
-    A company the scout already found a source for recently is covered even
-    though `feed_type` is still empty -- not every found source is a feed
-    the daily fetchers can read automatically (see
-    `pipeline._apply_scout_company_feed`), so `feed_type` alone isn't proof
-    a company still needs searching. Re-scouting it anyway is exactly what
-    wasted 58 of 64 sources found in run 26 (issue #43): Claude re-finding
-    the same source it already reported. `last_source_found_at` goes stale
-    after `stale_after_days` so a source that turned out to be dead gets
-    another look eventually.
+    Covered means something is reading the company today: a working feed, or
+    a careers page that loaded in the last 7 days (`job/coverage.py`). A row
+    in the `sources` table, or a recent `last_source_found_at`, does not
+    count -- runs 36 to 42 logged "skipped 182 already-covered companies"
+    while 182 companies had no source at all (issue #63).
     """
-    cutoff = today - timedelta(days=stale_after_days)
-    needs_scout = []
-    skipped = 0
-    for company in companies:
-        found_at = company.get("last_source_found_at")
-        if found_at and date.fromisoformat(found_at[:10]) > cutoff:
-            skipped += 1
-            continue
-        needs_scout.append(company)
-    return needs_scout, skipped
+    needs_scout = [c for c in companies if c.get("id") not in covered_ids]
+    return needs_scout, len(companies) - len(needs_scout)
 
 
 def order_companies_for_scout(companies: list[dict], *, limit: int | None = None) -> list[dict]:
@@ -82,7 +67,9 @@ def build_prompt(companies: list[dict], *, search_limit_per_run: int) -> str:
         f"job source on file: {', '.join(company_names)}.",
         f"Use at most {search_limit_per_run} searches in total.",
         "Prefer each company's own careers page, or a feed platform (Greenhouse, Lever, Ashby, "
-        "SmartRecruiters, Workday, Amazon.jobs), over third-party job boards. Do not search or scrape "
+        "SmartRecruiters, Workday, Amazon.jobs), over third-party job boards. Where the company's careers "
+        "site has a listing page filtered to internships (a search for \"intern\", or an early-careers or "
+        "students page), give that page rather than the careers home page. Do not search or scrape "
         "LinkedIn, and don't try to get around a site that blocks automated browsers or shows a CAPTCHA.",
         "Reply with only JSON, no other text, in this exact shape: "
         '{"sources": [{"company_name": string, "name": string, "url": string, '

@@ -14,6 +14,8 @@ from job.agent.alerts import (
     RUN_FAILED,
     USAGE_SPIKE,
     WORKERS_PAID_SUGGESTED,
+    DISCOVERY_FAILED,
+    RUN_DEGRADED,
     claude_limit_alert,
     claude_not_configured_alert,
     claude_step_issue_alert,
@@ -85,6 +87,7 @@ def test_all_alert_types_registered():
     assert ALERT_TYPES == {
         BUDGET_80, BUDGET_100, USAGE_SPIKE, CLAUDE_LIMIT, RUN_FAILED, CLAUDE_NOT_CONFIGURED, CLAUDE_STEP_ISSUE,
         BROWSER_RUN_80, BROWSER_RUN_100, BROWSER_RUN_MONTH_80, BROWSER_RUN_MONTH_100, WORKERS_PAID_SUGGESTED,
+        DISCOVERY_FAILED, RUN_DEGRADED,
     }
 
 

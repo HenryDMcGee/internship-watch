@@ -32,11 +32,13 @@ from job.agent.alerts import (
     claude_limit_alert,
     claude_not_configured_alert,
     claude_step_issue_alert,
+    discovery_failed_alert,
     evaluate_browser_run_alerts,
     evaluate_budget_alerts,
     evaluate_spike_alert,
     evaluate_workers_paid_suggestion,
     record_alerts,
+    run_degraded_alert,
     run_failed_alert,
 )
 from job.agent.budgets import load_budget_status, monthly_forecast, weekly_forecast
@@ -50,7 +52,8 @@ from job.fetchers import run_fetcher
 from job.fetchers import careers_pages
 from job.locations import location_match
 from job.matching import classify_posting, cycle_status
-from job.restore_rejections import restore_rejections, summary_line as restore_summary_line
+from job.coverage import run_backfill_once
+from job.restore_rejections import delete_duplicate_rejections, restore_rejections, summary_line as restore_summary_line
 from job.pruning import decide_prune
 from job.ranking import is_quarterly_refresh_day, refresh_ranking
 from job.verify.browser import BrowserBudget
@@ -212,9 +215,23 @@ async def _run_careers_pages(
     stats = {
         "browser_run": 0, "backup": 0, "unchanged": 0, "changed": 0, "failed": 0,
         "browser_run_minutes": 0.0, "switch_reason": None,
+        "candidates": len(candidates), "attempted": 0, "rate_limited": 0, "token_problem": None,
+        "failure_reasons": {},
     }
     if not candidates:
         return set(), [], stats
+
+    # Pages never checked go first, then the one checked longest ago, so a run
+    # that can't reach every page still works through all of them over time.
+    snapshot_rows = await db.all("SELECT company_id, last_checked FROM careers_page_snapshots")
+    last_checked = {r["company_id"]: r.get("last_checked") or "" for r in snapshot_rows}
+    candidates = sorted(candidates, key=lambda c: (last_checked.get(c["id"], ""), c["id"]))
+    today_minutes_row = await db.first(
+        "SELECT SUM(browser_ms) AS ms FROM browser_run_usage WHERE method = 'browser_run' "
+        "AND substr(at, 1, 10) = ?",
+        today_central().isoformat(),
+    )
+    minutes_used_before = ((today_minutes_row or {}).get("ms") or 0) / 60000.0
 
     outcome = careers_pages.run_careers_pages(
         candidates,
@@ -228,9 +245,13 @@ async def _run_careers_pages(
         backup_pages_per_run=int(
             budget_settings.get("careers_backup_pages_per_run") or careers_pages.DEFAULT_CAREERS_BACKUP_PAGES_PER_RUN
         ),
+        minutes_used_before=minutes_used_before,
     )
     stats["browser_run_minutes"] = outcome.browser_run_minutes_used
     stats["switch_reason"] = outcome.switch_reason
+    stats["attempted"] = outcome.attempted
+    stats["rate_limited"] = outcome.rate_limit_events
+    stats["token_problem"] = outcome.token_problem
 
     settings_ver = fingerprint.settings_version(titles_doc, locations_setting)
     companies_by_id = {c["id"]: c for c in candidates}
@@ -250,6 +271,9 @@ async def _run_careers_pages(
 
         if not page.ok:
             stats["failed"] += 1
+            reason_key = (page.reason or "error").split(":")[0]
+            stats["failure_reasons"][reason_key] = stats["failure_reasons"].get(reason_key, 0) + 1
+            print(f"careers page: {company['name']}: failed ({page.reason})")
             # `careers_page_snapshots.last_error` is where the reason lives
             # (issue: "Record the reason on the company") -- `companies.
             # last_feed_status` isn't reused for it, since that column's own
@@ -375,6 +399,8 @@ def _careers_pages_summary_line(stats: dict | None) -> str | None:
         return None
     total_loaded = stats["browser_run"] + stats["backup"]
     if total_loaded == 0 and stats["failed"] == 0:
+        if stats.get("candidates"):
+            return f"Careers pages: 0 of {stats['candidates']} attempted."
         return None
     parts = []
     if stats["browser_run"]:
@@ -384,11 +410,24 @@ def _careers_pages_summary_line(stats: dict | None) -> str | None:
     parts.append(f"{stats['unchanged']} unchanged")
     parts.append(f"{stats['changed']} changed")
     if stats["failed"]:
-        parts.append(f"{stats['failed']} failed")
+        reasons = stats.get("failure_reasons") or {}
+        detail = " (" + ", ".join(f"{n} {r}" for r, n in sorted(reasons.items())) + ")" if reasons else ""
+        parts.append(f"{stats['failed']} failed{detail}")
     line = "Careers pages: " + ", ".join(parts) + "."
 
+    if stats.get("rate_limited"):
+        line += (
+            f" Browser Run rate-limited us {stats['rate_limited']} time(s); the job waited, retried, and "
+            "slowed down, and did not switch to the backup."
+        )
     switch_reason = stats.get("switch_reason")
-    if switch_reason in ("quota", "minutes"):
+    if switch_reason == "token":
+        line += (
+            f" Cloudflare's API rejected the Browser Run token ({stats.get('token_problem') or 'HTTP 401/403'}) "
+            "-- this is a token problem, not a site blocking the page. Check CLOUDFLARE_BROWSER_TOKEN and its "
+            "Browser Rendering permission; the rest used the backup."
+        )
+    elif switch_reason in ("quota", "minutes"):
         line += (
             " Browser Run's free daily capacity ran out this run, so the rest used the backup -- "
             "consider Workers Paid for more Browser Rendering minutes."
@@ -487,9 +526,64 @@ async def run(db, *, kind: str = "daily", company_ids: list[int] | None = None) 
         )
     if kind == "daily":
         await _finish_daily_run(
-            db, run_status="completed", run_reason=None, agent_outcome=result.get("agent_outcome")
+            db, run_status=result.get("run_status") or "completed", run_reason=None,
+            agent_outcome=result.get("agent_outcome"), health=result.get("health"),
         )
     return result
+
+
+MIN_DISCOVERY_SEARCH_FRACTION = 0.5
+ZERO_NEW_STREAK_DAYS = 3
+
+
+def health_failures(agent_outcome: dict, careers_stats: dict | None, *, careers_candidates: int) -> list[dict]:
+    """The run's failed health checks, each `{"check": id, "message": text}`:
+      * discovery made at least 50% of its planned searches;
+      * if any companies are uncovered, the scout worked on at least one;
+      * if any companies have a careers_url (and no feed), at least one careers
+        page was attempted.
+    """
+    failed = []
+    planned = int(agent_outcome.get("discovery_planned_searches") or 0)
+    made = int(agent_outcome.get("discovery_searches") or 0)
+    if planned > 0 and made < planned * MIN_DISCOVERY_SEARCH_FRACTION:
+        failed.append({
+            "check": "discovery_searches",
+            "message": f"discovery made {made} of {planned} planned searches (under 50%)",
+        })
+    uncovered = int(agent_outcome.get("uncovered_count") or 0)
+    if uncovered > 0 and int(agent_outcome.get("scout_companies_worked") or 0) < 1:
+        failed.append({
+            "check": "scout_ran",
+            "message": f"{uncovered} companies are uncovered but the scout worked on none",
+        })
+    attempted = int((careers_stats or {}).get("attempted") or 0)
+    if careers_candidates > 0 and attempted < 1:
+        failed.append({
+            "check": "careers_attempted",
+            "message": f"{careers_candidates} companies have a careers page but none was attempted",
+        })
+    return failed
+
+
+async def _zero_new_streak_days(db, today: str, new_count: int) -> int:
+    """How many days in a row, ending today, daily runs found 0 new postings."""
+    if new_count > 0:
+        return 0
+    rows = await db.all(
+        "SELECT substr(started_at, 1, 10) AS d, SUM(new_count) AS n FROM runs "
+        "WHERE kind = 'daily' AND status IN ('completed', 'degraded') AND substr(started_at, 1, 10) < ? "
+        "GROUP BY d ORDER BY d DESC LIMIT 14",
+        today,
+    )
+    streak = 1
+    expected = date.fromisoformat(today) - timedelta(days=1)
+    for row in rows:
+        if row["d"] != expected.isoformat() or (row["n"] or 0) > 0:
+            break
+        streak += 1
+        expected -= timedelta(days=1)
+    return streak
 
 
 def _claude_step_issues(agent_outcome: dict) -> list[str]:
@@ -523,10 +617,26 @@ async def _run_body(db, run_id: int, started_at: str, kind: str, company_ids: li
     except Exception as exc:  # noqa: BLE001 - cleanup must never stop the run
         print(f"restore_rejections: {exc}")
 
+    # Old rejections that already have a restored or re-matched twin (issue #63).
+    duplicates_deleted = 0
+    if kind == "daily":
+        try:
+            duplicates_deleted = await delete_duplicate_rejections(db)
+        except Exception as exc:  # noqa: BLE001 - cleanup must never stop the run
+            print(f"delete_duplicate_rejections: {exc}")
+
     if company_ids is not None:
         companies = await config.load_companies_by_ids(db, company_ids)
     else:
         companies = await config.load_companies(db)
+        if kind == "daily":
+            # One time only: give every company with no feed and no careers page the
+            # best careers page already in the sources table (issue #63).
+            try:
+                if await run_backfill_once(db, companies, now_iso=now_iso()):
+                    companies = await config.load_companies(db)
+            except Exception as exc:  # noqa: BLE001 - the backfill must never stop the run
+                print(f"careers backfill: {exc}")
 
     (
         new_count, feed_ok, current_urls, no_source_count, feed_error_count, sources_found,
@@ -537,6 +647,10 @@ async def _run_body(db, run_id: int, started_at: str, kind: str, company_ids: li
     unclear_reader = None
     unclear_results: list = []
     careers_stats = None
+    # Remembered rejections skipped while reading feeds, and (below) while
+    # handling discovery results that would otherwise go to the classifier.
+    feed_rejections_skipped = rejections_skipped
+    classifier_rejections_skipped = 0
     claude_configured = claude_is_configured()
     if kind == "daily" and claude_configured:
         today_str = today_central().isoformat()
@@ -570,8 +684,8 @@ async def _run_body(db, run_id: int, started_at: str, kind: str, company_ids: li
         )
         new_count += agent_outcome["discovery_new_count"]
         new_count += await count_visible_postings(db, careers_posting_ids)
+        classifier_rejections_skipped = agent_outcome.get("rejections_skipped", 0)
         repeats_recognized += agent_outcome.get("repeats_recognized", 0)
-        rejections_skipped += agent_outcome.get("rejections_skipped", 0)
         unclear_reader = build_unclear_reader(
             status=status, model=budget_settings.get("model_classification", "haiku"),
             on_usage=unclear_results.append,
@@ -581,6 +695,9 @@ async def _run_body(db, run_id: int, started_at: str, kind: str, company_ids: li
         agent_outcome = {
             "discovery_count": 0, "discovery_new_count": 0, "classification_count": 0, "scout_count": 0,
             "scout_skipped_count": 0, "repeats_recognized": 0, "rejections_skipped": 0,
+            "uncovered_count": 0, "covered_count": 0, "scout_companies_worked": 0,
+            "discovery_planned_searches": 0, "discovery_searches": 0, "discovery_batches": [],
+            "discovery_failed": None,
             "steps_skipped": [{"step": "all", "reason": "Claude isn't configured (no "
                                                           "CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY)"}],
             "steps_succeeded": [], "claude_limit_hit": False, "errors": [], "title_pr": None,
@@ -591,12 +708,33 @@ async def _run_body(db, run_id: int, started_at: str, kind: str, company_ids: li
     for unclear_result in unclear_results:
         await record_usage(db, run_id=run_id, step="unclear_page", result=unclear_result, now_iso=now_iso())
 
+    # One set of counts, written to both the summary below and `agent_outcome`
+    # (issue #63): the summary used to add feed and discovery rejections together
+    # while `agent_outcome` only had discovery's, so thousands in one read 0 or 1
+    # in the other. Feed and classifier rejections are labeled separately.
+    rejections_skipped = feed_rejections_skipped + classifier_rejections_skipped
+    counts = {
+        "repeats_recognized": repeats_recognized,
+        "feed_rejections_skipped": feed_rejections_skipped,
+        "classifier_rejections_skipped": classifier_rejections_skipped,
+    }
+    if agent_outcome is not None:
+        agent_outcome["counts"] = dict(counts)
+        agent_outcome["repeats_recognized"] = repeats_recognized
+        agent_outcome["feed_rejections_skipped"] = feed_rejections_skipped
+        agent_outcome["classifier_rejections_skipped"] = classifier_rejections_skipped
+        agent_outcome["rejections_skipped"] = rejections_skipped
+
     summary = (
         f"Checked {len(companies)} companies, {new_count} new posting(s), "
         f"{feed_error_count} feed error(s), {no_source_count} with no source yet, "
-        f"{repeats_recognized} repeat(s) recognized, {rejections_skipped} remembered rejection(s) skipped, "
+        f"{counts['repeats_recognized']} repeat(s) recognized, "
+        f"{counts['feed_rejections_skipped']} remembered feed rejection(s) skipped, "
+        f"{counts['classifier_rejections_skipped']} remembered classifier rejection(s) skipped, "
         f"{feeds_skipped} feed(s) unchanged and skipped."
     )
+    if duplicates_deleted:
+        summary += f" Removed {duplicates_deleted} old rejection(s) that already have a restored twin."
     if restore_line:
         summary += f" {restore_line}"
     careers_line = _careers_pages_summary_line(careers_stats)
@@ -615,13 +753,43 @@ async def _run_body(db, run_id: int, started_at: str, kind: str, company_ids: li
         step_issues = _claude_step_issues(agent_outcome)
         if step_issues:
             summary += " Claude step issues: " + "; ".join(step_issues) + "."
+
+    # Health checks (issue #63): a search that quietly did nothing must not look
+    # like a clean run. Any failed check marks the run "degraded".
+    health = None
+    run_status = "completed"
+    if kind == "daily" and claude_configured and agent_outcome:
+        careers_candidates = len([c for c in companies if c.get("careers_url") and not c.get("feed_type")])
+        failed_checks = health_failures(agent_outcome, careers_stats, careers_candidates=careers_candidates)
+        zero_days = await _zero_new_streak_days(db, today_central().isoformat(), new_count)
+        breakdown = None
+        if zero_days >= ZERO_NEW_STREAK_DAYS:
+            searches_row = await db.first("SELECT SUM(web_searches) AS n FROM usage WHERE run_id = ?", run_id)
+            breakdown = {
+                "searches": (searches_row or {}).get("n") or 0,
+                "covered": agent_outcome.get("covered_count", 0),
+                "pages_loaded": ((careers_stats or {}).get("browser_run", 0) + (careers_stats or {}).get("backup", 0)),
+                "classified": agent_outcome.get("classification_count", 0),
+            }
+        health = {"failed_checks": failed_checks, "zero_new_days": zero_days, "step_breakdown": breakdown}
+        if failed_checks:
+            run_status = "degraded"
+            summary += " Run degraded, failed health check(s): " + "; ".join(c["message"] for c in failed_checks) + "."
+        if breakdown:
+            summary += (
+                f" No new postings for {zero_days} days in a row. Per step today: {breakdown['searches']} search(es), "
+                f"{breakdown['covered']} companies covered, {breakdown['pages_loaded']} careers page(s) loaded, "
+                f"{breakdown['classified']} posting(s) classified."
+            )
     finished_at = now_iso()
     await db.run(
-        "UPDATE runs SET finished_at = ?, status = 'completed', new_count = ?, summary = ? WHERE id = ?",
-        finished_at, new_count, summary, run_id,
+        "UPDATE runs SET finished_at = ?, status = ?, new_count = ?, summary = ? WHERE id = ?",
+        finished_at, run_status, new_count, summary, run_id,
     )
 
     return {
+        "run_status": run_status,
+        "health": health,
         "run_id": run_id,
         "kind": kind,
         "started_at": started_at,
@@ -633,6 +801,7 @@ async def _run_body(db, run_id: int, started_at: str, kind: str, company_ids: li
         "no_source_count": no_source_count,
         "repeats_recognized": repeats_recognized,
         "rejections_skipped": rejections_skipped,
+        "counts": counts,
         "feeds_skipped": feeds_skipped,
         "ranking_refresh": ranking_summary,
         "summary": summary,
@@ -690,7 +859,9 @@ async def _browser_run_alert_inputs(db, *, today: str) -> tuple[float, float, li
     return minutes_used_today, hours_used_month, capacity_backup_days
 
 
-async def _finish_daily_run(db, *, run_status: str, run_reason: str | None, agent_outcome: dict | None = None) -> None:
+async def _finish_daily_run(
+    db, *, run_status: str, run_reason: str | None, agent_outcome: dict | None = None, health: dict | None = None,
+) -> None:
     """Evaluates alerts and sends the daily Claude routine summary. Runs
     after every daily run, including failed ones, per `docs/plan.md`. Never
     raises: a summary that can't be built or sent must not turn a completed
@@ -734,6 +905,11 @@ async def _finish_daily_run(db, *, run_status: str, run_reason: str | None, agen
                 candidates.append(claude_step_issue_alert(
                     step_issues, no_claude_work_done=not agent_outcome.get("steps_succeeded"),
                 ))
+        if agent_outcome and agent_outcome.get("discovery_failed"):
+            candidates.append(discovery_failed_alert(agent_outcome["discovery_failed"]))
+        failed_checks = (health or {}).get("failed_checks") or []
+        if failed_checks:
+            candidates.append(run_degraded_alert([c["message"] for c in failed_checks]))
         if run_status == "failed":
             candidates.append(run_failed_alert(run_reason or "unknown error"))
 
@@ -759,6 +935,11 @@ async def _finish_daily_run(db, *, run_status: str, run_reason: str | None, agen
                 "monthly_usd": round(monthly_forecast(status), 2),
             },
             alerts=[{"type": a["type"], "severity": a["severity"]} for a in recorded_alerts],
+            health={
+                "failed_checks": [c["check"] for c in failed_checks],
+                "zero_new_days": (health or {}).get("zero_new_days", 0),
+                "step_breakdown": (health or {}).get("step_breakdown"),
+            },
         )
         send_daily_summary(payload)
     except Exception as exc:  # noqa: BLE001 - the routine summary must never crash the job

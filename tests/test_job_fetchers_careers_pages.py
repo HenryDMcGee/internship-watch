@@ -30,9 +30,10 @@ def _never_allowed(url, *, session=None) -> bool:
 # ---------------------------------------------------------------------------
 
 class _FakeResponse:
-    def __init__(self, status_code=200, json_body=None, text=""):
+    def __init__(self, status_code=200, json_body=None, text="", headers=None):
         self.status_code = status_code
         self._json_body = json_body
+        self.headers = headers or {}
         self.text = text
         self.ok = 200 <= status_code < 400
 
@@ -77,14 +78,33 @@ def test_browser_run_uses_reported_browser_time_when_present():
     assert measured_by == cp.MEASURED_BY_CLOUDFLARE_HEADER
 
 
-def test_browser_run_blocked_403():
-    session = _FakeSession([_FakeResponse(403)])
+def test_browser_run_site_block_403_is_a_blocked_page():
+    session = _FakeSession([_FakeResponse(403, {"success": False, "errors": [{"message": "Blocked by target site (captcha)"}]})])
     with pytest.raises(cp.BrowserRunBlocked):
         cp.fetch_via_browser_run("https://acme.example/careers", account_id="acc", token="tok", session=session)
 
 
-def test_browser_run_quota_exceeded_429():
-    session = _FakeSession([_FakeResponse(429)])
+def test_browser_run_plain_403_from_the_cloudflare_api_is_a_token_problem_not_a_block():
+    # Issue #63: a 401 or 403 from api.cloudflare.com is about the token, so it must
+    # not be recorded as a site blocking the page.
+    for status in (401, 403):
+        session = _FakeSession([_FakeResponse(status, {"success": False, "errors": [{"message": "Authentication error"}]})])
+        with pytest.raises(cp.BrowserRunAuthError) as exc_info:
+            cp.fetch_via_browser_run("https://acme.example/careers", account_id="acc", token="tok", session=session)
+        assert exc_info.value.status_code == status
+        assert "Authentication error" in str(exc_info.value)
+
+
+def test_browser_run_bare_429_is_a_rate_limit_with_retry_after():
+    session = _FakeSession([_FakeResponse(429, headers={"Retry-After": "7"})])
+    with pytest.raises(cp.BrowserRunRateLimited) as exc_info:
+        cp.fetch_via_browser_run("https://acme.example/careers", account_id="acc", token="tok", session=session)
+    assert exc_info.value.retry_after == 7.0
+
+
+def test_browser_run_429_that_says_the_daily_allowance_is_gone_is_quota_exceeded():
+    body = {"success": False, "errors": [{"message": "Browser time limit exceeded for today"}]}
+    session = _FakeSession([_FakeResponse(429, body)])
     with pytest.raises(cp.BrowserRunQuotaExceeded):
         cp.fetch_via_browser_run("https://acme.example/careers", account_id="acc", token="tok", session=session)
 
@@ -302,9 +322,10 @@ def test_quota_exceeded_switches_remaining_pages_to_backup():
     )
     assert outcome.switch_reason == "quota"
     pages = _outcome_by_company(outcome)
-    assert pages[companies[0]["id"]].reason == cp.REASON_QUOTA_EXCEEDED
+    # the page that hit the limit is read by the backup too, instead of being lost
+    assert pages[companies[0]["id"]].ok and pages[companies[0]["id"]].method == "backup"
     # every company after the one that triggered the switch used the backup
-    assert backup_calls == [c["careers_url"] for c in companies[1:]]
+    assert backup_calls == [c["careers_url"] for c in companies]
     assert browser_run_calls == [companies[0]["careers_url"]]
 
 
@@ -450,10 +471,11 @@ def test_outcome_counts_pages_and_failures_per_method():
         browser_run_fetch=browser_run_fetch, backup_fetch=backup_fetch,
     )
     # company[0]'s quota error switches the rest of the run to the backup, so
-    # only company[0] is ever attempted via Browser Run.
+    # only company[0] is ever attempted via Browser Run -- and it is read by the
+    # backup as well, along with company[1]; company[2]'s backup read fails.
     assert outcome.browser_run_pages == 0
     assert outcome.browser_run_failures == 1
-    assert outcome.backup_pages == 1
+    assert outcome.backup_pages == 2
     assert outcome.backup_failures == 1
 
 

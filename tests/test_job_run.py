@@ -5,6 +5,7 @@ import sqlite3
 import pytest
 
 import job.run as run_module
+from conftest import adapt_discovery_reply
 from job import config, feed_snapshot, fingerprint
 from job.agent import client as agent_client
 from job.agent.client import ClaudeStepResult
@@ -250,7 +251,9 @@ def test_run_summary_reports_repeats_recognized_and_rejections_skipped(empty_db,
     assert result["repeats_recognized"] == 3
     assert result["rejections_skipped"] == 2
     assert "3 repeat(s) recognized" in result["summary"]
-    assert "2 remembered rejection(s) skipped" in result["summary"]
+    assert "2 remembered feed rejection(s) skipped" in result["summary"]
+    assert "0 remembered classifier rejection(s) skipped" in result["summary"]
+    assert result["counts"]["feed_rejections_skipped"] == 2
     # The remembered rejections must not have created any new postings.
     assert len(run(empty_db.all("SELECT * FROM postings"))) == 3
 
@@ -435,6 +438,8 @@ def test_daily_run_actually_calls_discovery_and_scout_for_no_source_companies(em
         # A real discovery/scout call with tools enabled always searches at least
         # once -- zero would now fail the step loudly (issue #20), which this test
         # isn't about; see test_daily_run_flags_it_when_discovery_and_scout_make_zero_web_searches.
+        if step == "discovery":
+            text = adapt_discovery_reply(text, prompt)
         web_searches = 3 if step in ("discovery", "scout") else 0
         return ClaudeStepResult(step=step, model=model, text=text, web_searches=web_searches)
 
@@ -474,6 +479,8 @@ def test_daily_run_new_count_excludes_a_discovery_that_classification_rejects(em
             "scout": '{"sources": []}',
             "improvement": '{"search_plan": null, "proposals": [], "title_suggestions": []}',
         }[step]
+        if step == "discovery":
+            text = adapt_discovery_reply(text, prompt)
         web_searches = 3 if step in ("discovery", "scout") else 0
         return ClaudeStepResult(step=step, model=model, text=text, web_searches=web_searches)
 
@@ -508,6 +515,8 @@ def test_daily_run_new_count_counts_a_discovery_that_classification_matches(empt
             "scout": '{"sources": []}',
             "improvement": '{"search_plan": null, "proposals": [], "title_suggestions": []}',
         }[step]
+        if step == "discovery":
+            text = adapt_discovery_reply(text, prompt)
         web_searches = 3 if step in ("discovery", "scout") else 0
         return ClaudeStepResult(step=step, model=model, text=text, web_searches=web_searches)
 

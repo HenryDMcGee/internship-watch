@@ -53,6 +53,22 @@ SHARE_SETTING: dict[str, str] = {
 }
 
 
+# Which `budget_settings` model field picks the model for a step. careers_repair
+# rides scout's, same as its share above (issue #63).
+MODEL_SETTING: dict[str, str] = {
+    "discovery": "model_discovery",
+    "scout": "model_scout",
+    "careers_repair": "model_scout",
+    "classification": "model_classification",
+    "unclear_page": "model_classification",
+    "improvement": "model_improvement",
+}
+
+
+def model_for_step(settings: dict, step: str, default: str = "sonnet") -> str:
+    return settings.get(MODEL_SETTING.get(step, ""), default) or default
+
+
 @dataclass
 class UsageTotals:
     tokens: int = 0

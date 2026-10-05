@@ -133,6 +133,59 @@ def validate_discovery_output(payload) -> list[str]:
     return problems
 
 
+NONE_FOUND = "none found"
+
+
+def validate_discovery_batch_output(payload) -> list[str]:
+    """Structure of one discovery batch reply (issue #63): one entry per
+    company, each saying whether it was searched, the queries used, and the
+    postings found -- or "none found". Whether every company in the batch has
+    an entry is checked by the caller (`discovery.py`), which knows the batch;
+    a missing entry means "unsearched", not an unusable reply.
+    """
+    if not isinstance(payload, dict):
+        return ["document must be a JSON object"]
+    entries = payload.get("companies")
+    if not isinstance(entries, list):
+        return ["'companies' must be a list"]
+
+    problems: list[str] = []
+    for i, entry in enumerate(entries):
+        if not isinstance(entry, dict):
+            problems.append(f"companies[{i}] must be an object")
+            continue
+        if not _is_nonempty_str(entry.get("company_name")):
+            problems.append(f"companies[{i}].company_name must be a non-empty string")
+        searched = entry.get("searched")
+        if not isinstance(searched, bool):
+            problems.append(f"companies[{i}].searched must be true or false")
+        queries = entry.get("queries")
+        if not isinstance(queries, list) or not all(_is_nonempty_str(q) for q in queries):
+            problems.append(f"companies[{i}].queries must be a list of strings")
+        elif searched is True and not queries:
+            problems.append(f"companies[{i}] is marked searched but lists no queries")
+        postings = entry.get("postings")
+        if isinstance(postings, str):
+            if postings.strip().lower() != NONE_FOUND:
+                problems.append(f"companies[{i}].postings must be a list or \"{NONE_FOUND}\"")
+            continue
+        if not isinstance(postings, list):
+            problems.append(f"companies[{i}].postings must be a list or \"{NONE_FOUND}\"")
+            continue
+        for j, posting in enumerate(postings):
+            if not isinstance(posting, dict):
+                problems.append(f"companies[{i}].postings[{j}] must be an object")
+                continue
+            for field_name in ("title", "url"):
+                if not _is_nonempty_str(posting.get(field_name)):
+                    problems.append(f"companies[{i}].postings[{j}].{field_name} must be a non-empty string")
+            if not _is_str_or_none(posting.get("location_text")):
+                problems.append(f"companies[{i}].postings[{j}].location_text must be a string")
+            if not _is_str_or_none(posting.get("posted_date")):
+                problems.append(f"companies[{i}].postings[{j}].posted_date must be a string")
+    return problems
+
+
 # ---------------------------------------------------------------------------
 # Classification
 # ---------------------------------------------------------------------------
