@@ -314,3 +314,48 @@ def test_reject_careers_repair_proposal_keeps_flag_and_remembers_url(client):
     assert json.loads(company["careers_url_rejected"]) == ["https://acme.example/careers?q=intern"]
     # the old URL must be untouched by a rejection
     assert company["careers_url"] == "https://acme.example/careers"
+
+
+# -- careers_url_approved and recent runs (issue #63) ---------------------
+
+def test_approving_a_careers_repair_marks_the_new_url_as_approved(client):
+    tc, db = client
+    company_id = _insert_flagged_company(db, careers_note="careers page, no feed")
+    proposal_id = _insert_proposal(db, "careers_repair", {
+        "company_id": company_id, "company_name": "Acme",
+        "old_url": "https://acme.example/careers", "new_url": "https://acme.example/careers?q=intern",
+    })
+
+    assert tc.post(f"/api/proposals/{proposal_id}/approve").status_code == 200
+
+    company = run(db.first("SELECT * FROM companies WHERE id = ?", company_id))
+    assert company["careers_url_approved"] == 1
+    assert company["careers_note"] is None
+
+
+def test_a_careers_link_henry_adds_or_pastes_counts_as_approved(client):
+    tc, db = client
+    resp = tc.post("/api/companies", json={"name": "Acme Co", "careers_url": "https://acme.example/careers"})
+    assert resp.status_code == 201
+    assert tc.post("/api/companies", json={"name": "Plain Co"}).status_code == 201
+    tc.post("/api/companies/paste/save", json={"entries": [{"name": "Pasted Co", "url": "https://pasted.example/jobs"}]})
+
+    rows = {r["name"]: r["careers_url_approved"] for r in run(db.all("SELECT name, careers_url_approved FROM companies"))}
+    assert rows == {"Acme Co": 1, "Plain Co": 0, "Pasted Co": 1}
+
+
+def test_analytics_lists_recent_runs_with_their_status(client):
+    tc, db = client
+    run(db.run(
+        "INSERT INTO runs (kind, started_at, status, new_count, summary) VALUES "
+        "('daily', '2026-10-04T08:00:00', 'degraded', 0, 'Checked 5. Run degraded, failed health check(s): x.')"
+    ))
+    run(db.run(
+        "INSERT INTO runs (kind, started_at, status, new_count, summary) VALUES "
+        "('daily', '2026-10-05T08:00:00', 'completed', 2, 'Checked 5.')"
+    ))
+
+    recent = tc.get("/api/analytics").json()["recent_runs"]
+
+    assert [r["status"] for r in recent] == ["completed", "degraded"]  # newest id first
+    assert recent[1]["new_count"] == 0

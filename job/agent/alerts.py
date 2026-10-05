@@ -22,8 +22,11 @@ BROWSER_RUN_100 = "browser_run_100"
 BROWSER_RUN_MONTH_80 = "browser_run_month_80"
 BROWSER_RUN_MONTH_100 = "browser_run_month_100"
 WORKERS_PAID_SUGGESTED = "workers_paid_suggested"
+DISCOVERY_FAILED = "discovery_failed"
+RUN_DEGRADED = "run_degraded"
 
 ALERT_TYPES = frozenset({
+    DISCOVERY_FAILED, RUN_DEGRADED,
     BUDGET_80, BUDGET_100, USAGE_SPIKE, CLAUDE_LIMIT, RUN_FAILED, CLAUDE_NOT_CONFIGURED, CLAUDE_STEP_ISSUE,
     BROWSER_RUN_80, BROWSER_RUN_100, BROWSER_RUN_MONTH_80, BROWSER_RUN_MONTH_100, WORKERS_PAID_SUGGESTED,
 })
@@ -124,6 +127,16 @@ def claude_limit_alert(message: str) -> AlertCandidate:
 
 def run_failed_alert(message: str) -> AlertCandidate:
     return AlertCandidate(RUN_FAILED, "critical", f"The daily run failed: {message}")
+
+
+def discovery_failed_alert(reason: str) -> AlertCandidate:
+    return AlertCandidate(DISCOVERY_FAILED, "critical", f"Discovery failed: {reason}")
+
+
+def run_degraded_alert(failed_checks: list[str]) -> AlertCandidate:
+    return AlertCandidate(
+        RUN_DEGRADED, "critical", "Today's run is degraded: " + "; ".join(failed_checks) + ".",
+    )
 
 
 def claude_step_issue_alert(details: list[str], *, no_claude_work_done: bool) -> AlertCandidate:

@@ -11,7 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable
 
-from job.fetchers.base import USER_AGENT
+from job.playwright_runtime import load_page_text
 from job.verify.text_signals import VerifyDecision, classify_text
 
 
@@ -27,16 +27,9 @@ class BrowserBudget:
 
 
 def _load_page_text(url: str) -> str:
-    from playwright.sync_api import sync_playwright  # imported lazily, see module docstring
-
-    with sync_playwright() as playwright:
-        browser = playwright.chromium.launch()
-        try:
-            page = browser.new_page(user_agent=USER_AGENT)
-            page.goto(url, wait_until="networkidle", timeout=15000)
-            return page.inner_text("body")
-        finally:
-            browser.close()
+    # Runs on its own thread: Playwright's sync API won't start inside the job's
+    # running asyncio loop (issue #63). Playwright is imported lazily there.
+    return load_page_text(url, timeout_ms=15000)
 
 
 def check_via_browser(

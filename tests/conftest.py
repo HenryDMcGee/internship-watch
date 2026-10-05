@@ -40,6 +40,38 @@ def empty_db() -> SqliteDatabase:
     return SqliteDatabase(fresh_schema_connection())
 
 
+def adapt_discovery_reply(text: str, prompt: str) -> str:
+    """Turns an old-style discovery reply (`{"results": [...]}`) into the per-company
+    batch reply discovery now requires (issue #63): one entry per company named in
+    the prompt, marked searched, with that company's postings or "none found". Lets
+    tests that only care what discovery *found* keep stating it simply.
+    """
+    import json
+    import re
+
+    try:
+        payload = json.loads(text)
+    except ValueError:
+        return text  # a test of a reply that isn't JSON at all
+    if "results" not in payload:
+        return text
+    match = re.search(r"watch list: (.*?)\.\nLook only", prompt, re.S)
+    names = [n.strip() for n in match.group(1).split(";")] if match else []
+    by_company: dict = {}
+    for r in payload["results"]:
+        by_company.setdefault(r["company_name"], []).append(
+            {k: r[k] for k in ("title", "url", "location_text", "posted_date") if k in r}
+        )
+    entries = []
+    for name in names:
+        entries.append({
+            "company_name": name, "searched": True,
+            "queries": [name + " MBA product manager intern Summer 2027"],
+            "postings": by_company.get(name) or "none found",
+        })
+    return json.dumps({"companies": entries})
+
+
 @pytest.fixture(autouse=True)
 def _no_ambient_claude_credentials(monkeypatch):
     # Every Claude call must be mocked in this suite (see CLAUDE.md and

@@ -1,9 +1,10 @@
 import asyncio
 
-from job import fingerprint
+from conftest import adapt_discovery_reply
+from job import careers_snapshot, fingerprint
 from job.agent.budgets import BudgetStatus, UsageTotals
 from job.agent.client import ClaudeStepResult
-from job.agent.pipeline import build_unclear_reader, run_agent_steps
+from job.agent.pipeline import _store_scout_sources, build_unclear_reader, run_agent_steps
 
 SETTINGS = {
     "billing_mode": "subscription", "daily_token_budget": 1_000_000, "daily_search_budget": 100,
@@ -40,7 +41,10 @@ def _fake_run_claude(responses):
     def fake(step, prompt, *, model):
         calls.append(step)
         web_searches = 3 if step in ("discovery", "scout", "careers_repair") else 0
-        return ClaudeStepResult(step=step, model=model, text=responses[step], web_searches=web_searches)
+        text = responses[step]
+        if step == "discovery":
+            text = adapt_discovery_reply(text, prompt)
+        return ClaudeStepResult(step=step, model=model, text=text, web_searches=web_searches)
 
     fake.calls = calls
     return fake
@@ -593,30 +597,93 @@ def test_run_agent_steps_sets_company_feed_from_a_recognized_scout_url(empty_db)
     assert company["feed_id"] == "acme"
 
 
-def test_run_agent_steps_does_not_overwrite_an_existing_company_feed(empty_db):
-    company_id = _insert_company(empty_db, feed_type="lever", feed_id="acme", careers_url="https://jobs.lever.co/acme")
-    run_id = run(empty_db.run("INSERT INTO runs (kind, started_at, status) VALUES ('daily', '2026-09-20T08:00:00', 'running')"))
+def _scout_found(company_name, url):
+    return {"company_name": company_name, "name": f"{company_name} careers", "url": url,
+            "kind": "Company career sites", "covers": company_name}
 
-    fake = _fake_run_claude({
-        "scout": (
-            '{"sources": [{"company_name": "Acme", "name": "Acme careers", '
-            '"url": "https://boards.greenhouse.io/acme", "kind": "Company career sites", "covers": "Acme"}]}'
-        ),
-        "improvement": '{"search_plan": null, "proposals": [], "title_suggestions": []}',
-    })
 
-    # Passing a company that already has a feed_type wouldn't happen in the
-    # real job (it's filtered to `no_feed_companies` before scouting), but
-    # the guard must hold regardless of how it's called.
-    run(run_agent_steps(
-        empty_db, run_id=run_id, companies=[{"id": company_id, "name": "Acme", "feed_type": "lever"}],
-        titles_doc=TITLES_DOC, locations_setting=LOCATIONS, budget_settings=SETTINGS,
-        status=_open_status(), today="2026-09-20", now_iso="2026-09-20T08:00:00", run_claude=fake,
-    ))
+def _store_scout(db, found, companies):
+    return run(_store_scout_sources(db, found, now_iso="2026-09-20T08:00:00", companies=companies))
+
+
+def test_scout_does_not_overwrite_a_working_feed(empty_db):
+    company_id = _insert_company(
+        empty_db, feed_type="lever", feed_id="acme", careers_url="https://jobs.lever.co/acme", last_feed_status="ok",
+    )
+    _store_scout(
+        empty_db, [_scout_found("Acme", "https://boards.greenhouse.io/acme")],
+        [{"id": company_id, "name": "Acme"}],
+    )
 
     company = run(empty_db.first("SELECT * FROM companies WHERE id = ?", company_id))
     assert company["feed_type"] == "lever"
     assert company["careers_url"] == "https://jobs.lever.co/acme"
+
+
+def test_scout_sets_feed_type_for_a_recognized_platform(empty_db):
+    company_id = _insert_company(empty_db, feed_type=None)
+    _store_scout(
+        empty_db, [_scout_found("Acme", "https://boards.greenhouse.io/acme")],
+        [{"id": company_id, "name": "Acme"}],
+    )
+
+    company = run(empty_db.first("SELECT * FROM companies WHERE id = ?", company_id))
+    assert company["feed_type"] == "greenhouse"
+    assert company["feed_id"] == "acme"
+    assert company["careers_url"] == "https://boards.greenhouse.io/acme"
+
+
+def test_scout_sets_careers_url_and_note_for_an_unrecognized_careers_page(empty_db):
+    company_id = _insert_company(empty_db, feed_type=None)
+    _store_scout(
+        empty_db, [_scout_found("Acme", "https://acme.example/careers?q=intern")],
+        [{"id": company_id, "name": "Acme"}],
+    )
+
+    company = run(empty_db.first("SELECT * FROM companies WHERE id = ?", company_id))
+    assert company["feed_type"] is None
+    assert company["careers_url"] == "https://acme.example/careers?q=intern"
+    assert company["careers_note"] == "careers page, no feed"
+    assert company["careers_url_approved"] == 0
+
+
+def test_scout_never_overwrites_a_careers_url_henry_approved(empty_db):
+    company_id = _insert_company(
+        empty_db, feed_type=None, careers_url="https://acme.example/henry-picked", careers_url_approved=1,
+    )
+    _store_scout(
+        empty_db,
+        [_scout_found("Acme", "https://acme.example/careers"), _scout_found("Acme", "https://boards.greenhouse.io/acme")],
+        [{"id": company_id, "name": "Acme"}],
+    )
+
+    company = run(empty_db.first("SELECT * FROM companies WHERE id = ?", company_id))
+    assert company["careers_url"] == "https://acme.example/henry-picked"
+    # A recognized feed can still be attached; it just doesn't replace the approved page.
+    assert company["feed_type"] == "greenhouse"
+
+
+def test_scout_may_replace_a_careers_url_nobody_approved(empty_db):
+    company_id = _insert_company(empty_db, feed_type=None, careers_url="https://acme.example/old")
+    _store_scout(
+        empty_db, [_scout_found("Acme", "https://acme.example/careers/intern")],
+        [{"id": company_id, "name": "Acme"}],
+    )
+
+    company = run(empty_db.first("SELECT * FROM companies WHERE id = ?", company_id))
+    assert company["careers_url"] == "https://acme.example/careers/intern"
+
+
+def test_scout_prefers_an_internship_filtered_page_when_it_finds_several(empty_db):
+    company_id = _insert_company(empty_db, feed_type=None)
+    _store_scout(
+        empty_db,
+        [_scout_found("Acme", "https://acme.example/careers"), _scout_found("Acme", "https://acme.example/careers?q=intern")],
+        [{"id": company_id, "name": "Acme"}],
+    )
+
+    company = run(empty_db.first("SELECT * FROM companies WHERE id = ?", company_id))
+    assert company["careers_url"] == "https://acme.example/careers?q=intern"
 
 
 def test_run_agent_steps_fails_the_scout_step_loudly_when_every_result_is_invalid(empty_db):
@@ -721,34 +788,109 @@ def test_run_agent_steps_records_last_source_found_at_even_without_a_recognized_
     assert company["last_source_found_at"] == "2026-09-20T08:00:00"
 
 
-def test_run_agent_steps_skips_a_recently_covered_company_from_the_scout_batch(empty_db):
-    covered_id = _insert_company(
-        empty_db, name="Covered Co", feed_type=None, last_source_found_at="2026-09-19"
-    )
-    uncovered_id = _insert_company(empty_db, name="Uncovered Co", feed_type=None)
-    run_id = run(empty_db.run("INSERT INTO runs (kind, started_at, status) VALUES ('daily', '2026-09-20T08:00:00', 'running')"))
-
+def _scout_batch_prompt(db, companies_rows, *, now="2026-09-20T08:00:00"):
+    run_id = run(db.run("INSERT INTO runs (kind, started_at, status) VALUES ('daily', '2026-09-20T08:00:00', 'running')"))
     captured_prompts = {}
 
     def fake(step, prompt, *, model):
         captured_prompts[step] = prompt
-        web_searches = 3 if step == "scout" else 0
-        text = '{"sources": []}' if step == "scout" else '{"search_plan": null, "proposals": [], "title_suggestions": []}'
+        web_searches = 3 if step in ("scout", "discovery") else 0
+        text = {
+            "scout": '{"sources": []}',
+            "discovery": '{"companies": []}',
+        }.get(step, '{"search_plan": null, "proposals": [], "title_suggestions": []}')
         return ClaudeStepResult(step=step, model=model, text=text, web_searches=web_searches)
 
     outcome = run(run_agent_steps(
-        empty_db, run_id=run_id,
-        companies=[
-            {"id": covered_id, "name": "Covered Co", "feed_type": None, "last_source_found_at": "2026-09-19"},
-            {"id": uncovered_id, "name": "Uncovered Co", "feed_type": None, "last_source_found_at": None},
-        ],
+        db, run_id=run_id, companies=companies_rows,
         titles_doc=TITLES_DOC, locations_setting=LOCATIONS, budget_settings=SETTINGS,
-        status=_open_status(), today="2026-09-20", now_iso="2026-09-20T08:00:00", run_claude=fake,
+        status=_open_status(), today="2026-09-20", now_iso=now, run_claude=fake,
     ))
+    return outcome, captured_prompts
+
+
+def test_scout_skips_a_company_with_a_working_feed(empty_db):
+    covered_id = _insert_company(empty_db, name="Covered Co", feed_type="greenhouse", last_feed_status="ok")
+    uncovered_id = _insert_company(empty_db, name="Uncovered Co", feed_type=None)
+
+    outcome, prompts = _scout_batch_prompt(empty_db, [
+        {"id": covered_id, "name": "Covered Co", "feed_type": "greenhouse"},
+        {"id": uncovered_id, "name": "Uncovered Co", "feed_type": None},
+    ])
 
     assert outcome["scout_skipped_count"] == 1
-    assert "Uncovered Co" in captured_prompts["scout"]
-    assert "Covered Co" not in captured_prompts["scout"]
+    assert outcome["uncovered_count"] == 1
+    assert "Uncovered Co" in prompts["scout"]
+    assert "Covered Co" not in prompts["scout"]
+
+
+def test_scout_skips_a_company_whose_careers_page_loaded_in_the_last_7_days(empty_db):
+    covered_id = _insert_company(empty_db, name="Covered Co", feed_type=None, careers_url="https://covered.example/jobs")
+    uncovered_id = _insert_company(empty_db, name="Uncovered Co", feed_type=None)
+    run(careers_snapshot.record_changed(
+        empty_db, covered_id, "hash", method="browser_run", now_iso="2026-09-18T08:00:00", existing=None,
+    ))
+
+    outcome, prompts = _scout_batch_prompt(empty_db, [
+        {"id": covered_id, "name": "Covered Co", "feed_type": None, "careers_url": "https://covered.example/jobs"},
+        {"id": uncovered_id, "name": "Uncovered Co", "feed_type": None},
+    ])
+
+    assert outcome["scout_skipped_count"] == 1
+    assert "Covered Co" not in prompts["scout"]
+
+
+def test_scout_includes_a_company_that_only_has_a_sources_table_row(empty_db):
+    # Runs 36 to 42: "skipped 182 already-covered companies" while 182 had no source.
+    # A sources row, or a recent `last_source_found_at`, is not coverage.
+    company_id = _insert_company(empty_db, name="Sources Only Co", feed_type=None, last_source_found_at="2026-09-19")
+    run(empty_db.run(
+        "INSERT INTO sources (name, url, kind, covers, status, discovered_by, discovered_at) "
+        "VALUES ('Sources Only Co careers', 'https://sourcesonly.example/careers', 'Company career sites', "
+        "'Sources Only Co', 'trial', 'claude-scout', '2026-09-19')"
+    ))
+
+    outcome, prompts = _scout_batch_prompt(empty_db, [
+        {"id": company_id, "name": "Sources Only Co", "feed_type": None, "last_source_found_at": "2026-09-19"},
+    ])
+
+    assert outcome["scout_skipped_count"] == 0
+    assert "Sources Only Co" in prompts["scout"]
+
+
+def test_scout_includes_a_company_whose_careers_page_loaded_only_long_ago_or_failed(empty_db):
+    old_id = _insert_company(empty_db, name="Old Co", feed_type=None, careers_url="https://old.example/jobs")
+    failed_id = _insert_company(empty_db, name="Failed Co", feed_type=None, careers_url="https://failed.example/jobs")
+    run(careers_snapshot.record_changed(
+        empty_db, old_id, "hash", method="backup", now_iso="2026-09-01T08:00:00", existing=None,
+    ))
+    run(careers_snapshot.record_failure(
+        empty_db, failed_id, reason="blocked", now_iso="2026-09-19T08:00:00", existing=None,
+    ))
+
+    outcome, prompts = _scout_batch_prompt(empty_db, [
+        {"id": old_id, "name": "Old Co", "feed_type": None},
+        {"id": failed_id, "name": "Failed Co", "feed_type": None},
+    ])
+
+    assert outcome["scout_skipped_count"] == 0
+    assert "Old Co" in prompts["scout"] and "Failed Co" in prompts["scout"]
+
+
+def test_scout_works_on_at_most_35_uncovered_companies_a_run_never_scouted_first(empty_db):
+    ids = [_insert_company(empty_db, name=f"Company {i:02d}", feed_type=None, rank=i) for i in range(40)]
+    run(empty_db.run("UPDATE companies SET last_scouted_at = '2026-09-10T08:00:00' WHERE id IN (1, 2, 3)"))
+    rows = [{"id": i, "name": f"Company {n:02d}", "feed_type": None, "rank": n,
+             "last_scouted_at": "2026-09-10T08:00:00" if i in (1, 2, 3) else None}
+            for n, i in enumerate(ids)]
+
+    outcome, prompts = _scout_batch_prompt(empty_db, rows)
+
+    assert outcome["scout_companies_worked"] == 35
+    assert outcome["uncovered_count"] == 40
+    # 40 uncovered, 35 slots: the 3 already scouted lose out to never-scouted ones.
+    for scouted_before in ("Company 00", "Company 01", "Company 02"):
+        assert scouted_before not in prompts["scout"]
 
 
 def test_run_agent_steps_does_not_record_last_scouted_at_when_scout_is_skipped(empty_db):
@@ -859,3 +1001,62 @@ def test_build_unclear_reader_swallows_errors_and_reports_them():
     reader = build_unclear_reader(status=_open_status(), model="haiku", on_usage=lambda r: None, on_error=errors.append, run_claude=fake)
     assert reader("some page text") is None
     assert len(errors) == 1
+
+
+# -- careers_repair is a registered step (issue #63) -----------------------
+
+def test_careers_repair_runs_through_the_real_client_without_an_unknown_step_error(empty_db):
+    import json
+    import subprocess
+
+    from job.agent import client as agent_client
+    from job.agent.budgets import MODEL_SETTING, SHARE_SETTING, model_for_step
+
+    company_id = run(empty_db.run(
+        "INSERT INTO companies (name, status, feed_type, careers_url, careers_page_flagged) "
+        "VALUES ('Acme', 'pinned', NULL, 'https://acme.example/careers', 1)"
+    ))
+    run_id = run(empty_db.run("INSERT INTO runs (kind, started_at, status) VALUES ('daily', '2026-09-20T08:00:00', 'running')"))
+    seen_args = []
+
+    def runner(args, **kwargs):
+        seen_args.append(args)
+        reply = {"replacements": [
+            {"company_name": "Acme", "url": "https://acme.example/careers?q=intern", "note": "internship search"},
+        ]}
+        payload = {
+            "result": json.dumps(reply),
+            "modelUsage": {"m": {"inputTokens": 5, "outputTokens": 5, "webSearchRequests": 2}},
+        }
+        return subprocess.CompletedProcess(args, 0, stdout=json.dumps(payload), stderr="")
+
+    other_steps = _fake_run_claude({
+        "discovery": '{"results": []}', "scout": '{"sources": []}',
+        "improvement": '{"search_plan": null, "proposals": [], "title_suggestions": []}',
+    })
+
+    def real_client_step(step, prompt, *, model):
+        if step != "careers_repair":
+            return other_steps(step, prompt, model=model)
+        return agent_client.run_claude_step(step, prompt, model=model, runner=runner)
+
+    company = {
+        "id": company_id, "name": "Acme", "feed_type": None, "careers_url": "https://acme.example/careers",
+        "careers_page_flagged": 1, "careers_url_rejected": "[]",
+    }
+    outcome = run(run_agent_steps(
+        empty_db, run_id=run_id, companies=[company], titles_doc=TITLES_DOC, locations_setting=LOCATIONS,
+        budget_settings=SETTINGS, status=_open_status(), today="2026-09-20", now_iso="2026-09-20T08:00:00",
+        run_claude=real_client_step,
+    ))
+
+    assert not any("unknown agent step" in e for e in outcome["errors"])
+    assert "careers_repair" in outcome["steps_succeeded"]
+    assert outcome["careers_repair_count"] == 1
+    assert "WebSearch,WebFetch" in seen_args[0]
+    assert "careers_repair" in [r["step"] for r in run(empty_db.all("SELECT step FROM usage"))]
+    # registered for budgets: rides the scout's share and model
+    assert SHARE_SETTING["careers_repair"] == "share_scout"
+    assert MODEL_SETTING["careers_repair"] == "model_scout"
+    assert model_for_step({"model_scout": "haiku"}, "careers_repair") == "haiku"
+    assert model_for_step({}, "careers_repair") == "sonnet"

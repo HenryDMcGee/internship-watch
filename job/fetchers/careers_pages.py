@@ -16,6 +16,8 @@ reason "no content", same as a page that's actually blank.
 """
 from __future__ import annotations
 
+import functools
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
@@ -26,6 +28,7 @@ from urllib import robotparser
 import requests
 
 from job.fetchers.base import USER_AGENT
+from job.playwright_runtime import load_page_text
 
 BROWSER_RUN_TIMEOUT_SECONDS = 60
 MAX_BROWSER_RUN_CONCURRENCY = 3  # the free plan's concurrency limit
@@ -44,6 +47,8 @@ REASON_TIMEOUT = "timeout"
 REASON_NO_CONTENT = "no content"
 REASON_DISALLOWED = "disallowed by robots.txt"
 REASON_QUOTA_EXCEEDED = "Browser Run quota exceeded"
+REASON_RATE_LIMITED = "Browser Run rate limited (HTTP 429)"
+REASON_TOKEN_REJECTED = "Cloudflare rejected the Browser Run token"
 REASON_BACKUP_DISABLED = "Browser Run unavailable and the backup is off"
 REASON_BACKUP_CAPACITY = "backup page cap reached for this run"
 REASON_ERROR = "error"
@@ -51,7 +56,19 @@ REASON_ERROR = "error"
 MEASURED_BY_CLOUDFLARE_HEADER = "cloudflare_header"
 MEASURED_BY_ELAPSED = "elapsed"
 
-_QUOTA_PHRASES = ("quota", "usage limit", "rate limit")
+# Phrases in Cloudflare's own error that say the daily allowance is used up (issue
+# #63). A bare HTTP 429 is NOT one of these: it is a rate limit, which clears by
+# waiting. Only an error that says the allowance is gone switches to the backup.
+_DAILY_LIMIT_PHRASES = (
+    "for today", "daily", "browser time", "quota", "usage limit", "allowance", "free plan", "minutes",
+)
+# Words in a 403's message that mean the target site refused the page, rather than
+# Cloudflare refusing our token.
+_SITE_BLOCK_PHRASES = ("captcha", "blocked by", "target", "bot protection", "challenge")
+
+MAX_RATE_LIMIT_RETRIES = 3
+DEFAULT_RATE_LIMIT_WAIT_SECONDS = 5.0
+MAX_RATE_LIMIT_WAIT_SECONDS = 60.0
 
 
 class BrowserRunError(RuntimeError):
@@ -63,7 +80,25 @@ class BrowserRunBlocked(BrowserRunError):
 
 
 class BrowserRunQuotaExceeded(BrowserRunError):
-    pass
+    """Cloudflare says the daily allowance is used up."""
+
+
+class BrowserRunRateLimited(BrowserRunError):
+    """HTTP 429 without a daily-limit message: wait `retry_after` seconds and try again."""
+
+    def __init__(self, message: str, retry_after: float | None = None):
+        super().__init__(message)
+        self.retry_after = retry_after
+
+
+class BrowserRunAuthError(BrowserRunError):
+    """api.cloudflare.com answered 401 or 403: the token is missing, expired, or
+    lacks the Browser Rendering permission. Not a site blocking the page.
+    """
+
+    def __init__(self, message: str, status_code: int):
+        super().__init__(message)
+        self.status_code = status_code
 
 
 class BrowserRunServerError(BrowserRunError):
@@ -106,9 +141,34 @@ def robots_allowed(url: str, *, session: "requests.Session | None" = None) -> bo
 # Browser Run
 # ---------------------------------------------------------------------------
 
-def _looks_like_quota_message(message: str) -> bool:
+def _looks_like_daily_limit_message(message: str) -> bool:
     lowered = (message or "").lower()
-    return any(phrase in lowered for phrase in _QUOTA_PHRASES)
+    return any(phrase in lowered for phrase in _DAILY_LIMIT_PHRASES)
+
+
+def _looks_like_rate_limit_message(message: str) -> bool:
+    lowered = (message or "").lower()
+    return "rate limit" in lowered or "too many requests" in lowered
+
+
+def _error_message(resp) -> str:
+    """Cloudflare's own error text from a non-2xx response, if it sent any."""
+    try:
+        payload = resp.json()
+    except ValueError:
+        return ""
+    if not isinstance(payload, dict):
+        return ""
+    errors = payload.get("errors") or []
+    return "; ".join(str(e.get("message", e)) if isinstance(e, dict) else str(e) for e in errors)
+
+
+def _retry_after_seconds(resp) -> float | None:
+    raw = (getattr(resp, "headers", None) or {}).get("Retry-After")
+    try:
+        return max(float(raw), 0.0) if raw is not None else None
+    except (TypeError, ValueError):
+        return None  # an HTTP-date Retry-After isn't worth parsing; the default wait applies
 
 
 def fetch_via_browser_run(
@@ -139,10 +199,23 @@ def fetch_via_browser_run(
         raise BrowserRunServerError(f"Browser Run request to {url} failed: {exc}") from exc
     elapsed_minutes = (time.monotonic() - started) / 60.0
 
-    if resp.status_code == 403:
-        raise BrowserRunBlocked(f"Browser Run was blocked (403) fetching {url}")
+    if resp.status_code in (401, 403):
+        message = _error_message(resp)
+        if resp.status_code == 403 and any(p in message.lower() for p in _SITE_BLOCK_PHRASES):
+            raise BrowserRunBlocked(f"Browser Run was blocked (403) fetching {url}: {message}")
+        raise BrowserRunAuthError(
+            f"Cloudflare API returned HTTP {resp.status_code} for the Browser Run token"
+            + (f": {message}" if message else ""),
+            resp.status_code,
+        )
     if resp.status_code == 429:
-        raise BrowserRunQuotaExceeded(f"Browser Run returned HTTP 429 for {url}")
+        message = _error_message(resp)
+        if message and _looks_like_daily_limit_message(message) and not _looks_like_rate_limit_message(message):
+            raise BrowserRunQuotaExceeded(f"Browser Run's daily allowance is used up ({message})")
+        raise BrowserRunRateLimited(
+            f"Browser Run returned HTTP 429 for {url}" + (f": {message}" if message else ""),
+            retry_after=_retry_after_seconds(resp),
+        )
     if resp.status_code >= 500:
         raise BrowserRunServerError(f"Browser Run returned HTTP {resp.status_code} for {url}")
     if not resp.ok:
@@ -156,7 +229,9 @@ def fetch_via_browser_run(
     if not payload.get("success", True):
         errors = payload.get("errors") or []
         message = "; ".join(str(e.get("message", e)) if isinstance(e, dict) else str(e) for e in errors) or "unknown error"
-        if _looks_like_quota_message(message):
+        if _looks_like_rate_limit_message(message):
+            raise BrowserRunRateLimited(f"Browser Run reported a rate limit for {url}: {message}")
+        if _looks_like_daily_limit_message(message):
             raise BrowserRunQuotaExceeded(f"Browser Run reported a quota error for {url}: {message}")
         raise BrowserRunServerError(f"Browser Run reported an error for {url}: {message}")
 
@@ -184,19 +259,53 @@ def fetch_via_browser_run(
     return text, browser_minutes, measured_by
 
 
+class Throttle:
+    """Shared slow-down for a run: once Browser Run rate-limits us, later
+    batches wait first and go one page at a time (issue #63).
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self.delay = 0.0
+        self.rate_limited = 0
+
+    def note_rate_limit(self, retry_after: float | None) -> None:
+        wait = retry_after if retry_after is not None else DEFAULT_RATE_LIMIT_WAIT_SECONDS
+        with self._lock:
+            self.rate_limited += 1
+            self.delay = min(max(self.delay * 2, wait), MAX_RATE_LIMIT_WAIT_SECONDS)
+
+
 def fetch_via_browser_run_with_retry(
     url: str, *, account_id: str, token: str, session: "requests.Session | None" = None,
-    timeout: int = BROWSER_RUN_TIMEOUT_SECONDS,
+    timeout: int = BROWSER_RUN_TIMEOUT_SECONDS, sleep: Callable[[float], None] = time.sleep,
+    throttle: "Throttle | None" = None,
 ) -> tuple[str, float | None, str]:
-    """One retry, and only for a timeout (issue: "60-second timeout per page,
-    with one retry"). Every other failure (blocked, quota, a server error,
-    empty content) is a real answer from Browser Run, not a fluke worth
-    retrying.
+    """One retry for a timeout (issue: "60-second timeout per page, with one
+    retry"). An HTTP 429 is a rate limit, not a verdict: wait as long as
+    Retry-After says (or a short default that doubles), then try again, up to
+    `MAX_RATE_LIMIT_RETRIES` times, telling `throttle` so the rest of the run
+    slows down too. Every other failure (blocked, daily allowance used up, a
+    server error, empty content) is a real answer from Browser Run, not a
+    fluke worth retrying.
     """
-    try:
-        return fetch_via_browser_run(url, account_id=account_id, token=token, session=session, timeout=timeout)
-    except BrowserRunTimeout:
-        return fetch_via_browser_run(url, account_id=account_id, token=token, session=session, timeout=timeout)
+    timed_out = False
+    rate_limit_retries = 0
+    while True:
+        try:
+            return fetch_via_browser_run(url, account_id=account_id, token=token, session=session, timeout=timeout)
+        except BrowserRunTimeout:
+            if timed_out:
+                raise
+            timed_out = True
+        except BrowserRunRateLimited as exc:
+            if throttle is not None:
+                throttle.note_rate_limit(exc.retry_after)
+            if rate_limit_retries >= MAX_RATE_LIMIT_RETRIES:
+                raise
+            wait = exc.retry_after if exc.retry_after is not None else DEFAULT_RATE_LIMIT_WAIT_SECONDS * 2 ** rate_limit_retries
+            rate_limit_retries += 1
+            sleep(min(wait, MAX_RATE_LIMIT_WAIT_SECONDS))
 
 
 # ---------------------------------------------------------------------------
@@ -204,21 +313,13 @@ def fetch_via_browser_run_with_retry(
 # ---------------------------------------------------------------------------
 
 def fetch_via_backup(url: str) -> str:
-    """Loads `url` with Playwright's Chromium, same browser already installed
-    on the runner for `job/verify/browser.py`'s status checks. Imported
-    lazily so importing this module doesn't require Playwright to be
-    installed (only the real daily job does).
+    """Loads `url` with Playwright's Chromium -- the same browser, installed in
+    the same environment, as `job/verify/browser.py`'s status checks. It runs
+    on its own thread because Playwright's sync API won't start inside the
+    job's asyncio loop, which is why the backup failed on every page before
+    issue #63 (see `job/playwright_runtime.py`).
     """
-    from playwright.sync_api import sync_playwright
-
-    with sync_playwright() as playwright:
-        browser = playwright.chromium.launch()
-        try:
-            page = browser.new_page(user_agent=USER_AGENT)
-            page.goto(url, wait_until="networkidle", timeout=20000)
-            return page.inner_text("body")
-        finally:
-            browser.close()
+    return load_page_text(url, timeout_ms=20000)
 
 
 # ---------------------------------------------------------------------------
@@ -262,6 +363,15 @@ class CareersRunOutcome:
     browser_run_failures: int = 0
     backup_pages: int = 0
     backup_failures: int = 0
+    # HTTP 429s Browser Run answered with this run (each one waited and retried,
+    # none switched to the backup), and the Cloudflare API's own 401/403 text
+    # when the token was rejected (issue #63).
+    rate_limit_events: int = 0
+    token_problem: str | None = None
+
+    @property
+    def attempted(self) -> int:
+        return len(self.pages)
 
 
 def _classify_browser_run_call(
@@ -282,6 +392,10 @@ def _classify_browser_run_call(
         return ("blocked", None, None, None, str(exc))
     except BrowserRunQuotaExceeded as exc:
         return ("quota_exceeded", None, None, None, str(exc))
+    except BrowserRunRateLimited as exc:
+        return ("rate_limited", None, None, None, str(exc))
+    except BrowserRunAuthError as exc:
+        return ("auth_error", None, None, None, str(exc))
     except BrowserRunTimeout as exc:
         return ("timeout", None, None, None, str(exc))
     except BrowserRunEmpty as exc:
@@ -318,24 +432,35 @@ def run_careers_pages(
     backup_fetch: Callable = fetch_via_backup,
     robots_check: Callable = robots_allowed,
     max_concurrency: int = MAX_BROWSER_RUN_CONCURRENCY,
+    minutes_used_before: float = 0.0,
+    sleep: Callable[[float], None] = time.sleep,
 ) -> CareersRunOutcome:
     """Reads each company's careers page (`companies` must already be
     filtered to ones with a `careers_url` and no recognized feed), up to
     `pages_per_run` pages total.
 
     Switches from Browser Run to the backup, for the rest of this run, on
-    whichever comes first:
+    whichever comes first (issue #63 narrowed these):
       - `CLOUDFLARE_BROWSER_TOKEN`/`account_id` missing -- backup from the start
-      - a quota/usage-limit response (HTTP 429, or a reported quota error)
-      - `daily_minutes_budget` of Browser Run time used
+      - Cloudflare's error says the daily allowance is used up
+      - the minutes used today (`minutes_used_before` from earlier runs, plus
+        this run's) reach `daily_minutes_budget`
+      - Cloudflare's API rejects the token (401 or 403) -- reported as a token
+        problem, never as a site blocking the page
       - 3 Browser Run requests in a row failing with a server or network
         error (5xx, connection errors, timeouts don't count here -- see
         `fetch_via_browser_run_with_retry`)
 
-    A page blocked (403) or disallowed by robots.txt is never sent to the
-    backup either way -- it's a site decision, not a Browser Run capacity
+    An HTTP 429 is only a rate limit: it waits for Retry-After, retries, and
+    slows the rest of the run down, and never switches to the backup.
+
+    A page blocked by the site or disallowed by robots.txt is never sent to
+    the backup either way -- it's a site decision, not a Browser Run capacity
     problem, so retrying it anywhere would be trying to get around a block.
     """
+    throttle = Throttle()
+    if browser_run_fetch is fetch_via_browser_run_with_retry:
+        browser_run_fetch = functools.partial(fetch_via_browser_run_with_retry, throttle=throttle, sleep=sleep)
     candidates = [c for c in companies if c.get("careers_url")][:pages_per_run]
 
     pages: list[PageOutcome] = []
@@ -360,18 +485,50 @@ def run_careers_pages(
     browser_run_failed = 0
     backup_ok = 0
     backup_failed = 0
+    token_problem: str | None = None
+
+    def read_with_backup(company: dict) -> None:
+        nonlocal backup_used, backup_ok, backup_failed
+        company_id, url = company["id"], company["careers_url"]
+        if not backup_enabled:
+            pages.append(PageOutcome(company_id, url, ok=False, reason=REASON_BACKUP_DISABLED))
+        elif backup_used >= backup_pages_per_run:
+            pages.append(PageOutcome(company_id, url, ok=False, reason=REASON_BACKUP_CAPACITY))
+        else:
+            backup_used += 1
+            try:
+                text = backup_fetch(url)
+            except Exception as exc:  # noqa: BLE001 - a blocked/unavailable site must not stop the run
+                backup_failed += 1
+                # The underlying error, per page, so a backup that fails everywhere
+                # says why (issue #63) instead of one generic "error".
+                detail = f"{type(exc).__name__}: {str(exc).strip()[:200]}"
+                print(f"careers backup: {url}: {detail}")
+                pages.append(PageOutcome(company_id, url, ok=False, reason=f"{REASON_ERROR}: backup failed ({detail})"))
+            else:
+                if not text or not text.strip():
+                    backup_failed += 1
+                    pages.append(PageOutcome(company_id, url, ok=False, reason=REASON_NO_CONTENT))
+                else:
+                    backup_ok += 1
+                    pages.append(PageOutcome(company_id, url, ok=True, text=text, method="backup"))
 
     i = 0
     n = len(allowed)
     while i < n:
         if mode == "browser_run":
-            batch = allowed[i : i + max_concurrency]
+            if throttle.delay:
+                sleep(throttle.delay)
+            # Once rate limited, one page at a time instead of three.
+            batch_size = 1 if throttle.rate_limited else max_concurrency
+            batch = allowed[i : i + batch_size]
             urls = [c["careers_url"] for c in batch]
             results = _run_browser_run_batch(
                 urls, account_id=account_id, token=token, session=session,
-                fetch=browser_run_fetch, max_workers=max_concurrency,
+                fetch=browser_run_fetch, max_workers=batch_size,
             )
-            for company, (kind, text, minutes, measured_by, _err) in zip(batch, results):
+            switched_pages: list[dict] = []  # not the site's fault: read these with the backup instead
+            for company, (kind, text, minutes, measured_by, err) in zip(batch, results):
                 company_id, url = company["id"], company["careers_url"]
                 if kind == "ok":
                     minutes_used += minutes or 0.0
@@ -381,7 +538,7 @@ def run_careers_pages(
                         browser_minutes=minutes, measured_by=measured_by,
                     ))
                     consecutive_server_errors = 0
-                    if minutes_used >= daily_minutes_budget:
+                    if mode == "browser_run" and minutes_used_before + minutes_used >= daily_minutes_budget:
                         mode = "backup"
                         switch_reason = switch_reason or "minutes"
                     continue
@@ -392,42 +549,39 @@ def run_careers_pages(
                     pages.append(PageOutcome(company_id, url, ok=False, reason=REASON_TIMEOUT))
                 elif kind == "no_content":
                     pages.append(PageOutcome(company_id, url, ok=False, reason=REASON_NO_CONTENT))
+                elif kind == "rate_limited":
+                    # Waited and retried already; still limited. The page fails for now,
+                    # and no switch to the backup -- a rate limit isn't a used-up allowance.
+                    pages.append(PageOutcome(company_id, url, ok=False, reason=REASON_RATE_LIMITED))
+                    if not throttle.rate_limited:  # a custom `browser_run_fetch` doesn't report to the throttle
+                        throttle.note_rate_limit(None)
                 elif kind == "quota_exceeded":
-                    pages.append(PageOutcome(company_id, url, ok=False, reason=REASON_QUOTA_EXCEEDED))
-                    mode = "backup"
-                    switch_reason = "quota"
+                    switched_pages.append(company)
+                    if mode == "browser_run":
+                        mode = "backup"
+                        switch_reason = "quota"
+                elif kind == "auth_error":
+                    switched_pages.append(company)
+                    token_problem = token_problem or err
+                    if mode == "browser_run":
+                        mode = "backup"
+                        switch_reason = "token"
                 else:  # server_error
                     consecutive_server_errors += 1
                     pages.append(PageOutcome(company_id, url, ok=False, reason=REASON_ERROR))
-                    if consecutive_server_errors >= 3:
+                    if consecutive_server_errors >= 3 and mode == "browser_run":
                         mode = "backup"
                         switch_reason = "outage"
+            for company in switched_pages:
+                read_with_backup(company)
             i += len(batch)
         else:
-            company = allowed[i]
-            company_id, url = company["id"], company["careers_url"]
-            if not backup_enabled:
-                pages.append(PageOutcome(company_id, url, ok=False, reason=REASON_BACKUP_DISABLED))
-            elif backup_used >= backup_pages_per_run:
-                pages.append(PageOutcome(company_id, url, ok=False, reason=REASON_BACKUP_CAPACITY))
-            else:
-                backup_used += 1
-                try:
-                    text = backup_fetch(url)
-                except Exception as exc:  # noqa: BLE001 - a blocked/unavailable site must not stop the run
-                    backup_failed += 1
-                    pages.append(PageOutcome(company_id, url, ok=False, reason=REASON_ERROR))
-                else:
-                    if not text or not text.strip():
-                        backup_failed += 1
-                        pages.append(PageOutcome(company_id, url, ok=False, reason=REASON_NO_CONTENT))
-                    else:
-                        backup_ok += 1
-                        pages.append(PageOutcome(company_id, url, ok=True, text=text, method="backup"))
+            read_with_backup(allowed[i])
             i += 1
 
     return CareersRunOutcome(
         pages=pages, browser_run_minutes_used=minutes_used, switch_reason=switch_reason,
         browser_run_pages=browser_run_ok, browser_run_failures=browser_run_failed,
         backup_pages=backup_ok, backup_failures=backup_failed,
+        rate_limit_events=throttle.rate_limited, token_problem=token_problem,
     )

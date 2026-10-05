@@ -37,6 +37,9 @@ STEPS_WITH_MIN_PROMPT_CHARS = frozenset({"discovery", "scout", "classification",
 STEP_TOOLS: dict[str, tuple[str, ...]] = {
     "discovery": ("WebSearch", "WebFetch"),
     "scout": ("WebSearch", "WebFetch"),
+    # Registered in issue #63: the step existed in `budgets.py` and `pipeline.py` but was
+    # missing here, so every run logged "unknown agent step 'careers_repair'".
+    "careers_repair": ("WebSearch", "WebFetch"),
     "classification": (),
     "unclear_page": (),
     "improvement": (),
@@ -54,6 +57,7 @@ STEP_TOOLS: dict[str, tuple[str, ...]] = {
 STEP_TIMEOUT_SECONDS: dict[str, int] = {
     "discovery": 900,
     "scout": 900,
+    "careers_repair": 900,
 }
 
 # Substrings that mark a CLI failure as an account/rate limit rather than a

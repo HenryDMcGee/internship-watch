@@ -37,8 +37,9 @@ def build_summary_payload(
     usage_by_step: list[dict],
     forecast: dict,
     alerts: list[dict],
+    health: dict | None = None,
 ) -> dict:
-    return {
+    payload = {
         "date": date,
         "run_status": run_status,
         "run_reason": run_reason,
@@ -49,6 +50,11 @@ def build_summary_payload(
         "forecast": forecast,
         "alerts": alerts,
     }
+    if health is not None:
+        # Failed check ids, how many days in a row found nothing new, and -- once that
+        # reaches 3 -- a per-step breakdown (searches, covered, pages_loaded, classified).
+        payload["health"] = health
+    return payload
 
 
 def send_daily_summary(payload: dict, *, url: str | None = None, token: str | None = None, session=None) -> bool:

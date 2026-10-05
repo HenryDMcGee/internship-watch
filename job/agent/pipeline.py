@@ -17,7 +17,7 @@ from datetime import date
 from job.agent import careers_repair, discovery, improvement, scout
 from job.agent import classification as classification_mod
 from job.agent import unclear as unclear_mod
-from job.agent.budgets import BudgetStatus
+from job.agent.budgets import BudgetStatus, model_for_step
 from job.agent.client import ClaudeLimitError
 from job.agent.client import run_claude_step as _default_run_claude
 from job.agent.github_pr import github_client_from_env
@@ -25,7 +25,7 @@ from job.agent.schemas import ClaudeOutputError
 from job.agent.titles_pr import open_title_suggestions_pr
 from job.agent.usage import record_usage
 from job.config import load_search_plan, load_watchlist_setting
-from job import fingerprint
+from job import coverage, fingerprint
 from job.locations import location_match as compute_location_match
 from job.matching import reconsider_rejection
 
@@ -47,6 +47,8 @@ async def run_agent_steps(
     outcome = {
         "discovery_count": 0, "discovery_new_count": 0, "classification_count": 0, "scout_count": 0,
         "scout_skipped_count": 0, "repeats_recognized": 0, "rejections_skipped": 0, "careers_repair_count": 0,
+        "uncovered_count": 0, "covered_count": 0, "scout_companies_worked": 0,
+        "discovery_planned_searches": 0, "discovery_searches": 0, "discovery_batches": [], "discovery_failed": None,
         "steps_skipped": [], "steps_succeeded": [], "claude_limit_hit": False, "errors": [], "title_pr": None,
     }
     settings_ver = fingerprint.settings_version(titles_doc, locations_setting)
@@ -90,33 +92,65 @@ async def run_agent_steps(
             outcome["errors"].append(f"{step}: {exc}")
             return None
 
-    no_feed_companies = [c for c in companies if not c.get("feed_type")]
-    # A company whose careers page loaded this run (issue #53, phase 6 part
-    # 1) already has today's answer -- discovery's web searches are the most
-    # expensive part of a run, and are only for companies still uncovered
-    # after feeds and careers pages. Scout's candidates are untouched: a
-    # careers page isn't a *feed*, so it doesn't stop the scout from still
-    # looking for one.
-    discovery_companies = [c for c in no_feed_companies if c["id"] not in (careers_covered_ids or set())]
+    # Covered = a working feed, or a careers page that loaded in the last 7 days
+    # (job/coverage.py). Discovery's web searches are the most expensive part
+    # of a run, so they go to the watch list first and then to companies still
+    # uncovered after feeds and careers pages. A `sources` row alone is not
+    # coverage (issue #63).
+    covered_ids = await coverage.covered_company_ids(db, companies, today=date.fromisoformat(today))
+    covered_ids |= set(careers_covered_ids or set())
+    uncovered_companies = [c for c in companies if c["id"] not in covered_ids]
+    outcome["uncovered_count"] = len(uncovered_companies)
+    outcome["covered_count"] = len(companies) - len(uncovered_companies)
+
+    watchlist = await load_watchlist_setting(db)
+    watch_names = {normalize_company_name(w) for w in watchlist}
+    discovery_companies = [
+        c for c in companies
+        if c["id"] not in covered_ids or normalize_company_name(c.get("name") or "") in watch_names
+    ]
+    discovery_report = discovery.DiscoveryReport()
 
     async def do_discovery():
-        watchlist = await load_watchlist_setting(db)
         ordered = discovery.order_companies(discovery_companies, watchlist)
         search_plan = await load_search_plan(db, today)
-        results, result = discovery.run_discovery(
-            ordered, titles_doc, locations_setting, search_plan,
-            model=budget_settings.get("model_discovery", "sonnet"),
-            search_limit_per_run=int(budget_settings.get("search_limit_per_run") or 35),
-            search_limit_per_company=int(budget_settings.get("search_limit_per_company") or 5),
-            run_claude=run_claude,
-        )
-        await record("discovery", result)
-        return results
+        daily_search_budget = int(budget_settings.get("daily_search_budget") or 0)
+        daily_remaining = max(daily_search_budget - status.today.searches, 0) if daily_search_budget > 0 else None
+        try:
+            discovery.run_discovery(
+                ordered, titles_doc, locations_setting, search_plan,
+                model=budget_settings.get("model_discovery", "sonnet"),
+                search_limit_per_run=int(budget_settings.get("search_limit_per_run") or 35),
+                search_limit_per_company=int(budget_settings.get("search_limit_per_company") or 5),
+                daily_searches_remaining=daily_remaining,
+                run_claude=run_claude, report=discovery_report,
+            )
+        finally:
+            # Every call spent real budget, including the ones before a usage
+            # limit stopped the step.
+            for usage_result in discovery_report.usage:
+                await record("discovery", usage_result)
+            discovery_report.usage.clear()
+        return discovery_report.results
 
     discovery_ids: list[int] = []
     discovery_pending: dict[int, tuple] = {}
     if discovery_companies:
         discovery_results = await guarded("discovery", do_discovery) or []
+        outcome["discovery_planned_searches"] = discovery_report.planned_searches
+        outcome["discovery_searches"] = discovery_report.searches_made
+        outcome["discovery_batches"] = [b.line() for b in discovery_report.batches]
+        if discovery_report.searched_ids:
+            clause, param = in_json("id", sorted(discovery_report.searched_ids))
+            await db.run(f"UPDATE companies SET last_discovery_searched_at = ? WHERE {clause}", now_iso, param)
+        if discovery_report.failed:
+            # Searches fell short even after the retry: the step failed, whatever it
+            # did find is still stored below, and the daily alert names it.
+            if "discovery" in steps_succeeded:
+                steps_succeeded.discard("discovery")
+                outcome["steps_succeeded"].remove("discovery")
+            outcome["errors"].append(f"discovery: {discovery_report.failed_reason}")
+            outcome["discovery_failed"] = discovery_report.failed_reason
         (
             outcome["discovery_count"], discovery_ids, discovery_pending,
             discovery_repeats, discovery_rejections,
@@ -155,12 +189,13 @@ async def run_agent_steps(
 
     search_limit_per_run = int(budget_settings.get("search_limit_per_run") or 35)
     scout_candidates, outcome["scout_skipped_count"] = scout.split_companies_by_coverage(
-        no_feed_companies, today=date.fromisoformat(today)
+        companies, covered_ids=covered_ids,
     )
-    if outcome["scout_skipped_count"]:
-        print(f"scout: skipped {outcome['scout_skipped_count']} already-covered compan"
-              f"{'y' if outcome['scout_skipped_count'] == 1 else 'ies'}")
-    scout_batch = scout.order_companies_for_scout(scout_candidates, limit=search_limit_per_run)
+    scout_batch = scout.order_companies_for_scout(scout_candidates, limit=scout.SCOUT_COMPANIES_PER_RUN)
+    print(
+        f"scout: {outcome['scout_skipped_count']} covered, {len(scout_candidates)} uncovered, "
+        f"working on {len(scout_batch)} this run"
+    )
 
     async def do_scout():
         found, result = scout.run_scout(
@@ -178,6 +213,7 @@ async def run_agent_steps(
         )
         if "scout" in steps_succeeded:
             await _mark_companies_scouted(db, scout_batch, now_iso=now_iso)
+            outcome["scout_companies_worked"] = len(scout_batch)
 
     # Companies whose careers page has failed 3 checks in a row
     # (job/run.py's `_run_careers_pages`) -- the repair scout looks for a
@@ -187,7 +223,7 @@ async def run_agent_steps(
 
     async def do_careers_repair():
         found, result = careers_repair.run_repair(
-            flagged_companies, model=budget_settings.get("model_scout", "sonnet"),
+            flagged_companies, model=model_for_step(budget_settings, "careers_repair"),
             search_limit_per_run=search_limit_per_run, run_claude=run_claude,
         )
         await record("careers_repair", result)
@@ -418,6 +454,7 @@ async def _store_scout_sources(db, found: list[dict], *, now_iso: str, companies
     stored = 0
     companies_updated = 0
     companies_covered: set[int] = set()
+    found_by_company: dict[int, list[dict]] = {}
     for f in found:
         existing = await db.first("SELECT * FROM sources WHERE url = ?", f["url"])
         if existing:
@@ -432,17 +469,20 @@ async def _store_scout_sources(db, found: list[dict], *, now_iso: str, companies
                 row["discovered_by"], row["discovered_at"], row["found_count"], row["last_checked"],
             )
             stored += 1
-        if await _apply_scout_company_feed(db, f, companies_by_name):
-            companies_updated += 1
-        # Recorded even when `_apply_scout_company_feed` didn't set a
-        # `feed_type` (not every source Claude finds is one `detect_feed`
-        # recognizes) -- this is what `scout.split_companies_by_coverage`
-        # reads next run to stop re-spending search budget on a company
-        # that's already covered (issue #43).
         company = companies_by_name.get(normalize_company_name(f.get("company_name") or ""))
-        if company and company.get("id") is not None and company["id"] not in companies_covered:
-            await db.run("UPDATE companies SET last_source_found_at = ? WHERE id = ?", now_iso, company["id"])
-            companies_covered.add(company["id"])
+        if company and company.get("id") is not None:
+            found_by_company.setdefault(company["id"], []).append(f)
+            if company["id"] not in companies_covered:
+                # Informational only: coverage no longer reads this (issue #63) --
+                # it needs a working feed or a careers page that loaded.
+                await db.run("UPDATE companies SET last_source_found_at = ? WHERE id = ?", now_iso, company["id"])
+                companies_covered.add(company["id"])
+    # One page per company: a company the scout reports several pages for gets
+    # the best one (a feed platform, then an internship-filtered listing page).
+    for company_id, candidates in found_by_company.items():
+        best = min(candidates, key=_scout_candidate_rank)
+        if await _apply_scout_company_feed(db, best, companies_by_name):
+            companies_updated += 1
     print(
         f"scout: wrote {stored} new source(s) ({len(found) - stored} already known), "
         f"set feed info on {companies_updated} compan{'y' if companies_updated == 1 else 'ies'}"
@@ -451,28 +491,58 @@ async def _store_scout_sources(db, found: list[dict], *, now_iso: str, companies
 
 
 async def _apply_scout_company_feed(db, found: dict, companies_by_name: dict) -> bool:
-    """A scout result naming one of the companies it was sent to scout, on a
-    URL matching a known feed platform, is exactly the source that company
-    was missing -- attach it directly to that company's row so it stops
-    counting as "no source" next run. Without this, a scout result only
-    ever reaches the generic `sources` catalog, which nothing reads back
-    onto `companies.feed_type`/`careers_url` (issue #20): a company could
-    stay "no source" forever even after the scout found its careers page.
-    Skipped for companies that already have a feed_type, and for URLs
-    `detect_feed` doesn't recognize (that's not proof of a dead end, just
-    not something the daily fetchers can use automatically).
+    """Attaches a scout result to the company it names, on the company's own
+    row, so the company stops counting as uncovered (issues #20, #63):
+      * a URL on a recognized feed platform sets `feed_type` and `feed_id`;
+      * any other URL sets `careers_url` and marks it "careers page, no feed",
+        for the careers-page reader.
+    Never overwrites a working feed, or a `careers_url` Henry approved
+    (`careers_url_approved`); both are read fresh from the row, not from the
+    copy loaded at the start of the run. Returns whether the row changed.
     """
     company = companies_by_name.get(normalize_company_name(found.get("company_name") or ""))
-    if not company or company.get("feed_type"):
+    url = (found.get("url") or "").strip()
+    if not company or not url:
         return False
-    feed_type, feed_id = detect_feed(found.get("url"))
-    if not feed_type:
+    row = await db.first("SELECT * FROM companies WHERE id = ?", company["id"])
+    if not row or coverage.feed_is_working(row):
+        return False
+    approved = bool(row.get("careers_url_approved"))
+    feed_type, feed_id = detect_feed(url)
+
+    if feed_type:
+        if approved:
+            await db.run(
+                "UPDATE companies SET feed_type = ?, feed_id = ?, careers_note = NULL WHERE id = ?",
+                feed_type, feed_id, company["id"],
+            )
+        else:
+            await db.run(
+                "UPDATE companies SET careers_url = ?, feed_type = ?, feed_id = ?, careers_note = NULL WHERE id = ?",
+                url, feed_type, feed_id, company["id"],
+            )
+        return True
+
+    if approved or row.get("careers_url") == url:
         return False
     await db.run(
-        "UPDATE companies SET careers_url = ?, feed_type = ?, feed_id = ? WHERE id = ?",
-        found["url"], feed_type, feed_id, company["id"],
+        "UPDATE companies SET careers_url = ?, careers_note = ?, careers_page_flagged = 0 WHERE id = ?",
+        url, coverage.CAREERS_NO_FEED_NOTE, company["id"],
+    )
+    await db.run(
+        "UPDATE careers_page_snapshots SET consecutive_failures = 0, last_error = NULL WHERE company_id = ?",
+        company["id"],
     )
     return True
+
+
+def _scout_candidate_rank(found: dict) -> tuple[int, int]:
+    """Lower is better: a recognized feed platform first, then a URL that
+    looks like an internship-filtered listing page.
+    """
+    url = found.get("url") or ""
+    feed_type, _ = detect_feed(url)
+    return (0 if feed_type else 1, 0 if "intern" in url.lower() else 1)
 
 
 async def _store_careers_repair_proposals(

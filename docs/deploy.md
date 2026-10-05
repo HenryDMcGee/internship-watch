@@ -131,6 +131,14 @@ python -m scripts.backfill_fingerprints
 ```
 It uses the same `CLOUDFLARE_D1_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`, and `D1_DATABASE_ID` as the daily job. Add `--dry-run` first to see what it would do without writing anything. It's safe to run more than once.
 
+### Migration `0011_search_coverage.sql` and the careers-page backfill
+
+Migration `0011` adds three columns to `companies` (`last_discovery_searched_at`, `careers_url_approved`, `careers_note`) and marks every careers link already on file as approved, so the scout never overwrites it. The automatic deploy applies it (step 5); nothing else needs running by hand. To undo it, drop the three columns.
+
+The first daily run after the deploy also does a one-time backfill, with no command to run: every company with no feed and no careers link gets the best careers page already in the `sources` table. The run's log line says how many (`careers backfill: attached a careers page from the sources table to N companies`), and the result is saved in the `settings` table under `careers_backfill`, which is what stops it running again. To run it again, delete that row.
+
+The careers-page backup needs Chromium on the runner. `daily-search.yml` already installs it, and the job installs it itself once if it is missing, so no workflow change is needed.
+
 ## Backups
 
 `.github/workflows/backup.yml` runs nightly at 09:00 UTC (after the 08:00 America/Chicago daily job) and exports the database to the `internship-watch-backups` R2 bucket as `<date>.sql`, deleting backups older than 30 days. Run it by hand from the **Actions** tab (**Backup**, **Run workflow**) any time you want a backup right away, such as before a risky migration.
