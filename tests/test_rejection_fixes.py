@@ -218,22 +218,30 @@ def test_dry_run_changes_nothing(empty_db):
     assert row["settings_version"] == "old"
 
 
-def test_classification_does_not_archive_a_rejection_that_contradicts_its_title(empty_db):
+def _candidate(title, location="", cid=1):
+    from job.save_posting import Candidate
+
+    return Candidate(
+        id=cid, company_name="HP", title=title, url=f"https://hp.example/{cid}", source_name="careers_page",
+        location_text=location, posted_date=None,
+        fp=fingerprint.compute_fingerprint(company_name="HP", title=title, url=f"https://hp.example/{cid}"),
+        fingerprint_source="careers_page",
+    )
+
+
+def test_classification_does_not_reject_a_rejection_that_contradicts_its_title(empty_db):
     from job.agent.pipeline import _apply_classification_decisions
 
-    posting_id = run(empty_db.run(
-        "INSERT INTO postings (company_name, title, url, locations, first_seen, status) "
-        "VALUES ('HP', 'Product Management Intern', 'https://hp.example/1', '[]', '2026-10-01', 'unverified')"
-    ))
-    decisions = [{"id": posting_id, "decision": "reject", "reason": "Location not specified"}]
+    candidate = _candidate("Product Management Intern")
+    decisions = [{"id": 1, "decision": "reject", "reason": "Location not specified"}]
 
-    applied = run(_apply_classification_decisions(
-        empty_db, decisions, now_iso="2026-10-01T08:00:00", settings_version="v",
+    saved = run(_apply_classification_decisions(
+        empty_db, decisions, [candidate], now_iso="2026-10-01T08:00:00", settings_version="v",
         titles_doc=TITLES_DOC, locations_setting=LOCATIONS,
     ))
 
-    assert applied == 1
-    posting = run(empty_db.first("SELECT * FROM postings WHERE id = ?", posting_id))
+    assert saved == {1}
+    posting = run(empty_db.first("SELECT * FROM postings"))
     assert posting["archived_at"] is None
     assert posting["matched_title"] == "Product Management Intern"
     assert posting["location_match"] == "unclear"

@@ -27,7 +27,8 @@ from job.agent.usage import record_usage
 from job.config import load_search_plan, load_watchlist_setting
 from job import coverage, fingerprint
 from job.locations import location_match as compute_location_match
-from job.matching import reconsider_rejection
+from job.matching import classify_posting, find_role_conflict, reconsider_rejection
+from job.save_posting import CLASSIFICATION_METHOD, Candidate, canonical_active_title, save_posting
 
 # `job.config` (imported above) adds `api/src` to `sys.path`, which this
 # import needs -- see `job/feeds/detect.py`'s docstring for why company
@@ -42,10 +43,12 @@ async def run_agent_steps(
     budget_settings: dict, status: BudgetStatus, today: str, now_iso: str,
     run_summary_so_far: dict | None = None,
     careers_covered_ids: set[int] | None = None,
+    candidates: list[Candidate] | None = None,
     run_claude=_default_run_claude,
 ) -> dict:
     outcome = {
-        "discovery_count": 0, "discovery_new_count": 0, "classification_count": 0, "scout_count": 0,
+        "discovery_count": 0, "discovery_new_count": 0, "candidate_new_count": 0, "classification_count": 0,
+        "scout_count": 0,
         "scout_skipped_count": 0, "repeats_recognized": 0, "rejections_skipped": 0, "careers_repair_count": 0,
         "uncovered_count": 0, "covered_count": 0, "scout_companies_worked": 0,
         "discovery_planned_searches": 0, "discovery_searches": 0, "discovery_batches": [], "discovery_failed": None,
@@ -134,7 +137,8 @@ async def run_agent_steps(
         return discovery_report.results
 
     discovery_ids: list[int] = []
-    discovery_pending: dict[int, tuple] = {}
+    if candidates is None:
+        candidates = []
     if discovery_companies:
         discovery_results = await guarded("discovery", do_discovery) or []
         outcome["discovery_planned_searches"] = discovery_report.planned_searches
@@ -152,40 +156,40 @@ async def run_agent_steps(
             outcome["errors"].append(f"discovery: {discovery_report.failed_reason}")
             outcome["discovery_failed"] = discovery_report.failed_reason
         (
-            outcome["discovery_count"], discovery_ids, discovery_pending,
-            discovery_repeats, discovery_rejections,
+            outcome["discovery_count"], discovery_ids, discovery_repeats, discovery_rejections,
         ) = await _store_discovery_results(
             db, discovery_results, now_iso=now_iso, locations_setting=locations_setting,
-            settings_version=settings_ver,
+            settings_version=settings_ver, titles_doc=titles_doc, candidates=candidates,
         )
         outcome["repeats_recognized"] += discovery_repeats
         outcome["rejections_skipped"] += discovery_rejections
+        outcome["discovery_new_count"] = len(discovery_ids)
 
-    unclassified = await db.all("SELECT * FROM postings WHERE matched_title IS NULL AND archived_at IS NULL")
-
+    # Nothing is saved without a matched title (issue #68): results the rules
+    # matched were saved above, and the ones they couldn't place wait in
+    # `candidates` (from discovery, feeds, and careers pages). Only a
+    # classification "match" saves one; a rejection is remembered, not saved.
     async def do_classification():
         decisions, result = classification_mod.run_classification(
-            unclassified, titles_doc, locations_setting,
+            [c.prompt_row() for c in candidates], titles_doc, locations_setting,
             model=budget_settings.get("model_classification", "haiku"),
             run_claude=run_claude,
         )
         await record("classification", result)
         return decisions
 
-    if unclassified:
+    if candidates:
         decisions = await guarded("classification", do_classification) or []
-        outcome["classification_count"] = await _apply_classification_decisions(
-            db, decisions, now_iso=now_iso, pending=discovery_pending, settings_version=settings_ver,
+        saved = await _apply_classification_decisions(
+            db, decisions, candidates, now_iso=now_iso, settings_version=settings_ver,
             titles_doc=titles_doc, locations_setting=locations_setting,
         )
-
-    # `discovery_count` is every row discovery *stored*, before classification
-    # has had a say -- adding that straight to the run's `new_count` (issue
-    # #26) overcounted postings that classification went on to reject (and
-    # archive) in this very run. Only a discovered posting that came out of
-    # classification matched and still isn't archived actually shows up on
-    # the dashboard, so that's what should count as "new" for the summary.
-    outcome["discovery_new_count"] = await count_visible_postings(db, discovery_ids)
+        outcome["classification_count"] = len(saved)
+        # Only what classification matched and saved is a new posting on the
+        # dashboard, so that is what counts as "new" for the summary (issue #26).
+        discovery_saved = {c.id for c in candidates if c.event_detail.get("discovery")}
+        outcome["discovery_new_count"] += sum(1 for cid in saved if cid in discovery_saved)
+        outcome["candidate_new_count"] = len(saved) - sum(1 for cid in saved if cid in discovery_saved)
 
     search_limit_per_run = int(budget_settings.get("search_limit_per_run") or 35)
     scout_candidates, outcome["scout_skipped_count"] = scout.split_companies_by_coverage(
@@ -300,10 +304,15 @@ def build_unclear_reader(*, status: BudgetStatus, model: str, on_usage, on_error
 
 async def _store_discovery_results(
     db, results: list[dict], *, now_iso: str, locations_setting: dict, settings_version: str,
-) -> tuple[int, list[int], dict[int, tuple], int, int]:
+    titles_doc: dict, candidates: list[Candidate],
+) -> tuple[int, list[int], int, int]:
+    """Judges each discovery result with the plain rules. A match is saved (through
+    `save_posting`, so only with a matched title), a rejection is remembered, and
+    anything the rules can't place is appended to `candidates` for classification.
+    Returns (results kept or queued, ids saved now, repeats recognized, rejections skipped).
+    """
     stored = 0
     inserted_ids: list[int] = []
-    pending: dict[int, tuple] = {}
     repeats_recognized = 0
     rejections_skipped = 0
     for r in results:
@@ -327,20 +336,36 @@ async def _store_discovery_results(
             rejections_skipped += 1
             continue
 
-        loc_decision = compute_location_match(r.get("location_text") or "", locations_setting)
-        new_id = await db.run(
-            """INSERT INTO postings
-               (company_name, title, url, source_name, locations, location_match, posted_date,
-                first_seen, status)
-               VALUES (?, ?, ?, 'claude-discovery', ?, ?, ?, ?, 'unverified')""",
-            r["company_name"], r["title"], r["url"],
-            json.dumps([r["location_text"]] if r.get("location_text") else []),
-            loc_decision, r.get("posted_date"), now_iso[:10],
-        )
+        match = classify_posting(r["title"], "", titles_doc)
+        if match.decision == "reject":
+            await fingerprint.record_rejection(
+                db, outcome.fp, reason=match.reason, settings_version=settings_version,
+                source="claude-discovery", now_iso=now_iso, existing_id=outcome.stale_fingerprint_id,
+            )
+            continue
         stored += 1
-        inserted_ids.append(new_id)
-        pending[new_id] = (outcome.fp, outcome.stale_fingerprint_id)
-    return stored, inserted_ids, pending, repeats_recognized, rejections_skipped
+        if match.decision == "classify":
+            candidates.append(Candidate(
+                id=len(candidates) + 1, company_name=r["company_name"], title=r["title"], url=r["url"],
+                source_name="claude-discovery", location_text=r.get("location_text") or "",
+                posted_date=r.get("posted_date"), fp=outcome.fp, fingerprint_source="claude-discovery",
+                stale_fingerprint_id=outcome.stale_fingerprint_id,
+                event_detail={"source": "claude-discovery", "discovery": True},
+            ))
+            continue
+
+        new_id = await save_posting(
+            db, titles_doc=titles_doc, matched_title=match.matched_title, match_method=match.match_method,
+            company_name=r["company_name"], title=r["title"], url=r["url"], source_name="claude-discovery",
+            locations=[r["location_text"]] if r.get("location_text") else [],
+            location_match=compute_location_match(r.get("location_text") or "", locations_setting),
+            posted_date=r.get("posted_date"), first_seen=now_iso[:10], fp=outcome.fp,
+            settings_version=settings_version, fingerprint_source="claude-discovery", now_iso=now_iso,
+            stale_fingerprint_id=outcome.stale_fingerprint_id, event_detail={"source": "claude-discovery"},
+        )
+        if new_id is not None:
+            inserted_ids.append(new_id)
+    return stored, inserted_ids, repeats_recognized, rejections_skipped
 
 
 async def count_visible_postings(db, ids: list[int]) -> int:
@@ -359,85 +384,79 @@ async def count_visible_postings(db, ids: list[int]) -> int:
     return (row or {}).get("n") or 0
 
 
-def _posting_location_text(posting: dict) -> str:
-    locations = posting.get("locations")
-    if isinstance(locations, str):
-        try:
-            locations = json.loads(locations)
-        except (TypeError, ValueError):
-            locations = []
-    return ", ".join(locations) if isinstance(locations, list) else ""
-
-
 async def _apply_classification_decisions(
-    db, decisions: list[dict], *, now_iso: str, pending: dict[int, tuple] | None = None,
-    settings_version: str | None = None, titles_doc: dict | None = None, locations_setting: dict | None = None,
-) -> int:
-    pending = pending or {}
-    applied = 0
-    unmatched_ids = []
+    db, decisions: list[dict], candidates: list[Candidate], *, now_iso: str, settings_version: str,
+    titles_doc: dict, locations_setting: dict,
+) -> set[int]:
+    """Applies classification's decisions to the candidates it was sent and returns
+    the ids of the candidates that were saved.
+
+    Only a "match" naming an active title is saved, through `save_posting`. A
+    rejection, a match that names no active title, or a clearly off-role title
+    (engineering, lab, hardware, design, sales, undergraduate) is remembered as a
+    rejection with its reason and never saved. A candidate with no decision is left
+    alone, so it is judged again on a later run.
+    """
+    by_id = {c.id: c for c in candidates}
+    saved: set[int] = set()
+    unknown_ids = []
     for d in decisions:
-        posting = await db.first("SELECT * FROM postings WHERE id = ?", d.get("id"))
-        if not posting:
-            unmatched_ids.append(d.get("id"))
+        candidate = by_id.get(d.get("id"))
+        if candidate is None:
+            unknown_ids.append(d.get("id"))
+            continue
+        if candidate.id in saved:
             continue
 
-        pend = pending.get(posting["id"])
-        if pend:
-            fp, stale_fingerprint_id = pend
-        else:
-            # A posting classification only now gets to (e.g. because a
-            # previous run's classification step was skipped or failed) has
-            # no fingerprint recorded from this run's discovery pass --
-            # recompute it from the posting's own stored fields so it still
-            # gets remembered.
-            fp = fingerprint.compute_fingerprint(
-                company_name=posting.get("company_name") or "", title=posting.get("title") or "",
-                url=posting.get("url"),
-            )
-            stale_fingerprint_id = None
-
+        match_method = CLASSIFICATION_METHOD
         # A rejection about location, hiring cycle, or an unmatched title is
         # checked against the plain rules before it sticks: a missing or
         # unrecognizable location never rejects, and a reason that admits
         # the title matches is treated as unclear (issue #60).
-        if d["decision"] == "reject" and titles_doc is not None:
+        if d["decision"] == "reject":
             recovered = reconsider_rejection(
-                d.get("reason"), posting.get("title") or "", _posting_location_text(posting),
-                titles_doc, locations_setting or {},
+                d.get("reason"), candidate.title, candidate.location_text, titles_doc, locations_setting,
             )
             if recovered is not None:
                 d = {
                     **d, "decision": "match", "matched_title": recovered.matched_title,
                     "location_match": recovered.location_match,
                 }
+                match_method = recovered.match_method
+
+        reason = d.get("reason") or "not a match"
+        matched_title = canonical_active_title(d.get("matched_title"), titles_doc)
+        if d["decision"] == "match":
+            conflict = find_role_conflict(candidate.title, matched_title or "")
+            if conflict:
+                d = {**d, "decision": "reject"}
+                reason = f"not a product or business role ({conflict})"
+            elif matched_title is None:
+                d = {**d, "decision": "reject"}
+                reason = "no matching title"
 
         if d["decision"] == "match":
-            await db.run(
-                "UPDATE postings SET matched_title = ?, title_en = ?, location_match = COALESCE(?, location_match) "
-                "WHERE id = ?",
-                d["matched_title"], d.get("title_en"), d.get("location_match"), posting["id"],
+            new_id = await save_posting(
+                db, titles_doc=titles_doc, matched_title=matched_title, match_method=match_method,
+                company_id=candidate.company_id, company_name=candidate.company_name, title=candidate.title,
+                title_en=d.get("title_en"), url=candidate.url, source_name=candidate.source_name,
+                locations=[candidate.location_text] if candidate.location_text else [],
+                location_match=d.get("location_match")
+                or compute_location_match(candidate.location_text, locations_setting),
+                posted_date=candidate.posted_date, first_seen=now_iso[:10], fp=candidate.fp,
+                settings_version=settings_version, fingerprint_source="claude-classification", now_iso=now_iso,
+                stale_fingerprint_id=candidate.stale_fingerprint_id, event_detail=candidate.event_detail,
             )
-            applied += 1
-            if settings_version is not None:
-                await fingerprint.record_posting(
-                    db, fp, posting_id=posting["id"], settings_version=settings_version,
-                    source="claude-classification", now_iso=now_iso, existing_id=stale_fingerprint_id,
-                )
+            if new_id is not None:
+                saved.add(candidate.id)
         else:
-            reason = d.get("reason") or "not a match"
-            await db.run(
-                "UPDATE postings SET archived_at = ?, archive_reason = ? WHERE id = ?",
-                now_iso, f"Claude classification: {reason}", posting["id"],
+            await fingerprint.record_rejection(
+                db, candidate.fp, reason=reason, settings_version=settings_version,
+                source="claude-classification", now_iso=now_iso, existing_id=candidate.stale_fingerprint_id,
             )
-            if settings_version is not None:
-                await fingerprint.record_rejection(
-                    db, fp, reason=reason, settings_version=settings_version,
-                    source="claude-classification", now_iso=now_iso, existing_id=stale_fingerprint_id,
-                )
-    if unmatched_ids:
-        print(f"classification: {len(unmatched_ids)} decision(s) referenced unknown posting id(s): {unmatched_ids}")
-    return applied
+    if unknown_ids:
+        print(f"classification: {len(unknown_ids)} decision(s) referenced unknown candidate id(s): {unknown_ids}")
+    return saved
 
 
 async def _store_scout_sources(db, found: list[dict], *, now_iso: str, companies: list[dict]) -> int:

@@ -472,7 +472,8 @@ def test_daily_run_new_count_excludes_a_discovery_that_classification_rejects(em
 
     def fake_run_claude_step(step, prompt, *, model, **kwargs):
         text = {
-            "discovery": '{"results": [{"company_name": "Acme", "title": "Software Engineer Intern", '
+            # Close enough to a title (fuzzy score 83) to ask classification, not to match on its own.
+            "discovery": '{"results": [{"company_name": "Acme", "title": "Intern Product Manager Search Maps Cloud Seattle", '
                          '"url": "https://acme.example/1", "location_text": "SF"}]}',
             "classification": '{"decisions": [{"id": 1, "decision": "reject", "matched_title": null, '
                                '"reason": "not a PM role"}]}',
@@ -489,9 +490,8 @@ def test_daily_run_new_count_excludes_a_discovery_that_classification_rejects(em
     result = run(run_module.run(empty_db, kind="daily"))
     assert result["new_count"] == 0
 
-    postings = run(empty_db.all("SELECT * FROM postings"))
-    assert len(postings) == 1
-    assert postings[0]["archived_at"] is not None
+    # Rejected by classification, so never saved.
+    assert run(empty_db.all("SELECT * FROM postings")) == []
 
     runs = run(empty_db.all("SELECT * FROM runs"))
     assert runs[0]["new_count"] == 0

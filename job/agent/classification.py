@@ -39,6 +39,8 @@ def build_prompt(postings: list[dict], titles_doc: dict, locations_setting: dict
         f"An active title matches if its real role is one of these (or a clear equivalent, in any language): "
         f"{', '.join(titles)}.",
         f"Reject if the title mentions any of these words: {', '.join(exclude_words) or '(none)'}.",
+        "Also reject roles that are clearly engineering, lab, hardware, design, sales, or undergraduate-only, "
+        "even when the title looks close to an active title, and say so in the reason.",
         "Only Summer 2027 MBA-level internships count. Reject full-time roles, other class years "
         "(e.g. 'MBA Class of 2027' means full-time hires graduating in 2027, not summer 2027 interns), "
         "and other summer cycles.",

@@ -15,6 +15,10 @@ SETTINGS = {
 }
 TITLES_DOC = {"titles": [{"title": "PM Intern", "active": True}], "exclude_words": []}
 LOCATIONS = {"countries": ["US"], "include_remote": False}
+# Scores 88 against "PM Intern" (product manager intern): not a match on its own,
+# so it goes to classification (issue #68).
+BORDERLINE = "Product Manager Intern Payments Xbox"
+BORDERLINE_2 = "Product Manager Intern Search Maps"
 
 
 def run(coro):
@@ -136,7 +140,7 @@ def test_run_agent_steps_stores_discovery_results_and_classifies_them(empty_db):
     run_id = run(empty_db.run("INSERT INTO runs (kind, started_at, status) VALUES ('daily', '2026-09-20T08:00:00', 'running')"))
 
     fake = _fake_run_claude({
-        "discovery": '{"results": [{"company_name": "Acme", "title": "PM Intern", "url": "https://acme.example/1", "location_text": "SF"}]}',
+        "discovery": '{"results": [{"company_name": "Acme", "title": "%s", "url": "https://acme.example/1", "location_text": "SF"}]}' % BORDERLINE,
         "classification": '{"decisions": [{"id": 1, "decision": "match", "matched_title": "PM Intern", "title_en": null}]}',
         "scout": '{"sources": [{"company_name": "Acme", "name": "Acme careers", "url": "https://acme.example/careers", "kind": "Company career sites", "covers": "Acme"}]}',
         "improvement": '{"search_plan": {"query_templates": [], "notes": "n"}, "proposals": [], "title_suggestions": []}',
@@ -158,6 +162,7 @@ def test_run_agent_steps_stores_discovery_results_and_classifies_them(empty_db):
     postings = run(empty_db.all("SELECT * FROM postings"))
     assert len(postings) == 1
     assert postings[0]["matched_title"] == "PM Intern"
+    assert postings[0]["match_method"] == "classification"
 
     sources = run(empty_db.all("SELECT * FROM sources"))
     assert len(sources) == 1
@@ -235,14 +240,14 @@ def test_run_agent_steps_skips_careers_repair_when_nothing_is_flagged(empty_db):
 
 def test_run_agent_steps_discovery_new_count_excludes_a_classification_reject(empty_db):
     # issue #26: a discovered posting that classification goes on to reject
-    # (and archive) in the same run must not still count toward the run's
-    # "new" total -- it never actually lands on the dashboard.
+    # in the same run must not still count toward the run's "new" total -- it
+    # never lands on the dashboard (and, since issue #68, is never saved).
     _insert_company(empty_db, feed_type=None)
     run_id = run(empty_db.run("INSERT INTO runs (kind, started_at, status) VALUES ('daily', '2026-09-20T08:00:00', 'running')"))
 
     fake = _fake_run_claude({
-        "discovery": '{"results": [{"company_name": "Acme", "title": "Software Engineer Intern", '
-                     '"url": "https://acme.example/1", "location_text": "SF"}]}',
+        "discovery": '{"results": [{"company_name": "Acme", "title": "%s", '
+                     '"url": "https://acme.example/1", "location_text": "SF"}]}' % BORDERLINE,
         "classification": '{"decisions": [{"id": 1, "decision": "reject", "matched_title": null, '
                            '"reason": "not a PM role"}]}',
         "scout": '{"sources": []}',
@@ -259,8 +264,9 @@ def test_run_agent_steps_discovery_new_count_excludes_a_classification_reject(em
     assert outcome["discovery_new_count"] == 0
     assert outcome["classification_count"] == 0
 
-    posting = run(empty_db.first("SELECT * FROM postings WHERE id = 1"))
-    assert posting["archived_at"] is not None
+    assert run(empty_db.all("SELECT * FROM postings")) == []
+    fingerprints = run(empty_db.all("SELECT * FROM posting_fingerprints"))
+    assert [f["rejection_reason"] for f in fingerprints] == ["not a PM role"]
 
 
 def test_run_agent_steps_does_not_store_a_discovery_result_matching_an_existing_posting(empty_db):
@@ -449,11 +455,13 @@ def test_run_agent_steps_rejudges_a_stale_rejection_after_a_title_is_added(empty
         status=_open_status(), today="2026-09-20", now_iso="2026-09-20T08:00:00", run_claude=fake,
     ))
 
-    assert fake.calls.count("classification") == 1
-    assert outcome["classification_count"] == 1
+    # The new title matches by the plain rules now, so classification isn't needed.
+    assert "classification" not in fake.calls
+    assert outcome["discovery_new_count"] == 1
     postings = run(empty_db.all("SELECT * FROM postings"))
     assert len(postings) == 1
     assert postings[0]["matched_title"] == "Growth Product Manager Intern"
+    assert postings[0]["match_method"] == "exact"
 
     # The rejection is overwritten in place, not duplicated into a second row.
     fingerprints = run(empty_db.all("SELECT * FROM posting_fingerprints"))
@@ -493,8 +501,11 @@ def test_run_agent_steps_rejudges_a_stale_rejection_after_a_location_country_is_
         status=_open_status(), today="2026-09-20", now_iso="2026-09-20T08:00:00", run_claude=fake,
     ))
 
-    assert fake.calls.count("classification") == 1
-    assert outcome["classification_count"] == 1
+    assert "classification" not in fake.calls
+    assert outcome["discovery_new_count"] == 1
+    posting = run(empty_db.first("SELECT * FROM postings"))
+    assert posting["matched_title"] == "PM Intern"
+    assert posting["location_match"] == "match"
 
 
 def test_run_agent_steps_never_rejudges_a_posting_henry_marked_applied(empty_db):
@@ -532,26 +543,26 @@ def test_run_agent_steps_classification_keeps_good_decisions_when_one_entry_is_i
     # decisions and leave every posting in it unclassified if a single
     # decision in the reply was malformed -- the same "one bad item sinks
     # the whole batch" failure already fixed for the scout in issue #20.
+    _insert_company(empty_db, feed_type=None)
     run_id = run(empty_db.run("INSERT INTO runs (kind, started_at, status) VALUES ('daily', '2026-09-20T08:00:00', 'running')"))
-    good_id = run(empty_db.run(
-        """INSERT INTO postings (company_name, title, url, locations, location_match, first_seen, status)
-           VALUES ('Acme', 'PM Intern', 'https://acme.example/1', '[]', 'unclear', '2026-09-20', 'unverified')"""
-    ))
-    other_id = run(empty_db.run(
-        """INSERT INTO postings (company_name, title, url, locations, location_match, first_seen, status)
-           VALUES ('Acme', 'Other Role', 'https://acme.example/2', '[]', 'unclear', '2026-09-20', 'unverified')"""
-    ))
 
     fake = _fake_run_claude({
-        "classification": (
-            '{"decisions": [{"id": %d, "decision": "match", "matched_title": "PM Intern", "title_en": null}, '
-            '{"id": "not-an-int", "decision": "reject"}]}' % good_id
+        "discovery": (
+            '{"results": [{"company_name": "Acme", "title": "%s", "url": "https://acme.example/1", '
+            '"location_text": "SF"}, {"company_name": "Acme", "title": "%s", "url": "https://acme.example/2", '
+            '"location_text": "SF"}]}' % (BORDERLINE, BORDERLINE_2)
         ),
+        "classification": (
+            '{"decisions": [{"id": 1, "decision": "match", "matched_title": "PM Intern", "title_en": null}, '
+            '{"id": "not-an-int", "decision": "reject"}]}'
+        ),
+        "scout": '{"sources": []}',
         "improvement": '{"search_plan": null, "proposals": [], "title_suggestions": []}',
     })
 
     outcome = run(run_agent_steps(
-        empty_db, run_id=run_id, companies=[], titles_doc=TITLES_DOC, locations_setting=LOCATIONS,
+        empty_db, run_id=run_id, companies=[{"id": 1, "name": "Acme", "feed_type": None}],
+        titles_doc=TITLES_DOC, locations_setting=LOCATIONS,
         budget_settings=SETTINGS, status=_open_status(), today="2026-09-20", now_iso="2026-09-20T08:00:00",
         run_claude=fake,
     ))
@@ -559,12 +570,11 @@ def test_run_agent_steps_classification_keeps_good_decisions_when_one_entry_is_i
     assert "classification" in outcome["steps_succeeded"]
     assert outcome["classification_count"] == 1
 
-    good_posting = run(empty_db.first("SELECT * FROM postings WHERE id = ?", good_id))
-    assert good_posting["matched_title"] == "PM Intern"
-
-    other_posting = run(empty_db.first("SELECT * FROM postings WHERE id = ?", other_id))
-    assert other_posting["matched_title"] is None
-    assert other_posting["archived_at"] is None
+    # The good decision is saved. The other result got no usable decision, so it
+    # is not saved (and not remembered as rejected either: it is judged again later).
+    postings = run(empty_db.all("SELECT * FROM postings"))
+    assert [p["title"] for p in postings] == [BORDERLINE]
+    assert postings[0]["matched_title"] == "PM Intern"
 
 
 def test_run_agent_steps_sets_company_feed_from_a_recognized_scout_url(empty_db):
@@ -909,31 +919,30 @@ def test_run_agent_steps_does_not_record_last_scouted_at_when_scout_is_skipped(e
     assert company["last_scouted_at"] is None
 
 
-def test_run_agent_steps_archives_a_classification_reject(empty_db):
+def test_run_agent_steps_does_not_save_a_classification_reject_and_remembers_why(empty_db):
+    _insert_company(empty_db, feed_type=None)
     run_id = run(empty_db.run("INSERT INTO runs (kind, started_at, status) VALUES ('daily', '2026-09-20T08:00:00', 'running')"))
-    posting_id = run(empty_db.run(
-        """INSERT INTO postings (company_name, title, url, locations, location_match, first_seen, status)
-           VALUES ('Acme', 'Some Other Role', 'https://acme.example/2', '[]', 'unclear', '2026-09-20', 'unverified')"""
-    ))
 
     fake = _fake_run_claude({
-        "classification": (
-            '{"decisions": [{"id": %d, "decision": "reject", "matched_title": null, "reason": "not a PM role"}]}'
-            % posting_id
-        ),
+        "discovery": '{"results": [{"company_name": "Acme", "title": "%s", "url": "https://acme.example/2", '
+                     '"location_text": "SF"}]}' % BORDERLINE,
+        "classification": '{"decisions": [{"id": 1, "decision": "reject", "matched_title": null, "reason": "not a PM role"}]}',
+        "scout": '{"sources": []}',
         "improvement": '{"search_plan": null, "proposals": [], "title_suggestions": []}',
     })
 
     outcome = run(run_agent_steps(
-        empty_db, run_id=run_id, companies=[], titles_doc=TITLES_DOC, locations_setting=LOCATIONS,
+        empty_db, run_id=run_id, companies=[{"id": 1, "name": "Acme", "feed_type": None}],
+        titles_doc=TITLES_DOC, locations_setting=LOCATIONS,
         budget_settings=SETTINGS, status=_open_status(), today="2026-09-20", now_iso="2026-09-20T08:00:00",
         run_claude=fake,
     ))
     assert outcome["classification_count"] == 0
 
-    posting = run(empty_db.first("SELECT * FROM postings WHERE id = ?", posting_id))
-    assert posting["archived_at"] is not None
-    assert "not a PM role" in posting["archive_reason"]
+    assert run(empty_db.all("SELECT * FROM postings")) == []
+    rejection = run(empty_db.first("SELECT * FROM posting_fingerprints"))
+    assert rejection["posting_id"] is None
+    assert "not a PM role" in rejection["rejection_reason"]
 
 
 def test_run_agent_steps_skips_scout_when_budget_says_no(empty_db):
