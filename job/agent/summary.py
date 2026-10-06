@@ -38,6 +38,7 @@ def build_summary_payload(
     forecast: dict,
     alerts: list[dict],
     health: dict | None = None,
+    run_minutes: float | None = None,
 ) -> dict:
     payload = {
         "date": date,
@@ -50,6 +51,8 @@ def build_summary_payload(
         "forecast": forecast,
         "alerts": alerts,
     }
+    if run_minutes is not None:
+        payload["run_minutes"] = round(run_minutes, 1)
     if health is not None:
         # Failed check ids, how many days in a row found nothing new, and -- once that
         # reaches 3 -- a per-step breakdown (searches, covered, pages_loaded, classified).

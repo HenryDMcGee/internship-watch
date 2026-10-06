@@ -10,6 +10,8 @@ from (feed, discovery, or a careers page).
 """
 from __future__ import annotations
 
+import re
+
 from job.agent.client import ClaudeStepResult, resolve_model, run_claude_step
 from job.agent.schemas import (
     ClaudeOutputError,
@@ -23,9 +25,62 @@ from job.agent.schemas import (
 # page's full listing table, short enough to keep the call cheap.
 MAX_PAGE_CHARS = 20000
 
+# A page shorter than this is a landing page whose job list never loaded.
+MIN_PAGE_CHARS = 2000
+
+_JOB_LINK_RE = re.compile(
+    r"https?://\S*(?:/jobs?\b|/job-|/careers?/\S+|/positions?\b|/openings?\b|/requisitions?\b"
+    r"|/apply\b|jobid=|job_id=|gh_jid=)",
+    re.IGNORECASE,
+)
+_APPLY_WORDS_RE = re.compile(r"\b(?:intern|interns|internship|internships|mba|apply)\b", re.IGNORECASE)
+_RELEVANT_RE = re.compile(
+    r"\b(?:intern|interns|internship|internships|mba|product)\b|" + _JOB_LINK_RE.pattern, re.IGNORECASE,
+)
+
+
+def skip_reason(page_text: str) -> str | None:
+    """Why a page isn't worth a Claude call, or None if it is: under
+    `MIN_PAGE_CHARS` characters, or with no job-like links and none of the
+    words "intern", "internship", "MBA", or "apply".
+    """
+    text = (page_text or "").strip()
+    if len(text) < MIN_PAGE_CHARS:
+        return f"page too short ({len(text)} characters)"
+    if not _JOB_LINK_RE.search(text) and not _APPLY_WORDS_RE.search(text):
+        return "no job-like links or words"
+    return None
+
+
+def relevant_text(page_text: str, *, max_chars: int = MAX_PAGE_CHARS) -> str:
+    """The page as is if it fits. Otherwise only the lines that contain a job
+    link or "intern", "MBA", or "product" (plus one line of context on each
+    side), in page order, up to `max_chars` -- rather than the whole page cut
+    off at the cap.
+    """
+    text = page_text or ""
+    if len(text) <= max_chars:
+        return text
+    lines = text.splitlines()
+    keep: set[int] = set()
+    for i, line in enumerate(lines):
+        if _RELEVANT_RE.search(line):
+            keep.update(j for j in (i - 1, i, i + 1) if 0 <= j < len(lines))
+    if not keep:
+        return text[:max_chars]
+    out: list[str] = []
+    used = 0
+    for i in sorted(keep):
+        line = lines[i][:max_chars]
+        if used + len(line) + 1 > max_chars:
+            break
+        out.append(line)
+        used += len(line) + 1
+    return "\n".join(out)
+
 
 def build_prompt(company_name: str, page_text: str, *, max_chars: int = MAX_PAGE_CHARS) -> str:
-    truncated = (page_text or "")[:max_chars]
+    truncated = relevant_text(page_text, max_chars=max_chars)
     return "\n".join([
         f"Extract every job listing on this careers page for {company_name}.",
         "For each distinct listing, give its title, location, link (a URL -- absolute if the page "

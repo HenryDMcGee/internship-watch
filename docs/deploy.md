@@ -143,6 +143,14 @@ Migration `0012` adds `postings.match_method` (`exact`, `alias`, `fuzzy:<score>`
 
 The first daily run after the deploy also archives postings first seen on or after 2026-10-01 that have no matched title, with the reason "no matching title (cleanup)". Postings first seen earlier (including the seeded ones) and anything marked applied, open, or closed are never touched. The run summary says how many were archived, with examples. To see the list first, or to run it by hand: `python -m job.cleanup_unmatched --dry-run`, then without `--dry-run`. It uses the same D1 secrets as the daily job and is safe to run more than once. Archived postings can be restored from the dashboard.
 
+### Migration `0013_careers_time_budget.sql` and run time
+
+Migration `0013` adds `budget_settings.careers_minutes_per_run` (default 10) and `careers_page_snapshots.empty_runs`. The automatic deploy applies it (step 5). To undo it, drop the two columns.
+
+The daily run order is now: company feeds, discovery, classification of everything found so far, careers pages, then the scout and improvement. The careers step stops at `careers_minutes_per_run` minutes (60% for loading pages, the rest for extraction), and the pages it didn't reach come first next run. The run summary and Analytics show total run time, and the daily summary warns when a run takes more than 30 minutes.
+
+A run stopped by the job time limit can't write its own end. `python -m job.close_stuck_runs` closes any run still marked running (status failed, finish time set, daily summary sent). It needs a final `if: always()` step in `daily-search.yml`; Claude can't edit workflow files, so the exact YAML is in the pull request for issue #70 and has to be added by hand.
+
 The careers-page backup needs Chromium on the runner. `daily-search.yml` already installs it, and the job installs it itself once if it is missing, so no workflow change is needed.
 
 ## Backups

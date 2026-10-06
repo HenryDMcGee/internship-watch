@@ -30,6 +30,11 @@ def _insert_company(db, **overrides):
     return run(db.run(f"INSERT INTO companies ({columns}) VALUES ({placeholders})", *row.values()))
 
 
+def _long_page(text: str) -> str:
+    """A page long enough, and job-like enough, to be worth an extraction call."""
+    return text + " Apply for our internship. " + "Open roles listed below. " * 100
+
+
 def _empty_discovery_scout_improvement(step, model):
     return {
         "discovery": '{"results": []}',
@@ -38,7 +43,7 @@ def _empty_discovery_scout_improvement(step, model):
     }[step]
 
 
-def test_unchanged_careers_page_makes_zero_claude_calls_and_is_excluded_from_discovery(empty_db, monkeypatch):
+def test_unchanged_careers_page_makes_zero_claude_calls_and_discovery_runs_first(empty_db, monkeypatch):
     monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "test-token")
     covered_id = _insert_company(empty_db, name="Acme", feed_type=None, feed_id=None, careers_url="https://acme.example/careers")
     uncovered_id = _insert_company(empty_db, name="Beta", feed_type=None, feed_id=None)
@@ -74,7 +79,8 @@ def test_unchanged_careers_page_makes_zero_claude_calls_and_is_excluded_from_dis
     result = run(run_module.run(empty_db, kind="daily"))
 
     assert "careers_extraction" not in [r["step"] for r in run(empty_db.all("SELECT step FROM usage"))]
-    assert "Acme" not in discovery_prompts[0]
+    # Discovery now runs before the careers step (issue #70), so a company whose
+    # page loads later in the same run is still in this run's discovery list.
     assert "Beta" in discovery_prompts[0]
 
     snapshot = run(careers_snapshot.load_snapshot(empty_db, covered_id))
@@ -102,7 +108,7 @@ def test_changed_careers_page_extracts_and_only_new_listings_get_classified(empt
         source="feed", now_iso="2026-08-01T08:00:00",
     ))
 
-    page_text = "listings page"
+    page_text = _long_page("listings page")
 
     def fake_run_careers_pages(candidates, **kwargs):
         return cp.CareersRunOutcome(
@@ -193,7 +199,7 @@ def test_failed_careers_page_is_recorded_and_included_in_discovery(empty_db, mon
 def test_backup_loaded_page_reuses_change_detection_across_runs(empty_db, monkeypatch):
     monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "test-token")
     company_id = _insert_company(empty_db, name="Acme", feed_type=None, feed_id=None, careers_url="https://acme.example/careers")
-    page_text = "same content every run"
+    page_text = _long_page("same content every run")
 
     def fake_run_careers_pages(candidates, **kwargs):
         return cp.CareersRunOutcome(

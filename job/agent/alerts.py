@@ -24,9 +24,10 @@ BROWSER_RUN_MONTH_100 = "browser_run_month_100"
 WORKERS_PAID_SUGGESTED = "workers_paid_suggested"
 DISCOVERY_FAILED = "discovery_failed"
 RUN_DEGRADED = "run_degraded"
+LONG_RUN = "long_run"
 
 ALERT_TYPES = frozenset({
-    DISCOVERY_FAILED, RUN_DEGRADED,
+    DISCOVERY_FAILED, RUN_DEGRADED, LONG_RUN,
     BUDGET_80, BUDGET_100, USAGE_SPIKE, CLAUDE_LIMIT, RUN_FAILED, CLAUDE_NOT_CONFIGURED, CLAUDE_STEP_ISSUE,
     BROWSER_RUN_80, BROWSER_RUN_100, BROWSER_RUN_MONTH_80, BROWSER_RUN_MONTH_100, WORKERS_PAID_SUGGESTED,
 })
@@ -127,6 +128,18 @@ def claude_limit_alert(message: str) -> AlertCandidate:
 
 def run_failed_alert(message: str) -> AlertCandidate:
     return AlertCandidate(RUN_FAILED, "critical", f"The daily run failed: {message}")
+
+
+def evaluate_long_run_alert(run_minutes: float | None, *, limit_minutes: float = 30) -> AlertCandidate | None:
+    """A run over `limit_minutes` (issue #70): the private repo has 2,000 free
+    Actions minutes a month, and a run this long is a sign a step is too slow."""
+    if run_minutes is not None and run_minutes > limit_minutes:
+        return AlertCandidate(
+            LONG_RUN, "warning",
+            f"Today's run took {run_minutes:.0f} minutes, over {limit_minutes:.0f}. The private repo has "
+            "2,000 free Actions minutes a month.",
+        )
+    return None
 
 
 def discovery_failed_alert(reason: str) -> AlertCandidate:
