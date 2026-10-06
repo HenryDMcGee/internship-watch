@@ -32,6 +32,7 @@ from datetime import datetime, timezone
 
 from job import config, fingerprint
 from job.matching import is_recoverable_reason, reconsider_rejection
+from job.save_posting import canonical_active_title
 
 _CLAUDE_PREFIX = "Claude classification:"
 _STALE_VERSION = "restore-rejections"
@@ -92,7 +93,8 @@ async def restore_rejections(
         location_text = _posting_location_text(posting) if posting else key_location
 
         recovered = reconsider_rejection(reason, title_text, location_text, titles_doc, locations_setting)
-        if recovered is None:
+        # Same rule as `job.save_posting`: nothing comes back without an active title.
+        if recovered is None or canonical_active_title(recovered.matched_title, titles_doc) is None:
             result["left_rejected"] += 1
             continue
 
@@ -105,8 +107,8 @@ async def restore_rejections(
             if not dry_run:
                 await db.run(
                     "UPDATE postings SET archived_at = NULL, archive_reason = NULL, matched_title = ?, "
-                    "location_match = ? WHERE id = ?",
-                    recovered.matched_title, recovered.location_match, posting["id"],
+                    "match_method = ?, location_match = ? WHERE id = ?",
+                    recovered.matched_title, recovered.match_method, recovered.location_match, posting["id"],
                 )
                 await db.run(
                     "INSERT INTO posting_events (posting_id, type, detail, at) VALUES (?, 'restored', ?, ?)",

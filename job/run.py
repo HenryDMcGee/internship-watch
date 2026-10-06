@@ -43,7 +43,7 @@ from job.agent.alerts import (
 )
 from job.agent.budgets import load_budget_status, monthly_forecast, weekly_forecast
 from job.agent.client import is_configured as claude_is_configured
-from job.agent.pipeline import build_unclear_reader, count_visible_postings, run_agent_steps
+from job.agent.pipeline import build_unclear_reader, run_agent_steps
 from job.agent.summary import build_summary_payload, send_daily_summary
 from job.agent.usage import record_usage
 from job.d1_client import D1HttpDatabase
@@ -52,6 +52,8 @@ from job.fetchers import run_fetcher
 from job.fetchers import careers_pages
 from job.locations import location_match
 from job.matching import classify_posting, cycle_status
+from job.cleanup_unmatched import cleanup_unmatched, summary_line as cleanup_summary_line
+from job.save_posting import Candidate, save_posting
 from job.coverage import run_backfill_once
 from job.restore_rejections import delete_duplicate_rejections, restore_rejections, summary_line as restore_summary_line
 from job.pruning import decide_prune
@@ -82,7 +84,10 @@ def today_central():
 
 async def _fetch_and_store(
     db, companies: list[dict], titles_doc: dict, locations_setting: dict, run_id: int,
+    candidates: list[Candidate] | None = None,
 ) -> tuple[int, dict[int, bool], dict[int, set[str]], int, int, int, int, int, int]:
+    """Reads every feed. Results the rules can't place go into `candidates`
+    (when given) for classification; nothing is saved without a matched title."""
     new_count = 0
     feed_ok: dict[int, bool] = {}
     current_urls: dict[int, set[str]] = {}
@@ -165,29 +170,34 @@ async def _fetch_and_store(
                     source=source_name, now_iso=now_iso(), existing_id=outcome.stale_fingerprint_id,
                 )
                 continue
+            if match.decision == "classify":
+                # Not saved unless classification matches it to a title.
+                if candidates is not None:
+                    candidates.append(Candidate(
+                        id=len(candidates) + 1, company_name=company["name"], title=fetched.title,
+                        url=fetched.url, source_name=company.get("feed_type"),
+                        location_text=fetched.location_text or "", posted_date=fetched.posted_date,
+                        fp=outcome.fp, fingerprint_source=source_name,
+                        stale_fingerprint_id=outcome.stale_fingerprint_id, company_id=company["id"],
+                        event_detail={"feed_type": company.get("feed_type")},
+                    ))
+                continue
 
-            loc_decision = location_match(fetched.location_text, locations_setting)
-            first_seen = today_central().isoformat()
-            new_id = await db.run(
-                """INSERT INTO postings
-                   (company_id, company_name, title, matched_title, url, source_name,
-                    locations, location_match, posted_date, first_seen, status)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'unverified')""",
-                company["id"], company["name"], fetched.title, match.matched_title, fetched.url,
-                company.get("feed_type"),
-                json.dumps([fetched.location_text] if fetched.location_text else []),
-                loc_decision, fetched.posted_date, first_seen,
+            new_id = await save_posting(
+                db, titles_doc=titles_doc, matched_title=match.matched_title, match_method=match.match_method,
+                company_id=company["id"], company_name=company["name"], title=fetched.title, url=fetched.url,
+                source_name=company.get("feed_type"),
+                locations=[fetched.location_text] if fetched.location_text else [],
+                location_match=location_match(fetched.location_text, locations_setting),
+                posted_date=fetched.posted_date, first_seen=today_central().isoformat(),
+                fp=outcome.fp, settings_version=settings_ver, fingerprint_source=source_name, now_iso=now_iso(),
+                stale_fingerprint_id=outcome.stale_fingerprint_id,
+                event_detail={"feed_type": company.get("feed_type")},
             )
+            if new_id is None:
+                continue
             new_count += 1
             useful += 1
-            await db.run(
-                "INSERT INTO posting_events (posting_id, type, detail, at) VALUES (?, 'found', ?, ?)",
-                new_id, json.dumps({"feed_type": company.get("feed_type")}), now_iso(),
-            )
-            await fingerprint.record_posting(
-                db, outcome.fp, posting_id=new_id, settings_version=settings_ver,
-                source=source_name, now_iso=now_iso(), existing_id=outcome.stale_fingerprint_id,
-            )
 
         if useful:
             await db.run("UPDATE run_stats SET useful = ? WHERE id = ?", useful, run_stats_id)
@@ -201,7 +211,7 @@ async def _fetch_and_store(
 
 async def _run_careers_pages(
     db, companies: list[dict], budget_settings: dict, titles_doc: dict, locations_setting: dict,
-    *, run_id: int, run_claude,
+    *, run_id: int, run_claude, candidates: list[Candidate] | None = None,
 ) -> tuple[set[int], list[int], dict]:
     """Reads careers pages for companies with a `careers_url` on file and no
     recognized feed (issue #53, phase 6 part 1), before discovery so a
@@ -332,25 +342,39 @@ async def _run_careers_pages(
             if fp_outcome.kind in ("posting", "rejection"):
                 continue
 
-            loc_decision = location_match(listing.get("location") or "", locations_setting)
-            new_id = await db.run(
-                """INSERT INTO postings
-                   (company_id, company_name, title, url, source_name, locations, location_match,
-                    posted_date, first_seen, status)
-                   VALUES (?, ?, ?, ?, 'careers_page', ?, ?, ?, ?, 'unverified')""",
-                company["id"], company["name"], listing["title"], listing.get("link"),
-                json.dumps([listing["location"]] if listing.get("location") else []),
-                loc_decision, listing.get("posted_date"), today_central().isoformat(),
+            match = classify_posting(listing["title"], "", titles_doc)
+            if match.decision == "reject":
+                await fingerprint.record_rejection(
+                    db, fp_outcome.fp, reason=match.reason, settings_version=settings_ver,
+                    source="careers_page", now_iso=now_iso(), existing_id=fp_outcome.stale_fingerprint_id,
+                )
+                continue
+            if match.decision == "classify":
+                # Not saved unless classification matches it to a title.
+                if candidates is not None:
+                    candidates.append(Candidate(
+                        id=len(candidates) + 1, company_name=company["name"], title=listing["title"],
+                        url=listing.get("link"), source_name="careers_page",
+                        location_text=listing.get("location") or "", posted_date=listing.get("posted_date"),
+                        fp=fp_outcome.fp, fingerprint_source="careers_page",
+                        stale_fingerprint_id=fp_outcome.stale_fingerprint_id, company_id=company["id"],
+                        event_detail={"source": "careers_page", "method": page.method},
+                    ))
+                continue
+
+            new_id = await save_posting(
+                db, titles_doc=titles_doc, matched_title=match.matched_title, match_method=match.match_method,
+                company_id=company["id"], company_name=company["name"], title=listing["title"],
+                url=listing.get("link"), source_name="careers_page",
+                locations=[listing["location"]] if listing.get("location") else [],
+                location_match=location_match(listing.get("location") or "", locations_setting),
+                posted_date=listing.get("posted_date"), first_seen=today_central().isoformat(),
+                fp=fp_outcome.fp, settings_version=settings_ver, fingerprint_source="careers_page",
+                now_iso=now_iso(), stale_fingerprint_id=fp_outcome.stale_fingerprint_id,
+                event_detail={"source": "careers_page", "method": page.method},
             )
-            await db.run(
-                "INSERT INTO posting_events (posting_id, type, detail, at) VALUES (?, 'found', ?, ?)",
-                new_id, json.dumps({"source": "careers_page", "method": page.method}), now_iso(),
-            )
-            await fingerprint.record_posting(
-                db, fp_outcome.fp, posting_id=new_id, settings_version=settings_ver,
-                source="careers_page", now_iso=now_iso(), existing_id=fp_outcome.stale_fingerprint_id,
-            )
-            posting_ids.append(new_id)
+            if new_id is not None:
+                posting_ids.append(new_id)
 
     await _record_browser_run_usage(db, run_id=run_id, outcome=outcome, per_method=per_method, now_iso=now_iso())
     return covered_ids, posting_ids, stats
@@ -617,6 +641,15 @@ async def _run_body(db, run_id: int, started_at: str, kind: str, company_ids: li
     except Exception as exc:  # noqa: BLE001 - cleanup must never stop the run
         print(f"restore_rejections: {exc}")
 
+    # Postings saved since 2026-10-01 without a matched title are re-judged:
+    # archived unless a title matches now (issue #68). Finds nothing once done.
+    cleanup_line = None
+    if kind == "daily":
+        try:
+            cleanup_line = cleanup_summary_line(await cleanup_unmatched(db, titles_doc=titles_doc, now_iso=now_iso()))
+        except Exception as exc:  # noqa: BLE001 - cleanup must never stop the run
+            print(f"cleanup_unmatched: {exc}")
+
     # Old rejections that already have a restored or re-matched twin (issue #63).
     duplicates_deleted = 0
     if kind == "daily":
@@ -638,10 +671,14 @@ async def _run_body(db, run_id: int, started_at: str, kind: str, company_ids: li
             except Exception as exc:  # noqa: BLE001 - the backfill must never stop the run
                 print(f"careers backfill: {exc}")
 
+    # Results the rules can't place (fuzzy score 80 to 89, other languages) wait here
+    # for classification. They are saved only if it matches them to a title, so
+    # without Claude (a Check now run, or no credentials) none are saved.
+    candidates: list[Candidate] = []
     (
         new_count, feed_ok, current_urls, no_source_count, feed_error_count, sources_found,
         repeats_recognized, rejections_skipped, feeds_skipped,
-    ) = await _fetch_and_store(db, companies, titles_doc, locations_setting, run_id)
+    ) = await _fetch_and_store(db, companies, titles_doc, locations_setting, run_id, candidates)
 
     agent_outcome = None
     unclear_reader = None
@@ -659,7 +696,7 @@ async def _run_body(db, run_id: int, started_at: str, kind: str, company_ids: li
         try:
             careers_covered_ids, careers_posting_ids, careers_stats = await _run_careers_pages(
                 db, companies, budget_settings, titles_doc, locations_setting,
-                run_id=run_id, run_claude=agent_client.run_claude_step,
+                run_id=run_id, run_claude=agent_client.run_claude_step, candidates=candidates,
             )
         except Exception as exc:  # noqa: BLE001 - a careers-pages bug must not stop the run, same as
             # every other per-step isolation in this function.
@@ -669,7 +706,7 @@ async def _run_body(db, run_id: int, started_at: str, kind: str, company_ids: li
         agent_outcome = await run_agent_steps(
             db, run_id=run_id, companies=companies, titles_doc=titles_doc, locations_setting=locations_setting,
             budget_settings=budget_settings, status=status, today=today_str, now_iso=now_iso(),
-            careers_covered_ids=careers_covered_ids,
+            careers_covered_ids=careers_covered_ids, candidates=candidates,
             run_summary_so_far={
                 "summary": (
                     f"Checked {len(companies)} companies, {new_count} new posting(s) so far, "
@@ -683,7 +720,8 @@ async def _run_body(db, run_id: int, started_at: str, kind: str, company_ids: li
             run_claude=agent_client.run_claude_step,
         )
         new_count += agent_outcome["discovery_new_count"]
-        new_count += await count_visible_postings(db, careers_posting_ids)
+        new_count += agent_outcome.get("candidate_new_count", 0)
+        new_count += len(careers_posting_ids)
         classifier_rejections_skipped = agent_outcome.get("rejections_skipped", 0)
         repeats_recognized += agent_outcome.get("repeats_recognized", 0)
         unclear_reader = build_unclear_reader(
@@ -737,6 +775,8 @@ async def _run_body(db, run_id: int, started_at: str, kind: str, company_ids: li
         summary += f" Removed {duplicates_deleted} old rejection(s) that already have a restored twin."
     if restore_line:
         summary += f" {restore_line}"
+    if cleanup_line:
+        summary += f" {cleanup_line}"
     careers_line = _careers_pages_summary_line(careers_stats)
     if careers_line:
         summary += " " + careers_line

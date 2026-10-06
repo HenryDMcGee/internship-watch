@@ -137,6 +137,12 @@ Migration `0011` adds three columns to `companies` (`last_discovery_searched_at`
 
 The first daily run after the deploy also does a one-time backfill, with no command to run: every company with no feed and no careers link gets the best careers page already in the `sources` table. The run's log line says how many (`careers backfill: attached a careers page from the sources table to N companies`), and the result is saved in the `settings` table under `careers_backfill`, which is what stops it running again. To run it again, delete that row.
 
+### Migration `0012_match_method.sql` and the unmatched-postings cleanup
+
+Migration `0012` adds `postings.match_method` (`exact`, `alias`, `fuzzy:<score>`, or `classification`; empty on older postings). The automatic deploy applies it (step 5). To undo it, drop the column.
+
+The first daily run after the deploy also archives postings first seen on or after 2026-10-01 that have no matched title, with the reason "no matching title (cleanup)". Postings first seen earlier (including the seeded ones) and anything marked applied, open, or closed are never touched. The run summary says how many were archived, with examples. To see the list first, or to run it by hand: `python -m job.cleanup_unmatched --dry-run`, then without `--dry-run`. It uses the same D1 secrets as the daily job and is safe to run more than once. Archived postings can be restored from the dashboard.
+
 The careers-page backup needs Chromium on the runner. `daily-search.yml` already installs it, and the job installs it itself once if it is missing, so no workflow change is needed.
 
 ## Backups
