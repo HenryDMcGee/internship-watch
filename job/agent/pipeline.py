@@ -44,6 +44,7 @@ async def run_agent_steps(
     run_summary_so_far: dict | None = None,
     careers_covered_ids: set[int] | None = None,
     candidates: list[Candidate] | None = None,
+    careers_step=None,
     run_claude=_default_run_claude,
 ) -> dict:
     outcome = {
@@ -169,27 +170,45 @@ async def run_agent_steps(
     # matched were saved above, and the ones they couldn't place wait in
     # `candidates` (from discovery, feeds, and careers pages). Only a
     # classification "match" saves one; a rejection is remembered, not saved.
-    async def do_classification():
-        decisions, result = classification_mod.run_classification(
-            [c.prompt_row() for c in candidates], titles_doc, locations_setting,
-            model=budget_settings.get("model_classification", "haiku"),
-            run_claude=run_claude,
-        )
-        await record("classification", result)
-        return decisions
+    async def classify_pending(batch: list[Candidate]) -> None:
+        async def do_classification():
+            decisions, result = classification_mod.run_classification(
+                [c.prompt_row() for c in batch], titles_doc, locations_setting,
+                model=budget_settings.get("model_classification", "haiku"),
+                run_claude=run_claude,
+            )
+            await record("classification", result)
+            return decisions
 
-    if candidates:
         decisions = await guarded("classification", do_classification) or []
         saved = await _apply_classification_decisions(
-            db, decisions, candidates, now_iso=now_iso, settings_version=settings_ver,
+            db, decisions, batch, now_iso=now_iso, settings_version=settings_ver,
             titles_doc=titles_doc, locations_setting=locations_setting,
         )
-        outcome["classification_count"] = len(saved)
+        outcome["classification_count"] += len(saved)
         # Only what classification matched and saved is a new posting on the
         # dashboard, so that is what counts as "new" for the summary (issue #26).
-        discovery_saved = {c.id for c in candidates if c.event_detail.get("discovery")}
-        outcome["discovery_new_count"] += sum(1 for cid in saved if cid in discovery_saved)
-        outcome["candidate_new_count"] = len(saved) - sum(1 for cid in saved if cid in discovery_saved)
+        discovery_saved = {c.id for c in batch if c.event_detail.get("discovery")}
+        discovery_n = sum(1 for cid in saved if cid in discovery_saved)
+        outcome["discovery_new_count"] += discovery_n
+        outcome["candidate_new_count"] += len(saved) - discovery_n
+
+    # Everything found so far (feeds, discovery) is classified and saved before
+    # the careers step starts, so a slow careers step can never stop postings
+    # from being saved (issue #70).
+    if candidates:
+        await classify_pending(list(candidates))
+
+    # Careers pages (issue #70): after classification, before the scout. Listings
+    # the rules couldn't place are appended to `candidates` and classified here.
+    careers_start = len(candidates)
+    if careers_step is not None:
+        careers_covered = await careers_step(candidates)
+        covered_ids |= set(careers_covered or set())
+        outcome["covered_count"] = len([c for c in companies if c["id"] in covered_ids])
+        outcome["uncovered_count"] = len(companies) - outcome["covered_count"]
+        if len(candidates) > careers_start:
+            await classify_pending(candidates[careers_start:])
 
     search_limit_per_run = int(budget_settings.get("search_limit_per_run") or 35)
     scout_candidates, outcome["scout_skipped_count"] = scout.split_companies_by_coverage(

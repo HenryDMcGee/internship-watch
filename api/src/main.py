@@ -930,7 +930,7 @@ async def get_analytics(db: Database = Depends(get_db)):
     discovery_searches_per_run.reverse()
 
     recent_runs = await db.all(
-        "SELECT id, kind, started_at, status, new_count, summary FROM runs ORDER BY id DESC LIMIT 10"
+        "SELECT id, kind, started_at, finished_at, status, new_count, summary FROM runs ORDER BY id DESC LIMIT 10"
     )
 
     return {

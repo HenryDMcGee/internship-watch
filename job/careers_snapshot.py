@@ -20,6 +20,11 @@ import re
 FLAG_AFTER_CONSECUTIVE_FAILURES = 3
 
 
+# After this many runs in a row with no listings (skipped as a landing page,
+# or 0 extracted), the page is flagged and the scout looks for a better URL.
+FLAG_AFTER_EMPTY_RUNS = 2
+
+
 def hash_page_text(text: str) -> str:
     """A stable fingerprint of a careers page's visible text: whitespace
     collapsed so reflowed layout alone doesn't look like a content change,
@@ -78,3 +83,17 @@ async def record_failure(db, company_id: int, *, reason: str, now_iso: str, exis
             company_id, now_iso, consecutive, reason,
         )
     return consecutive
+
+
+async def record_empty(db, company_id: int, *, existing: dict | None = None) -> int:
+    """One more run with no listings on this page. Returns the running count,
+    so the caller can flag the company at `FLAG_AFTER_EMPTY_RUNS`. A page that
+    was already empty and is unchanged counts again: it is still empty.
+    """
+    count = ((existing or {}).get("empty_runs") or 0) + 1
+    await db.run("UPDATE careers_page_snapshots SET empty_runs = ? WHERE company_id = ?", count, company_id)
+    return count
+
+
+async def reset_empty(db, company_id: int) -> None:
+    await db.run("UPDATE careers_page_snapshots SET empty_runs = 0 WHERE company_id = ?", company_id)

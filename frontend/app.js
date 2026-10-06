@@ -701,6 +701,10 @@
     fillList("recentRunsList", a.recent_runs || [], "No runs yet.", function (r) {
       var line = fmtDateTime(r.started_at) + ": " + (r.status === "degraded" ? "Degraded" : (r.status || "unknown")) +
         ", " + (r.new_count || 0) + " new";
+      if (r.finished_at && r.started_at) {
+        var mins = (new Date(r.finished_at) - new Date(r.started_at)) / 60000;
+        if (mins >= 0) line += ", " + (mins < 1 ? "under 1" : Math.round(mins)) + " min" + (mins > 30 ? " (over 30)" : "");
+      }
       if (r.status === "degraded" && r.summary) {
         var at = r.summary.indexOf("Run degraded");
         if (at >= 0) line += ". " + r.summary.slice(at).split(". No new postings")[0];

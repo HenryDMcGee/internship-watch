@@ -434,6 +434,8 @@ def run_careers_pages(
     max_concurrency: int = MAX_BROWSER_RUN_CONCURRENCY,
     minutes_used_before: float = 0.0,
     sleep: Callable[[float], None] = time.sleep,
+    deadline: float | None = None,
+    clock: Callable[[], float] = time.monotonic,
 ) -> CareersRunOutcome:
     """Reads each company's careers page (`companies` must already be
     filtered to ones with a `careers_url` and no recognized feed), up to
@@ -457,6 +459,10 @@ def run_careers_pages(
     A page blocked by the site or disallowed by robots.txt is never sent to
     the backup either way -- it's a site decision, not a Browser Run capacity
     problem, so retrying it anywhere would be trying to get around a block.
+
+    `deadline` (a `clock()` value) is the time budget: no page is started after
+    it. Pages not reached are left out of the outcome, so the caller leaves
+    their last-checked time alone and they come first next run.
     """
     throttle = Throttle()
     if browser_run_fetch is fetch_via_browser_run_with_retry:
@@ -466,6 +472,8 @@ def run_careers_pages(
     pages: list[PageOutcome] = []
     allowed: list[dict] = []
     for company in candidates:
+        if deadline is not None and clock() >= deadline:
+            break
         url = company["careers_url"]
         if robots_check(url, session=session):
             allowed.append(company)
@@ -516,6 +524,8 @@ def run_careers_pages(
     i = 0
     n = len(allowed)
     while i < n:
+        if deadline is not None and clock() >= deadline:
+            break
         if mode == "browser_run":
             if throttle.delay:
                 sleep(throttle.delay)

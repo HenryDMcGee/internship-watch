@@ -18,6 +18,7 @@ import asyncio
 import json
 import os
 import sys
+import time
 from datetime import date, datetime, timedelta
 
 try:
@@ -35,6 +36,7 @@ from job.agent.alerts import (
     discovery_failed_alert,
     evaluate_browser_run_alerts,
     evaluate_budget_alerts,
+    evaluate_long_run_alert,
     evaluate_spike_alert,
     evaluate_workers_paid_suggestion,
     record_alerts,
@@ -74,8 +76,28 @@ CENTRAL = ZoneInfo("America/Chicago") if ZoneInfo else None
 BROWSER_RUN_PAID_INCLUDED_MONTHLY_HOURS = 10.0
 
 
+# Issue #70: keep runs short. The careers step's default time budget, how much
+# of it page loading may use, and how many extraction calls run at once.
+DEFAULT_CAREERS_MINUTES_PER_RUN = 10.0
+CAREERS_FETCH_SHARE = 0.6
+CAREERS_EXTRACTION_WORKERS = 4
+# A run longer than this is flagged in the daily summary (2,000 free Actions minutes a month).
+LONG_RUN_WARNING_MINUTES = 30
+
+
+def clock() -> float:
+    return time.monotonic()
+
+
 def now_iso() -> str:
     return datetime.now(CENTRAL).isoformat() if CENTRAL else datetime.utcnow().isoformat()
+
+
+def _minutes_between(start_iso: str, end_iso: str) -> float | None:
+    try:
+        return (datetime.fromisoformat(end_iso) - datetime.fromisoformat(start_iso)).total_seconds() / 60.0
+    except (TypeError, ValueError):
+        return None
 
 
 def today_central():
@@ -214,28 +236,38 @@ async def _run_careers_pages(
     *, run_id: int, run_claude, candidates: list[Candidate] | None = None,
 ) -> tuple[set[int], list[int], dict]:
     """Reads careers pages for companies with a `careers_url` on file and no
-    recognized feed (issue #53, phase 6 part 1), before discovery so a
-    company whose page loaded is skipped by it (the most expensive step).
+    recognized feed (issue #53, phase 6 part 1). Runs after classification,
+    so a slow careers step can never stop postings from being saved (issue #70).
 
-    Returns the set of company ids whose page loaded this run (so
-    `run_agent_steps` can exclude them from discovery) and a dict of counts
-    for the run summary.
+    The step has a time budget, `careers_minutes_per_run` (default 10): 60% for
+    loading pages, the rest for extraction. A page not reached keeps its old
+    last-checked time, so the least recently checked come first next run.
+    Extraction runs up to `CAREERS_EXTRACTION_WORKERS` pages at once.
+
+    Returns the set of company ids whose page loaded this run (so the scout
+    skips them), the ids of postings saved, and a dict of counts for the run
+    summary. Listings the rules couldn't place are added to `candidates`.
     """
-    candidates = [c for c in companies if c.get("careers_url") and not c.get("feed_type")]
+    started = clock()
+    minutes = float(budget_settings.get("careers_minutes_per_run") or DEFAULT_CAREERS_MINUTES_PER_RUN)
+    fetch_deadline = started + minutes * 60 * CAREERS_FETCH_SHARE
+    extract_deadline = started + minutes * 60
+    pages_todo = [c for c in companies if c.get("careers_url") and not c.get("feed_type")]
     stats = {
         "browser_run": 0, "backup": 0, "unchanged": 0, "changed": 0, "failed": 0,
         "browser_run_minutes": 0.0, "switch_reason": None,
-        "candidates": len(candidates), "attempted": 0, "rate_limited": 0, "token_problem": None,
-        "failure_reasons": {},
+        "candidates": len(pages_todo), "attempted": 0, "rate_limited": 0, "token_problem": None,
+        "failure_reasons": {}, "skipped_no_listings": 0, "extracted": 0, "flagged_empty": 0,
+        "time_budget_minutes": minutes, "out_of_time": 0, "seconds": 0.0,
     }
-    if not candidates:
+    if not pages_todo:
         return set(), [], stats
 
     # Pages never checked go first, then the one checked longest ago, so a run
     # that can't reach every page still works through all of them over time.
     snapshot_rows = await db.all("SELECT company_id, last_checked FROM careers_page_snapshots")
     last_checked = {r["company_id"]: r.get("last_checked") or "" for r in snapshot_rows}
-    candidates = sorted(candidates, key=lambda c: (last_checked.get(c["id"], ""), c["id"]))
+    pages_todo = sorted(pages_todo, key=lambda c: (last_checked.get(c["id"], ""), c["id"]))
     today_minutes_row = await db.first(
         "SELECT SUM(browser_ms) AS ms FROM browser_run_usage WHERE method = 'browser_run' "
         "AND substr(at, 1, 10) = ?",
@@ -243,8 +275,11 @@ async def _run_careers_pages(
     )
     minutes_used_before = ((today_minutes_row or {}).get("ms") or 0) / 60000.0
 
-    outcome = careers_pages.run_careers_pages(
-        candidates,
+    # Page loading is blocking network work; run it off the event loop thread.
+    outcome = await asyncio.to_thread(
+        careers_pages.run_careers_pages,
+        pages_todo,
+        deadline=fetch_deadline, clock=clock,
         account_id=os.environ.get("CLOUDFLARE_ACCOUNT_ID"),
         token=os.environ.get("CLOUDFLARE_BROWSER_TOKEN"),
         pages_per_run=int(budget_settings.get("careers_pages_per_run") or careers_pages.DEFAULT_CAREERS_PAGES_PER_RUN),
@@ -264,9 +299,10 @@ async def _run_careers_pages(
     stats["token_problem"] = outcome.token_problem
 
     settings_ver = fingerprint.settings_version(titles_doc, locations_setting)
-    companies_by_id = {c["id"]: c for c in candidates}
+    companies_by_id = {c["id"]: c for c in pages_todo}
     covered_ids: set[int] = set()
     posting_ids: list[int] = []
+    pending: list[tuple] = []  # (page, company, existing snapshot, content hash) waiting for extraction
     # Per-method breakdown for `browser_run_usage` (issue #55) -- kept
     # separate from `stats` (used for the run summary line only) since
     # Analytics needs the changed/unchanged split by method too.
@@ -313,25 +349,65 @@ async def _run_careers_pages(
             stats["unchanged"] += 1
             per_method[page.method]["unchanged"] += 1
             await careers_snapshot.record_unchanged(db, page.company_id, method=page.method, now_iso=now_iso())
+            if (existing.get("empty_runs") or 0) > 0:
+                await _note_empty_page(db, company, existing, stats)
             continue
 
+        # A landing page whose job list never loaded, or a page with nothing
+        # job-like on it: recorded as "no listings found" with no Claude call.
+        skip = careers_extraction.skip_reason(page.text)
+        if skip:
+            print(f"careers page: {company['name']}: no listings found ({skip}); no Claude call")
+            stats["changed"] += 1
+            stats["skipped_no_listings"] += 1
+            per_method[page.method]["changed"] += 1
+            await careers_snapshot.record_changed(
+                db, page.company_id, content_hash, method=page.method, now_iso=now_iso(), existing=existing,
+            )
+            await _note_empty_page(db, company, existing, stats)
+            continue
+        pending.append((page, company, existing, content_hash))
+
+    # Extraction, up to CAREERS_EXTRACTION_WORKERS pages at once. A page that
+    # starts after the time budget is left alone (no snapshot written), so it
+    # is read again next run.
+    semaphore = asyncio.Semaphore(CAREERS_EXTRACTION_WORKERS)
+    model = budget_settings.get("model_classification", "haiku")
+
+    async def extract(page, company):
+        async with semaphore:
+            if clock() >= extract_deadline:
+                return "out_of_time", None, None
+            try:
+                listings, result = await asyncio.to_thread(
+                    careers_extraction.run_extraction, company["name"], page.text, model=model, run_claude=run_claude,
+                )
+            except Exception as exc:  # noqa: BLE001 - a bad extraction call must not stop the run, same as
+                # any other per-company failure in this loop (job/fetchers/__init__.py's run_fetcher).
+                print(f"careers_extraction: {company['name']}: {exc}")
+                return "error", None, None
+            return "ok", listings, result
+
+    extractions = await asyncio.gather(*(extract(page, company) for page, company, _, _ in pending))
+
+    for (page, company, existing, content_hash), (state, listings, result) in zip(pending, extractions):
+        if state == "out_of_time":
+            stats["out_of_time"] += 1
+            continue
+        if state == "error":
+            continue
         stats["changed"] += 1
         per_method[page.method]["changed"] += 1
         await careers_snapshot.record_changed(
             db, page.company_id, content_hash, method=page.method, now_iso=now_iso(), existing=existing,
         )
-
-        try:
-            listings, result = careers_extraction.run_extraction(
-                company["name"], page.text, model=budget_settings.get("model_classification", "haiku"),
-                run_claude=run_claude,
-            )
-        except Exception as exc:  # noqa: BLE001 - a bad extraction call must not stop the run, same as
-            # any other per-company failure in this loop (job/fetchers/__init__.py's run_fetcher).
-            print(f"careers_extraction: {company['name']}: {exc}")
-            continue
         if result is not None:
             await record_usage(db, run_id=run_id, step="careers_extraction", result=result, now_iso=now_iso())
+        stats["extracted"] += len(listings)
+        if listings:
+            await careers_snapshot.reset_empty(db, page.company_id)
+        else:
+            await _note_empty_page(db, company, existing, stats)
 
         for listing in listings:
             fp_outcome = await fingerprint.match_incoming(
@@ -377,7 +453,22 @@ async def _run_careers_pages(
                 posting_ids.append(new_id)
 
     await _record_browser_run_usage(db, run_id=run_id, outcome=outcome, per_method=per_method, now_iso=now_iso())
+    stats["not_reached"] = len(pages_todo) - outcome.attempted
+    stats["seconds"] = clock() - started
     return covered_ids, posting_ids, stats
+
+
+async def _note_empty_page(db, company: dict, existing: dict | None, stats: dict) -> None:
+    """One more run with no listings on this company's page. At
+    `FLAG_AFTER_EMPTY_RUNS` the company is flagged, which queues it for the
+    scout to look for a better URL (an internship-filtered search page, or
+    the company's job platform feed).
+    """
+    count = await careers_snapshot.record_empty(db, company["id"], existing=existing)
+    if count >= careers_snapshot.FLAG_AFTER_EMPTY_RUNS and not company.get("careers_page_flagged"):
+        await db.run("UPDATE companies SET careers_page_flagged = 1 WHERE id = ?", company["id"])
+        company["careers_page_flagged"] = 1  # the scout step later in this run reads this list
+        stats["flagged_empty"] += 1
 
 
 async def _record_browser_run_usage(db, *, run_id: int, outcome, per_method: dict, now_iso: str) -> None:
@@ -437,7 +528,17 @@ def _careers_pages_summary_line(stats: dict | None) -> str | None:
         reasons = stats.get("failure_reasons") or {}
         detail = " (" + ", ".join(f"{n} {r}" for r, n in sorted(reasons.items())) + ")" if reasons else ""
         parts.append(f"{stats['failed']} failed{detail}")
+    if stats.get("skipped_no_listings"):
+        parts.append(f"{stats['skipped_no_listings']} with no listings found (no Claude call)")
+    if stats.get("flagged_empty"):
+        parts.append(f"{stats['flagged_empty']} flagged for a better URL")
     line = "Careers pages: " + ", ".join(parts) + "."
+    left = int(stats.get("not_reached") or 0) + int(stats.get("out_of_time") or 0)
+    if left:
+        line += (
+            f" Stopped at the {stats.get('time_budget_minutes'):g}-minute careers limit; {left} page(s) "
+            "wait for the next run, least recently checked first."
+        )
 
     if stats.get("rate_limited"):
         line += (
@@ -552,6 +653,7 @@ async def run(db, *, kind: str = "daily", company_ids: list[int] | None = None) 
         await _finish_daily_run(
             db, run_status=result.get("run_status") or "completed", run_reason=None,
             agent_outcome=result.get("agent_outcome"), health=result.get("health"),
+            run_minutes=result.get("run_minutes"),
         )
     return result
 
@@ -693,20 +795,29 @@ async def _run_body(db, run_id: int, started_at: str, kind: str, company_ids: li
         today_str = today_central().isoformat()
         status = await load_budget_status(db, budget_settings, today=today_str)
 
-        try:
-            careers_covered_ids, careers_posting_ids, careers_stats = await _run_careers_pages(
-                db, companies, budget_settings, titles_doc, locations_setting,
-                run_id=run_id, run_claude=agent_client.run_claude_step, candidates=candidates,
-            )
-        except Exception as exc:  # noqa: BLE001 - a careers-pages bug must not stop the run, same as
-            # every other per-step isolation in this function.
-            print(f"careers_pages: {exc}")
-            careers_covered_ids, careers_posting_ids, careers_stats = set(), [], None
+        careers_posting_ids: list[int] = []
+
+        # Order (issue #70): feeds, discovery, classification of everything found so far,
+        # then this careers step, then the scout and improvement -- so a slow careers step
+        # can never stop postings from being classified and saved.
+        async def careers_step(shared_candidates: list[Candidate]) -> set[int]:
+            nonlocal careers_stats
+            try:
+                covered, posting_ids, careers_stats = await _run_careers_pages(
+                    db, companies, budget_settings, titles_doc, locations_setting,
+                    run_id=run_id, run_claude=agent_client.run_claude_step, candidates=shared_candidates,
+                )
+            except Exception as exc:  # noqa: BLE001 - a careers-pages bug must not stop the run, same as
+                # every other per-step isolation in this function.
+                print(f"careers_pages: {exc}")
+                return set()
+            careers_posting_ids.extend(posting_ids)
+            return covered
 
         agent_outcome = await run_agent_steps(
             db, run_id=run_id, companies=companies, titles_doc=titles_doc, locations_setting=locations_setting,
             budget_settings=budget_settings, status=status, today=today_str, now_iso=now_iso(),
-            careers_covered_ids=careers_covered_ids, candidates=candidates,
+            careers_step=careers_step, candidates=candidates,
             run_summary_so_far={
                 "summary": (
                     f"Checked {len(companies)} companies, {new_count} new posting(s) so far, "
@@ -822,12 +933,21 @@ async def _run_body(db, run_id: int, started_at: str, kind: str, company_ids: li
                 f"{breakdown['classified']} posting(s) classified."
             )
     finished_at = now_iso()
+    run_minutes = _minutes_between(started_at, finished_at)
+    if run_minutes is not None:
+        summary += f" Run time: {run_minutes:.1f} min."
+        if run_minutes > LONG_RUN_WARNING_MINUTES:
+            summary += (
+                f" Warning: this run took more than {LONG_RUN_WARNING_MINUTES} minutes "
+                "(the private repo has 2,000 free Actions minutes a month)."
+            )
     await db.run(
         "UPDATE runs SET finished_at = ?, status = ?, new_count = ?, summary = ? WHERE id = ?",
         finished_at, run_status, new_count, summary, run_id,
     )
 
     return {
+        "run_minutes": run_minutes,
         "run_status": run_status,
         "health": health,
         "run_id": run_id,
@@ -901,6 +1021,7 @@ async def _browser_run_alert_inputs(db, *, today: str) -> tuple[float, float, li
 
 async def _finish_daily_run(
     db, *, run_status: str, run_reason: str | None, agent_outcome: dict | None = None, health: dict | None = None,
+    run_minutes: float | None = None,
 ) -> None:
     """Evaluates alerts and sends the daily Claude routine summary. Runs
     after every daily run, including failed ones, per `docs/plan.md`. Never
@@ -950,6 +1071,9 @@ async def _finish_daily_run(
         failed_checks = (health or {}).get("failed_checks") or []
         if failed_checks:
             candidates.append(run_degraded_alert([c["message"] for c in failed_checks]))
+        long_run = evaluate_long_run_alert(run_minutes, limit_minutes=LONG_RUN_WARNING_MINUTES)
+        if long_run:
+            candidates.append(long_run)
         if run_status == "failed":
             candidates.append(run_failed_alert(run_reason or "unknown error"))
 
@@ -980,6 +1104,7 @@ async def _finish_daily_run(
                 "zero_new_days": (health or {}).get("zero_new_days", 0),
                 "step_breakdown": (health or {}).get("step_breakdown"),
             },
+            run_minutes=run_minutes,
         )
         send_daily_summary(payload)
     except Exception as exc:  # noqa: BLE001 - the routine summary must never crash the job

@@ -37,9 +37,11 @@ def _rejected_urls(company: dict) -> list[str]:
 
 def build_prompt(companies: list[dict], *, search_limit_per_run: int) -> str:
     lines = [
-        "Each of these companies' careers page has failed to load 3 times in a row. Find a better page for "
+        "Each of these companies' careers page has failed to load 3 times in a row, or has shown no job "
+        "listings 2 runs in a row (often a landing page). Find a better page for "
         "each -- prefer an internship-filtered listing page, such as a careers search for \"intern\", over "
-        "the company's general careers home page.",
+        "the company's general careers home page. If you can tell which job platform the company uses "
+        "(Greenhouse, Lever, Ashby, SmartRecruiters, Workday), its public job feed or board is better still.",
         f"Use at most {search_limit_per_run} searches in total.",
     ]
     for c in companies:
