@@ -1,6 +1,6 @@
 # Deploying Internship Watch to Cloudflare
 
-The dashboard and API run as one Cloudflare Worker named `internship-watch`, configured in `api/wrangler.toml`. It serves `https://internship-watch.mcgeehenry.com`, behind the Cloudflare Access email login.
+The dashboard and API run as one Cloudflare Worker named `internship-watch`, configured in `api/wrangler.toml`. It serves `https://internship-watch.mcgeehenry.com`, behind the Cloudflare Access email login, and the public job board at `https://jobs.mcgeehenry.com` (step 4b), which has no login.
 
 You can deploy by hand once phase 1 is merged. From phase 4, merging a pull request deploys automatically.
 
@@ -77,6 +77,28 @@ In Cloudflare, open **mcgeehenry.com**, then **DNS**, then **Records**, and add:
 
 If a record named `internship-watch` already exists, remove it first. Leave every other record alone; they belong to your website.
 
+### 4b. The public job board (phase 7)
+
+`https://jobs.mcgeehenry.com` is a second route into the same Worker (`api/wrangler.toml` has both routes, and `PUBLIC_HOSTNAME`). It shows open postings to anyone, read only, with a feedback form. Do these in order after the pull request is merged and deployed:
+
+1. **DNS record.** In Cloudflare, open **mcgeehenry.com**, **DNS**, **Records**, and add a proxied record, the same kind the dashboard uses:
+
+   | Type | Name | IPv6 address | Proxy status |
+   | --- | --- | --- | --- |
+   | AAAA | `jobs` | `100::` | **Proxied** (orange cloud) |
+
+2. **GitHub token.** Add **Issues: write** to the Worker's existing `GITHUB_TOKEN` (Open as GitHub issue in the Feedback view needs it), on this repository only.
+3. **Feedback salt.** Run this from the `api` folder and paste a long random string when asked (at least 32 characters). Don't reuse another secret, and don't change it later unless you want every visitor's daily count to reset:
+   ```powershell
+   npx wrangler secret put FEEDBACK_SALT
+   ```
+   Without it, the public feedback form answers with an error and stores nothing.
+4. **Switch it on.** In the dashboard, open **Locations**, turn on **Public site**, and Save. It starts off, so until then the public page only says "Not available right now."
+
+**Cloudflare Access stays scoped to `internship-watch.mcgeehenry.com` only. Do not extend it to `jobs.mcgeehenry.com`**, or visitors would be asked to sign in. The public name is safe without it: the Worker only lets `/`, `/style.css`, `/public/*`, and `/api/public/*` through on that name and returns 404 for everything else, and every private endpoint still checks the Access token as well.
+
+The public list is cached for 5 minutes, so switching the site on or off, or hiding a posting, can take up to 5 minutes to show.
+
 ## Deploy
 
 Run these from the `api` folder.
@@ -102,6 +124,7 @@ uv run pywrangler deploy
 
 1. Open `https://internship-watch.mcgeehenry.com` in a private browser window. It should ask you to sign in, then show the dashboard with your postings.
 2. Open `https://mcgeehenry.com` and confirm your website looks the same as before.
+3. After step 4b, open `https://jobs.mcgeehenry.com` in a private window. It should load without a login, and `https://jobs.mcgeehenry.com/api/postings` should return "Not found".
 
 ## Deploying later changes
 
@@ -122,6 +145,10 @@ Two options, depending on what's wrong:
   This is faster, but the next automatic deploy (or manual `pywrangler deploy`) overwrites it with whatever `master` still has, so also revert the pull request if the bad change shouldn't ship again.
 
 Neither option undoes database migrations. Any pull request that changes the database says how to reverse it.
+
+### Migration `0014_public_site.sql`
+
+Migration `0014` adds `postings.public_hidden` (default 0) and the `feedback` table. The automatic deploy applies it (step 5). To undo it, drop the `feedback` table and the column. The on/off switch is the `public_site_enabled` row in `settings` (missing means off).
 
 ### One-time fingerprint backfill
 
@@ -176,4 +203,8 @@ The careers-page backup needs Chromium on the runner. `daily-search.yml` already
 | Sign-in works but the dashboard shows errors or no data | `ACCESS_AUD` or `ACCESS_TEAM_DOMAIN` is wrong, or migrations weren't applied | Recheck step 2, then run step 5 |
 | Titles panel, Check now, or title edits return an error | `GITHUB_TOKEN` isn't set, or lacks Actions/Contents/Pull requests write | Recheck step 3 |
 | Deploy fails because of a Python package | The package doesn't run in Python Workers | Tell Claude; the plan's fallback is a small TypeScript Worker, proposed first |
+| `jobs.mcgeehenry.com` can't be reached | The `jobs` DNS record from step 4b is missing | Add it, set to Proxied |
+| `jobs.mcgeehenry.com` asks for a login | The Access application covers the public name | Scope it to `internship-watch.mcgeehenry.com` only |
+| The public page says "Not available right now." | The Public site switch is off (the default), or the 5-minute cache hasn't expired | Turn it on in Locations |
+| Public feedback errors, or Open as GitHub issue fails | `FEEDBACK_SALT` isn't set, or the GitHub token lacks Issues: write | Recheck step 4b |
 | Your main website shows a Cloudflare login | The Access application was created for `mcgeehenry.com` instead of the subdomain | Fix the application's hostname in Zero Trust |

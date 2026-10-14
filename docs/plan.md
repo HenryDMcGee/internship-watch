@@ -12,6 +12,7 @@ Every morning, find open Summer 2027 MBA internships that match Henry's titles a
 | --- | --- |
 | Display name | Internship Watch |
 | Dashboard address | `https://internship-watch.mcgeehenry.com` (mcgeehenry.com is already in Henry's Cloudflare account, with his website on it) |
+| Public job board address | `https://jobs.mcgeehenry.com` (no login; a second route into the same Worker) |
 | GitHub repository | `internship-watch` |
 | Cloudflare Worker (dashboard and API) | `internship-watch`, configured in `api/wrangler.toml` |
 | Cloudflare D1 database | `internship-watch-db` |
@@ -79,7 +80,8 @@ Starting point for `0001_init.sql`. Adjust names if needed, but keep every conce
 - `ranking_snapshots(snapshot_date, source, company_name, rank, market_cap_usd)`.
 - `sources(id, name, url, kind, covers, status, discovered_by, discovered_at, found_count, dead_link_rate, last_checked, last_success_at, notes)`.
 - `source_checks(id, source_id, run_id, found, dead, error)`.
-- `postings(id, company_id, company_name, title, title_en, matched_title, url, mirror_url, source_id, locations JSON, location_match, posted_date, first_seen, status, status_note, verified_via, verified_at, user_status, user_status_at, applied, archived_at, archive_reason, note)`.
+- `postings(id, company_id, company_name, title, title_en, matched_title, url, mirror_url, source_id, locations JSON, location_match, posted_date, first_seen, status, status_note, verified_via, verified_at, user_status, user_status_at, applied, archived_at, archive_reason, note, public_hidden)`.
+  - `public_hidden` (0 or 1, default 0) keeps a posting off the public job board.
   - `status` is one of open, closing, closed, or unverified.
   - `location_match` is one of match, outside, or unclear.
 - `posting_events(id, posting_id, type, detail JSON, at)`.
@@ -90,6 +92,10 @@ Starting point for `0001_init.sql`. Adjust names if needed, but keep every conce
 - `check_requests(id, company_ids JSON, requested_at, status, result JSON)`.
 - `usage(id, run_id, step, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, web_searches, est_cost_usd, at)`.
 - `alerts(id, type, severity, message, created_at, dismissed_at)`.
+- `feedback(id, source, kind, posting_id, message, page_url, visitor_hash, status, issue_url, created_at, decided_at)`.
+  - `source` is public or owner. `kind` is bug, dead_link, closed, wrong_job, suggestion, or other. `status` is new, read, issue_opened, or dismissed.
+  - `visitor_hash` is SHA-256 of `FEEDBACK_SALT` plus the visitor's IP. The address itself is never stored.
+- The public site's on/off switch is the `public_site_enabled` key in `settings` (JSON true or false; missing means off).
 
 Seed data in `seed/` comes from the dashboard Henry uses today:
 - `postings.json`: 9 postings, with 3 closed
@@ -120,6 +126,17 @@ Map the old field names (`firstSeen`, `statusNote`, and so on) to the new schema
    - the deploy workflow (`deploy.yml`): on merge to `main`, apply D1 migrations and run `pywrangler deploy`
    - nightly R2 backups
    - Henry can deploy by hand any time after phase 1 using `docs/deploy.md`
+5. **Search optimization:**
+   - cached page reads and posting fingerprints, so repeat searches skip work already done
+   - Search now on the dashboard, and search coverage so companies are not skipped
+6. **Browser Run:**
+   - careers pages with no feed are read through Cloudflare Browser Run, with Playwright as the backup
+   - `browser_run_usage` tracking, a careers time budget, and Claude-proposed careers page repairs in Proposals
+7. **Public job board and feedback:**
+   - `https://jobs.mcgeehenry.com`, no login, read only: open and closing postings with New today and Earlier tabs, search, and a "Last updated" line
+   - a switch in the Locations panel (starts off) and a Hide from public toggle per posting
+   - a feedback form on the public board (honeypot, 10 a day per visitor, 200 a day in total), the owner's own Feedback button, and a Feedback view with Mark read, Dismiss, and Open as GitHub issue
+   - a counts-only feedback line in the daily summary
 
 ## Secrets (never in git)
 
@@ -129,5 +146,6 @@ Map the old field names (`firstSeen`, `statusNote`, and so on) to the new schema
 | `CLOUDFLARE_DEPLOY_TOKEN` (D1 edit, Workers Scripts edit, Workers R2 Storage edit, and Workers Routes edit on the mcgeehenry.com zone) | GitHub | Automatic deploys and nightly backups (phase 4) |
 | `CLOUDFLARE_D1_TOKEN` | GitHub | Daily job, Check now (phase 2) |
 | `CLOUDFLARE_ACCOUNT_ID`, `D1_DATABASE_ID` | GitHub | Deploys and daily job |
-| Worker's GitHub token (Actions, Contents, and Pull requests read and write, this repository only) | Cloudflare Worker | Check now and title edits (phase 2). The Worker may only edit `config/titles.json`. |
+| Worker's GitHub token (Actions, Contents, Pull requests, and Issues read and write, this repository only) | Cloudflare Worker | Check now and title edits (phase 2), and Open as GitHub issue (phase 7). The Worker may only edit `config/titles.json`. |
+| `FEEDBACK_SALT` | Cloudflare Worker secret | Hashes visitor addresses for the public feedback limits (phase 7) |
 | `CLAUDE_ROUTINE_URL`, `CLAUDE_ROUTINE_TOKEN` | GitHub | Daily summary and alerts (phase 3) |

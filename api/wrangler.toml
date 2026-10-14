@@ -16,8 +16,12 @@ preview_urls = false
 
 # Needs a proxied DNS record for "internship-watch" in the mcgeehenry.com zone
 # (AAAA record pointing to 100::). See docs/deploy.md, step 3.
+#
+# The public job board (phase 7) is a second route into this same Worker. It needs its own
+# proxied DNS record, "jobs" (AAAA 100::). Cloudflare Access stays on the dashboard name only.
 routes = [
-  { pattern = "internship-watch.mcgeehenry.com/*", zone_name = "mcgeehenry.com" }
+  { pattern = "internship-watch.mcgeehenry.com/*", zone_name = "mcgeehenry.com" },
+  { pattern = "jobs.mcgeehenry.com/*", zone_name = "mcgeehenry.com" }
 ]
 
 # Dashboard files. Every request reaches FastAPI first, so /api/* routes win;
@@ -40,3 +44,6 @@ migrations_dir = "../db/migrations"
 [vars]
 ACCESS_TEAM_DOMAIN = "royal-band-14be.cloudflareaccess.com"
 ACCESS_AUD = "0162b88431b5d036e4cbe75aa8999c7e8c48153f72abf818c8002c0440ad367d"
+# The public job board's hostname. Requests to it can only reach the public page and /api/public/*.
+# FEEDBACK_SALT (hashes visitor addresses) is a Worker secret, never in this file. See docs/deploy.md.
+PUBLIC_HOSTNAME = "jobs.mcgeehenry.com"

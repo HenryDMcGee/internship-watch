@@ -119,3 +119,11 @@ class GitHubClient:
         if status != 201:
             raise GitHubApiError(f"creating the pull request failed ({status}): {body}")
         return body
+
+    async def create_issue(self, title: str, body_text: str, labels: list[str]) -> dict:
+        status, body = await self._request(
+            "POST", f"/repos/{self.repo}/issues", {"title": title, "body": body_text, "labels": labels}
+        )
+        if status != 201:
+            raise GitHubApiError(f"creating the issue failed ({status}): {body}")
+        return body

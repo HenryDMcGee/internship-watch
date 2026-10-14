@@ -970,6 +970,26 @@ async def _run_body(db, run_id: int, started_at: str, kind: str, company_ids: li
     }
 
 
+async def feedback_summary_line(db) -> str | None:
+    """"3 new feedback items, 1 about a dead link." -- counts only, never message
+    text. Counts feedback created since the previous daily run started; None when
+    there is none. The current run is the latest daily run, so the previous one is
+    the second latest.
+    """
+    runs = await db.all("SELECT started_at FROM runs WHERE kind = 'daily' ORDER BY id DESC LIMIT 2")
+    since = runs[1]["started_at"] if len(runs) > 1 and runs[1].get("started_at") else ""
+    row = await db.first(
+        "SELECT COUNT(*) AS n, COALESCE(SUM(kind = 'dead_link'), 0) AS dead FROM feedback WHERE created_at > ?", since
+    )
+    total, dead = (row or {}).get("n") or 0, (row or {}).get("dead") or 0
+    if not total:
+        return None
+    line = f"{total} new feedback item{'' if total == 1 else 's'}"
+    if dead:
+        line += f", {dead} about a dead link"
+    return line + "."
+
+
 async def _seven_day_avg_tokens(db, today: str) -> float:
     today_date = date.fromisoformat(today)
     start = (today_date - timedelta(days=7)).isoformat()
@@ -1105,6 +1125,7 @@ async def _finish_daily_run(
                 "step_breakdown": (health or {}).get("step_breakdown"),
             },
             run_minutes=run_minutes,
+            feedback_line=await feedback_summary_line(db),
         )
         send_daily_summary(payload)
     except Exception as exc:  # noqa: BLE001 - the routine summary must never crash the job

@@ -10,8 +10,10 @@ Run locally with `uv run pywrangler dev` from `api/` (see the README).
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import re
 import time
 from datetime import date, datetime, timedelta
 from typing import Any
@@ -162,6 +164,7 @@ app.state.db = None
 app.state.access_team_domain = os.environ.get("ACCESS_TEAM_DOMAIN", "")
 app.state.access_aud = os.environ.get("ACCESS_AUD", "")
 app.state.github = None  # set in the Worker entrypoint from the GITHUB_TOKEN secret
+app.state.feedback_salt = os.environ.get("FEEDBACK_SALT", "")  # Worker secret; public feedback is off without it
 
 _jwks_cache: dict[str, dict[str, Any]] = {}
 
@@ -215,7 +218,21 @@ def _posting_out(row: dict) -> dict:
     row = dict(row)
     row["locations"] = json.loads(row.get("locations") or "[]")
     row["applied"] = bool(row.get("applied"))
+    row["public_hidden"] = bool(row.get("public_hidden"))
+    row["visitor_reports"] = row.get("visitor_reports") or 0
     return row
+
+
+# Reports a visitor made that a posting is dead or closed, not yet dismissed.
+# Shown as a tag on the private card; never changes the posting's status.
+_VISITOR_REPORTS_SQL = (
+    "(SELECT COUNT(*) FROM feedback f WHERE f.posting_id = postings.id "
+    "AND f.kind IN ('dead_link', 'closed') AND f.status != 'dismissed') AS visitor_reports"
+)
+
+
+async def _load_posting(db: Database, posting_id: int) -> dict | None:
+    return await db.first(f"SELECT postings.*, {_VISITOR_REPORTS_SQL} FROM postings WHERE id = ?", posting_id)
 
 
 @router.get("/postings")
@@ -249,7 +266,7 @@ async def list_postings(tab: str = "today", show_closed: bool = False, q: str | 
     else:
         order = "ORDER BY company_name ASC"
 
-    rows = await db.all(f"SELECT * FROM postings WHERE {where} {order}", *params)
+    rows = await db.all(f"SELECT postings.*, {_VISITOR_REPORTS_SQL} FROM postings WHERE {where} {order}", *params)
     return {"tab": tab, "today": today, "postings": [_posting_out(r) for r in rows]}
 
 
@@ -259,8 +276,21 @@ async def mark_applied(posting_id: int, body: AppliedUpdate, db: Database = Depe
     if not existing:
         raise HTTPException(status_code=404, detail="Posting not found")
     await db.run("UPDATE postings SET applied = ? WHERE id = ?", 1 if body.applied else 0, posting_id)
-    updated = await db.first("SELECT * FROM postings WHERE id = ?", posting_id)
+    updated = await _load_posting(db, posting_id)
     return _posting_out(updated)
+
+
+class PublicHiddenUpdate(BaseModel):
+    hidden: bool
+
+
+@router.post("/postings/{posting_id}/public-hidden")
+async def set_public_hidden(posting_id: int, body: PublicHiddenUpdate, db: Database = Depends(get_db)):
+    existing = await db.first("SELECT id FROM postings WHERE id = ?", posting_id)
+    if not existing:
+        raise HTTPException(status_code=404, detail="Posting not found")
+    await db.run("UPDATE postings SET public_hidden = ? WHERE id = ?", 1 if body.hidden else 0, posting_id)
+    return _posting_out(await _load_posting(db, posting_id))
 
 
 @router.delete("/postings/{posting_id}")
@@ -272,7 +302,7 @@ async def delete_posting(posting_id: int, db: Database = Depends(get_db)):
         "UPDATE postings SET archived_at = ?, archive_reason = ? WHERE id = ?",
         now_iso(), "Deleted by Henry", posting_id,
     )
-    updated = await db.first("SELECT * FROM postings WHERE id = ?", posting_id)
+    updated = await _load_posting(db, posting_id)
     return _posting_out(updated)
 
 
@@ -282,7 +312,7 @@ async def restore_posting(posting_id: int, db: Database = Depends(get_db)):
     if not existing:
         raise HTTPException(status_code=404, detail="Posting not found")
     await db.run("UPDATE postings SET archived_at = NULL, archive_reason = NULL WHERE id = ?", posting_id)
-    updated = await db.first("SELECT * FROM postings WHERE id = ?", posting_id)
+    updated = await _load_posting(db, posting_id)
     return _posting_out(updated)
 
 
@@ -304,7 +334,7 @@ async def confirm_posting(posting_id: int, body: ConfirmUpdate, db: Database = D
            WHERE id = ?""",
         body.status, at, body.status, at, posting_id,
     )
-    updated = await db.first("SELECT * FROM postings WHERE id = ?", posting_id)
+    updated = await _load_posting(db, posting_id)
     return _posting_out(updated)
 
 
@@ -676,6 +706,142 @@ async def update_locations(body: LocationsUpdate, db: Database = Depends(get_db)
     else:
         await db.run("INSERT INTO settings (key, value) VALUES ('locations', ?)", value)
     return json.loads(value)
+
+
+class PublicSiteUpdate(BaseModel):
+    enabled: bool
+
+
+async def _public_site_enabled(db: Database) -> bool:
+    """The public job board's switch. Missing, invalid, or anything but JSON `true` means off."""
+    row = await db.first("SELECT value FROM settings WHERE key = 'public_site_enabled'")
+    if not row:
+        return False
+    try:
+        return json.loads(row["value"]) is True
+    except ValueError:
+        return False
+
+
+@router.get("/settings/public-site")
+async def get_public_site(db: Database = Depends(get_db)):
+    return {"enabled": await _public_site_enabled(db)}
+
+
+@router.put("/settings/public-site")
+async def update_public_site(body: PublicSiteUpdate, db: Database = Depends(get_db)):
+    value = json.dumps(body.enabled)
+    existing = await db.first("SELECT key FROM settings WHERE key = 'public_site_enabled'")
+    if existing:
+        await db.run("UPDATE settings SET value = ? WHERE key = 'public_site_enabled'", value)
+    else:
+        await db.run("INSERT INTO settings (key, value) VALUES ('public_site_enabled', ?)", value)
+    return {"enabled": body.enabled}
+
+
+# ---------------------------------------------------------------------------
+# Feedback (private side): the owner's own submissions and the Feedback view
+# ---------------------------------------------------------------------------
+
+FEEDBACK_KINDS = ("bug", "dead_link", "closed", "wrong_job", "suggestion", "other")
+PUBLIC_FEEDBACK_KINDS = ("dead_link", "closed", "wrong_job", "suggestion", "other")  # visitors can't file a Bug
+FEEDBACK_KIND_LABELS = {
+    "bug": "Bug", "dead_link": "Dead link", "closed": "Job is closed",
+    "wrong_job": "Wrong job", "suggestion": "Suggestion", "other": "Other",
+}
+FEEDBACK_MAX_CHARS = 2000
+PAGE_URL_MAX_CHARS = 500
+PUBLIC_FEEDBACK_PER_VISITOR_PER_DAY = 10
+PUBLIC_FEEDBACK_TOTAL_PER_DAY = 200
+
+# Columns sent to the dashboard. `visitor_hash` stays in the database only.
+_FEEDBACK_OUT_SQL = (
+    "SELECT f.id, f.source, f.kind, f.posting_id, f.message, f.page_url, f.status, f.issue_url, "
+    "f.created_at, f.decided_at, p.company_name AS posting_company, p.title AS posting_title, "
+    "p.url AS posting_url FROM feedback f LEFT JOIN postings p ON p.id = f.posting_id"
+)
+
+
+class OwnerFeedbackCreate(BaseModel):
+    kind: str
+    message: str
+    posting_id: int | None = None
+    page_url: str | None = None
+
+
+class FeedbackStatusUpdate(BaseModel):
+    status: str  # "read" or "dismissed"
+
+
+@router.get("/feedback")
+async def list_feedback(db: Database = Depends(get_db)):
+    rows = await db.all(f"{_FEEDBACK_OUT_SQL} ORDER BY f.created_at DESC, f.id DESC")
+    return {"feedback": rows}
+
+
+@router.post("/feedback", status_code=201)
+async def create_owner_feedback(body: OwnerFeedbackCreate, db: Database = Depends(get_db)):
+    if body.kind not in FEEDBACK_KINDS:
+        raise HTTPException(status_code=400, detail="Unknown feedback type")
+    message = body.message.strip()
+    if not message or len(message) > FEEDBACK_MAX_CHARS:
+        raise HTTPException(status_code=400, detail=f"Message must be 1 to {FEEDBACK_MAX_CHARS} characters")
+    if body.posting_id is not None and not await db.first("SELECT id FROM postings WHERE id = ?", body.posting_id):
+        raise HTTPException(status_code=400, detail="Posting not found")
+    new_id = await db.run(
+        "INSERT INTO feedback (source, kind, posting_id, message, page_url, created_at) VALUES ('owner', ?, ?, ?, ?, ?)",
+        body.kind, body.posting_id, message, (body.page_url or "")[:PAGE_URL_MAX_CHARS] or None, now_iso(),
+    )
+    return await db.first(f"{_FEEDBACK_OUT_SQL} WHERE f.id = ?", new_id)
+
+
+@router.post("/feedback/{feedback_id}/status")
+async def set_feedback_status(feedback_id: int, body: FeedbackStatusUpdate, db: Database = Depends(get_db)):
+    if body.status not in ("read", "dismissed"):
+        raise HTTPException(status_code=422, detail="status must be 'read' or 'dismissed'")
+    if not await db.first("SELECT id FROM feedback WHERE id = ?", feedback_id):
+        raise HTTPException(status_code=404, detail="Feedback not found")
+    await db.run("UPDATE feedback SET status = ?, decided_at = ? WHERE id = ?", body.status, now_iso(), feedback_id)
+    return await db.first(f"{_FEEDBACK_OUT_SQL} WHERE f.id = ?", feedback_id)
+
+
+def _fenced(text: str) -> str:
+    """Wraps visitor text in a code fence so GitHub shows it literally (no mentions, links, or images)."""
+    longest = max((len(run) for run in re.findall(r"`+", text)), default=0)
+    fence = "`" * max(3, longest + 1)
+    return f"{fence}\n{text}\n{fence}"
+
+
+@router.post("/feedback/{feedback_id}/issue")
+async def open_feedback_issue(feedback_id: int, request: Request, db: Database = Depends(get_db)):
+    row = await db.first(f"{_FEEDBACK_OUT_SQL} WHERE f.id = ?", feedback_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Feedback not found")
+    if row["issue_url"]:
+        return row  # already has an issue; never open a second one
+
+    github: GitHubClient | None = request.app.state.github
+    if github is None:
+        raise HTTPException(status_code=503, detail="GitHub isn't configured for this environment")
+
+    label = FEEDBACK_KIND_LABELS.get(row["kind"], row["kind"])
+    first_line = " ".join(row["message"].split())[:60]
+    lines = [_fenced(row["message"]), "", f"Type: {label}", f"Source: {'Visitor' if row['source'] == 'public' else 'Owner'}",
+             f"Date: {row['created_at']}"]
+    if row["posting_id"] is not None:
+        lines.append(f"Posting: {row['posting_company']}, {row['posting_title']}")
+        if row["posting_url"]:
+            lines.append(f"Posting link: {row['posting_url']}")
+    try:
+        issue = await github.create_issue(f"Feedback: {label}: {first_line}", "\n".join(lines), ["feedback"])
+    except GitHubApiError as exc:
+        raise HTTPException(status_code=502, detail=f"Could not open the issue: {exc}") from exc
+
+    await db.run(
+        "UPDATE feedback SET status = 'issue_opened', issue_url = ?, decided_at = ? WHERE id = ?",
+        issue.get("html_url"), now_iso(), feedback_id,
+    )
+    return await db.first(f"{_FEEDBACK_OUT_SQL} WHERE f.id = ?", feedback_id)
 
 
 # ---------------------------------------------------------------------------
@@ -1094,6 +1260,125 @@ app.include_router(router)
 
 
 # ---------------------------------------------------------------------------
+# Public job board (jobs.mcgeehenry.com). No Cloudflare Access here, so this
+# router reads only an explicit column list and touches nothing private.
+# ---------------------------------------------------------------------------
+
+public_router = APIRouter(prefix="/api/public")
+
+# The only posting columns the public API may return. Never `SELECT *`.
+PUBLIC_POSTING_COLUMNS = "id, company_name, title, title_en, locations, posted_date, first_seen, url"
+# What makes a posting visible publicly; also what a visitor's report may point at.
+PUBLIC_POSTING_FILTER = (
+    "archived_at IS NULL AND status IN ('open', 'closing') AND location_match = 'match' AND public_hidden = 0"
+)
+PUBLIC_CACHE_CONTROL = "public, max-age=300"
+
+
+@public_router.get("/postings")
+async def public_postings(response: Response, db: Database = Depends(get_db)):
+    response.headers["Cache-Control"] = PUBLIC_CACHE_CONTROL
+    if not await _public_site_enabled(db):
+        return {"enabled": False, "postings": [], "last_run": None}
+
+    rows = await db.all(
+        f"SELECT {PUBLIC_POSTING_COLUMNS} FROM postings WHERE {PUBLIC_POSTING_FILTER} "
+        "ORDER BY first_seen DESC, id DESC"
+    )
+    for row in rows:
+        row["locations"] = json.loads(row.get("locations") or "[]")
+    last_run = await db.first(
+        "SELECT finished_at FROM runs WHERE kind = 'daily' AND finished_at IS NOT NULL "
+        "ORDER BY finished_at DESC LIMIT 1"
+    )
+    return {"enabled": True, "postings": rows, "last_run": last_run["finished_at"] if last_run else None}
+
+
+class PublicFeedbackCreate(BaseModel):
+    kind: str
+    message: str
+    posting_id: int | None = None
+    page_url: str | None = None
+    website: str | None = None  # honeypot: real visitors never see or fill it
+
+
+def visitor_hash(salt: str, ip: str) -> str:
+    return hashlib.sha256((salt + ip).encode("utf-8")).hexdigest()
+
+
+@public_router.post("/feedback", status_code=204)
+async def public_feedback(body: PublicFeedbackCreate, request: Request, db: Database = Depends(get_db)):
+    if body.website:
+        return Response(status_code=204)  # a bot filled the honeypot: discard silently
+
+    message = body.message.strip()
+    if body.kind not in PUBLIC_FEEDBACK_KINDS:
+        raise HTTPException(status_code=400, detail="Unknown feedback type")
+    if not message or len(message) > FEEDBACK_MAX_CHARS:
+        raise HTTPException(status_code=400, detail=f"Message must be 1 to {FEEDBACK_MAX_CHARS} characters")
+    if body.posting_id is not None:
+        visible = await db.first(
+            f"SELECT id FROM postings WHERE id = ? AND {PUBLIC_POSTING_FILTER}", body.posting_id
+        )
+        if not visible:
+            raise HTTPException(status_code=400, detail="Unknown posting")
+
+    salt = request.app.state.feedback_salt
+    if not salt:
+        raise HTTPException(status_code=503, detail="Feedback isn't available right now")
+    visitor = visitor_hash(salt, request.headers.get("CF-Connecting-IP", ""))
+
+    today = central_today()
+    mine = await db.first(
+        "SELECT COUNT(*) AS n FROM feedback WHERE source = 'public' AND visitor_hash = ? AND substr(created_at, 1, 10) = ?",
+        visitor, today,
+    )
+    total = await db.first(
+        "SELECT COUNT(*) AS n FROM feedback WHERE source = 'public' AND substr(created_at, 1, 10) = ?", today
+    )
+    if (mine or {}).get("n", 0) >= PUBLIC_FEEDBACK_PER_VISITOR_PER_DAY or (total or {}).get("n", 0) >= PUBLIC_FEEDBACK_TOTAL_PER_DAY:
+        raise HTTPException(status_code=429, detail="Try again tomorrow.")
+
+    await db.run(
+        "INSERT INTO feedback (source, kind, posting_id, message, page_url, visitor_hash, created_at) "
+        "VALUES ('public', ?, ?, ?, ?, ?, ?)",
+        body.kind, body.posting_id, message, (body.page_url or "")[:PAGE_URL_MAX_CHARS] or None, visitor, now_iso(),
+    )
+    return Response(status_code=204)
+
+
+app.include_router(public_router)
+
+
+# ---------------------------------------------------------------------------
+# Hostname routing. Plain functions so pytest can cover them; `Default.fetch`
+# below calls them.
+# ---------------------------------------------------------------------------
+
+def _normalize_host(hostname: str) -> str:
+    """Lowercased, without a port."""
+    return (hostname or "").strip().lower().split(":")[0]
+
+
+def route_for_host(hostname: str, path: str, public_hostname: str) -> str:
+    """"private" for the dashboard's hostname (behavior exactly as before),
+    "public" for a path the public hostname may serve, "not_found" for
+    everything else on the public hostname -- every private /api/* path
+    included, before FastAPI sees it.
+    """
+    if not public_hostname or _normalize_host(hostname) != _normalize_host(public_hostname):
+        return "private"
+    if path in ("/", "/index.html", "/style.css") or path.startswith("/public/") or path.startswith("/api/public/"):
+        return "public"
+    return "not_found"
+
+
+def rewrite_public_path(path: str) -> str:
+    """The public page lives at /public/index.html in the assets; `/` and `/index.html` show it."""
+    return "/public/index.html" if path in ("/", "/index.html") else path
+
+
+# ---------------------------------------------------------------------------
 # Worker entrypoint: only this part touches Cloudflare's `env`. Everything
 # above is plain FastAPI/ASGI and is what the pytest suite exercises.
 # ---------------------------------------------------------------------------
@@ -1106,13 +1391,30 @@ try:
 
     class Default(WorkerEntrypoint):  # pragma: no cover - only runs under Pyodide
         async def fetch(self, request):
-            from js import URL  # type: ignore
+            from js import Request, Response as JsResponse, URL  # type: ignore
 
-            path = URL.new(request.url).pathname
+            url = URL.new(request.url)
+            path = url.pathname
+            public_hostname = getattr(self.env, "PUBLIC_HOSTNAME", "") or ""
+            route = route_for_host(url.hostname, path, public_hostname)
+            if route == "not_found":
+                return JsResponse.new("Not found", status=404, headers={"Content-Type": "text/plain; charset=utf-8"})
+
+            if route == "public" and not path.startswith("/api/"):
+                url.pathname = rewrite_public_path(path)
+                response = await self.env.ASSETS.fetch(Request.new(url.toString(), request))
+                if response.status in (301, 302, 307, 308) and response.headers.get("Location"):
+                    # Assets may redirect /public/index.html to /public/; follow it here so the address stays `/`.
+                    target = URL.new(response.headers.get("Location"), url.toString())
+                    if target.pathname.startswith("/public/"):
+                        response = await self.env.ASSETS.fetch(Request.new(target.toString(), request))
+                return response
+
             if not path.startswith("/api"):
                 return await self.env.ASSETS.fetch(request)
 
             app.state.db = D1Database(self.env.DB)
+            app.state.feedback_salt = getattr(self.env, "FEEDBACK_SALT", "") or ""
             app.state.access_team_domain = getattr(self.env, "ACCESS_TEAM_DOMAIN", "") or ""
             app.state.access_aud = getattr(self.env, "ACCESS_AUD", "") or ""
             github_token = getattr(self.env, "GITHUB_TOKEN", "") or ""
