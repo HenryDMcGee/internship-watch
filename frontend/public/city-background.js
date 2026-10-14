@@ -15,11 +15,27 @@
   var LOW_FPS = 15; // swap to the still only when the frame rate stays below this...
   var LOW_FPS_SECONDS = 10; // ...for this many seconds in a row (software WebGL runs in the teens)
   var STILL_THEME = "dark"; // the site has one palette, so the still is always the dark one
-  var SPEED = 6; // world units per second, the slow forward drift
+  var DEFAULT_HEIGHT = 460; // matches .city-bg in style.css, used when the box has no size yet
 
   var COLS = 14;
-  var ROWS = 26;
-  var SPACING = 10;
+  var ROWS = 18;
+  var SPACING = 10; // one building block, front to back
+
+  // The camera drifts down the avenue between the towers, low and looking slightly down.
+  var TOWER_HEIGHT = 24; // the tallest a building can be (see createGrid)
+  var CAMERA = {
+    TOWER_HEIGHT: TOWER_HEIGHT,
+    HEIGHT: TOWER_HEIGHT * 0.23, // 20 to 25 percent of the tallest towers, below most rooftops
+    TILT_DEGREES: 20, // downward, from horizontal
+    FOV: 55,
+    BLOCK_SECONDS: 13.5, // one block passes every 12 to 15 seconds: barely moving
+    SPEED: SPACING / 13.5, // world units per second, forward along -z
+    DRIFT_X: 1.2, // sideways drift, units either side of the avenue's middle
+    DRIFT_Y: 0.6, // vertical drift, units either side of HEIGHT
+    DRIFT_X_SECONDS: 95, // each drift runs on its own long cycle
+    DRIFT_Y_SECONDS: 70,
+  };
+  var FOG_FAR = SPACING * (ROWS - 5); // the far end of the street fades out before the last rows
   var MAX_WINDOWS = 6;
   var SEED = 2027;
 
@@ -93,7 +109,7 @@
       var row = [];
       for (var c = 0; c < cols; c++) {
         var side = c < half ? -1 : 1;
-        var h = 3 + Math.pow(random(), 1.6) * 21;
+        var h = 3 + Math.pow(random(), 1.6) * (TOWER_HEIGHT - 3);
         var building = {
           x: (c - half) * spacing + side * spacing * 0.3, // the extra widens the avenue
           w: spacing * (0.45 + random() * 0.35),
@@ -110,7 +126,7 @@
       return row;
     }
 
-    var grid = { rows: [], offset: 0, spacing: spacing, cols: cols };
+    var grid = { rows: [], offset: 0, recycled: 0, spacing: spacing, cols: cols };
     for (var r = 0; r < opts.rows; r++) grid.rows.push(makeRow());
     grid.rowZ = function (i) { return grid.offset - i * spacing; };
     grid.advance = function (distance) {
@@ -121,6 +137,7 @@
         grid.rows.shift();
         grid.rows.push(makeRow());
         recycled += 1;
+        grid.recycled += 1;
       }
       return recycled;
     };
@@ -140,12 +157,11 @@
     renderer.setPixelRatio(Math.min(opts.dpr || 1, MAX_DPR));
 
     var scene = new THREE.Scene();
-    scene.fog = new THREE.Fog(opts.colors.fog, SPACING * 2, SPACING * (ROWS - 4));
+    scene.fog = new THREE.Fog(opts.colors.fog, SPACING * 2, FOG_FAR);
     renderer.setClearColor(opts.colors.fog);
 
-    var camera = new THREE.PerspectiveCamera(58, opts.width / opts.height, 0.1, SPACING * (ROWS + 2));
-    camera.position.set(0, 11, 0); // above the low buildings, looking down the avenue
-    camera.lookAt(0, 6, -70);
+    var camera = new THREE.PerspectiveCamera(CAMERA.FOV, opts.width / opts.height, 0.1, SPACING * (ROWS + 2));
+    camera.rotation.set(-CAMERA.TILT_DEGREES * Math.PI / 180, 0, 0); // down the street axis (-z), tilted down
 
     var sun = new THREE.DirectionalLight("#ffffff", 1.6);
     sun.position.set(-0.6, 1, 0.5);
@@ -197,16 +213,26 @@
     }
     writeInstances();
 
+    var travel = 0; // total distance the camera has moved forward
     var api = {
       scene: scene,
       camera: camera,
       renderer: renderer,
       grid: grid,
-      // Moves the city toward the camera by `distance` world units.
+      // Moves the camera forward by `distance` world units. Rows that fall behind it are recycled
+      // at the far end, and the meshes shift by whole blocks so the instance count never changes.
       step: function (distance) {
+        travel += distance;
         if (grid.advance(distance) > 0) writeInstances();
-        buildings.position.z = grid.offset;
-        windows.position.z = grid.offset;
+        var meshZ = -grid.recycled * SPACING;
+        buildings.position.z = meshZ;
+        windows.position.z = meshZ;
+        var seconds = travel / CAMERA.SPEED;
+        camera.position.set(
+          CAMERA.DRIFT_X * Math.sin((seconds / CAMERA.DRIFT_X_SECONDS) * 2 * Math.PI),
+          CAMERA.HEIGHT + CAMERA.DRIFT_Y * Math.sin((seconds / CAMERA.DRIFT_Y_SECONDS) * 2 * Math.PI),
+          -travel
+        );
       },
       render: function () { renderer.render(scene, camera); },
       resize: function (width, height) {
@@ -368,7 +394,7 @@
       if (lastRender === null || t - lastRender >= FRAME_MS - 1) {
         var dt = lastTick === null ? 0 : Math.min((t - lastTick) / 1000, 0.1);
         try {
-          scene.step(dt * SPEED);
+          scene.step(dt * CAMERA.SPEED);
           scene.render();
         } catch (e) {
           logFailure("render a frame", e);
@@ -502,6 +528,8 @@
     parseColor: parseColor,
     readTokens: readTokens,
     MAX_WINDOWS: MAX_WINDOWS,
+    SPACING: SPACING,
+    CAMERA: CAMERA,
     LOW_FPS: LOW_FPS,
     LOW_FPS_SECONDS: LOW_FPS_SECONDS,
   };
