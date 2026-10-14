@@ -65,7 +65,7 @@ describe("palette tokens", () => {
   });
 
   test("pages and scripts do not hard-code colors either", () => {
-    for (const file of ["index.html", "public/index.html", "app.js", "public/public.js", "public/city/city-background.js"]) {
+    for (const file of ["index.html", "public/index.html", "app.js", "public/public.js", "public/city-background.js"]) {
       const text = read(file);
       expect(`${file}: ${(text.match(/#[0-9a-fA-F]{6}\b/g) || []).join(",")}`).toBe(`${file}: `);
       expect(text).not.toMatch(/\brgba?\(/);

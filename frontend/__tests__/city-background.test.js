@@ -286,23 +286,18 @@ describe("the static image", () => {
     expect(img.getAttribute("alt")).toBe("");
   });
 
-  test("matches a dark theme", async () => {
-    const s = setup({ width: 390, coarse: true, dark: true });
-    await s.start();
-    expect(document.querySelector("#cityBg img").getAttribute("src")).toContain("dark");
-  });
-
-  test("matches a light theme", async () => {
+  test("always uses the dark still, whatever the system setting", async () => {
     const s = setup({ width: 390, coarse: true, dark: false });
     await s.start();
-    expect(document.querySelector("#cityBg img").getAttribute("src")).toContain("light");
+    expect(document.querySelector("#cityBg img").getAttribute("src")).toBe("/public/city-still-dark.jpg");
+    expect(document.querySelector("#cityBg source").getAttribute("srcset")).toBe("/public/city-still-dark.webp");
   });
 
-  test("an explicit data-theme beats the system setting", async () => {
+  test("an explicit data-theme does not change the still", async () => {
     const s = setup({ width: 390, coarse: true, dark: true });
     document.documentElement.setAttribute("data-theme", "light");
     await s.start();
-    expect(document.querySelector("#cityBg img").getAttribute("src")).toContain("light");
+    expect(document.querySelector("#cityBg img").getAttribute("src")).toBe("/public/city-still-dark.jpg");
   });
 });
 
@@ -341,7 +336,7 @@ describe("the render loop", () => {
     const s = setup();
     const ctl = await s.start();
     const { renderers, geometries, materials } = s.three.made;
-    s.env.run(0, 6000, 50); // 20 frames a second
+    s.env.run(0, 14000, 100); // 10 frames a second
     expect(ctl.mode).toBe("still");
     expect(ctl.reason).toBe("low-fps");
     expect(renderers[0].dispose).toHaveBeenCalled();
@@ -355,11 +350,18 @@ describe("the render loop", () => {
     expect(s.env.pending()).toBe(0); // the loop is over
   });
 
-  test("a slow stretch shorter than 3 seconds does not swap", async () => {
+  test("software-WebGL speeds (about 18 fps) keep the animation", async () => {
     const s = setup();
     const ctl = await s.start();
-    s.env.run(0, 2000, 50); // 2 s at 20 fps
-    s.env.run(2050, 8000, 1000 / 60); // then healthy
+    s.env.run(0, 30000, 1000 / 18);
+    expect(ctl.mode).toBe("animated");
+  });
+
+  test("a slow stretch shorter than 10 seconds does not swap", async () => {
+    const s = setup();
+    const ctl = await s.start();
+    s.env.run(0, 8000, 100); // 8 s at 10 fps
+    s.env.run(8100, 16000, 1000 / 60); // then healthy
     expect(ctl.mode).toBe("animated");
   });
 
@@ -619,12 +621,24 @@ describe("the frame rate monitor", () => {
     for (let t = fromMs; t <= toMs; t += 1000 / fps) monitor.tick(t);
   }
 
-  test("fires after 3 seconds below 30 fps", () => {
+  test("the named settings are 15 fps for 10 seconds", () => {
+    expect(city.LOW_FPS).toBe(15);
+    expect(city.LOW_FPS_SECONDS).toBe(10);
+  });
+
+  test("fires after 10 seconds below 15 fps", () => {
     const onLow = jest.fn();
     const m = city.createFpsMonitor({ onLow });
-    run(m, 20, 0, 5000);
+    run(m, 10, 0, 12000);
     expect(onLow).toHaveBeenCalledTimes(1);
-    expect(onLow.mock.calls[0][0]).toBeLessThan(30);
+    expect(onLow.mock.calls[0][0]).toBeLessThan(15);
+  });
+
+  test("does not fire at 18 fps", () => {
+    const onLow = jest.fn();
+    const m = city.createFpsMonitor({ onLow });
+    run(m, 18, 0, 30000);
+    expect(onLow).not.toHaveBeenCalled();
   });
 
   test("does not fire at 60 fps", () => {
@@ -634,28 +648,28 @@ describe("the frame rate monitor", () => {
     expect(onLow).not.toHaveBeenCalled();
   });
 
-  test("does not fire at exactly 30 fps", () => {
+  test("does not fire at exactly 15 fps", () => {
     const onLow = jest.fn();
     const m = city.createFpsMonitor({ onLow });
-    run(m, 30, 0, 10000);
+    run(m, 15, 0, 20000);
     expect(onLow).not.toHaveBeenCalled();
   });
 
   test("one healthy second restarts the count", () => {
     const onLow = jest.fn();
     const m = city.createFpsMonitor({ onLow });
-    run(m, 20, 0, 2500);
-    run(m, 60, 2517, 3700);
-    run(m, 20, 3717, 6000);
+    run(m, 10, 0, 8500);
+    run(m, 60, 8517, 9700);
+    run(m, 10, 9717, 16000);
     expect(onLow).not.toHaveBeenCalled();
   });
 
   test("reset forgets a slow stretch", () => {
     const onLow = jest.fn();
     const m = city.createFpsMonitor({ onLow });
-    run(m, 20, 0, 2500);
+    run(m, 10, 0, 8500);
     m.reset();
-    run(m, 20, 20000, 22500);
+    run(m, 10, 20000, 28500);
     expect(onLow).not.toHaveBeenCalled();
   });
 });
