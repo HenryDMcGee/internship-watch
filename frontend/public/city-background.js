@@ -12,8 +12,9 @@
   var PHONE_MAX_WIDTH = 768; // narrower than this, with a coarse pointer, is a phone
   var FRAME_MS = 1000 / 30; // frame rate cap
   var MAX_DPR = 2;
-  var LOW_FPS = 30;
-  var LOW_FPS_SECONDS = 3;
+  var LOW_FPS = 15; // swap to the still only when the frame rate stays below this...
+  var LOW_FPS_SECONDS = 10; // ...for this many seconds in a row (software WebGL runs in the teens)
+  var STILL_THEME = "dark"; // the site has one palette, so the still is always the dark one
   var SPEED = 6; // world units per second, the slow forward drift
   var DEFAULT_HEIGHT = 460; // matches .city-bg in style.css, used when the box has no size yet
 
@@ -235,8 +236,8 @@
   // ---- frame rate monitor -----------------------------------------------------------------
 
   // Fed one tick per animation frame (the display's rate, not our capped render rate). Calls
-  // onLow(fps) once the rate has stayed under 30 for 3 seconds in a row. A half frame of slack
-  // keeps a steady 30 from tripping it.
+  // onLow(fps) once the rate has stayed under LOW_FPS for LOW_FPS_SECONDS in a row. A half frame
+  // of slack keeps a steady LOW_FPS from tripping it.
   function createFpsMonitor(opts) {
     var threshold = (opts.threshold || LOW_FPS) - 0.5;
     var needMs = (opts.seconds || LOW_FPS_SECONDS) * 1000;
@@ -285,12 +286,6 @@
     }
   }
 
-  function themeName(win, doc) {
-    var forced = doc.documentElement.getAttribute("data-theme");
-    if (forced === "light" || forced === "dark") return forced;
-    return mediaMatches(win, "(prefers-color-scheme: dark)") ? "dark" : "light";
-  }
-
   function start(options) {
     var opts = options || {};
     var win = opts.window || window;
@@ -335,23 +330,17 @@
 
     function applyTheme() {
       if (disposed) return;
-      if (scene) { scene.setColors(themeColors()); return; }
-      if (picture) {
-        var theme = themeName(win, doc);
-        picture.querySelector("source").setAttribute("srcset", STILL_BASE + theme + ".webp");
-        picture.querySelector("img").setAttribute("src", STILL_BASE + theme + ".jpg");
-      }
+      if (scene) scene.setColors(themeColors());
     }
 
     function showStill(reason) {
-      var theme = themeName(win, doc);
       picture = doc.createElement("picture");
       var source = doc.createElement("source");
       source.setAttribute("type", "image/webp");
-      source.setAttribute("srcset", STILL_BASE + theme + ".webp");
+      source.setAttribute("srcset", STILL_BASE + STILL_THEME + ".webp");
       var img = doc.createElement("img");
       img.className = "city-still";
-      img.setAttribute("src", STILL_BASE + theme + ".jpg");
+      img.setAttribute("src", STILL_BASE + STILL_THEME + ".jpg");
       img.setAttribute("alt", "");
       img.setAttribute("decoding", "async");
       picture.appendChild(source);
@@ -514,6 +503,8 @@
     parseColor: parseColor,
     readTokens: readTokens,
     MAX_WINDOWS: MAX_WINDOWS,
+    LOW_FPS: LOW_FPS,
+    LOW_FPS_SECONDS: LOW_FPS_SECONDS,
   };
 
   if (typeof module !== "undefined" && module.exports) {

@@ -137,15 +137,15 @@ Playwright runs with `reducedMotion: "reduce"`, so pages show the city's still i
 
 ## City background
 
-The night-city background (Phase 8) is `frontend/public/city/city-background.js`, drawn with three.js. Orbit speed, tilt, height and drift are named constants at the top of that file. Colors come from the CSS tokens in `frontend/style.css`.
+The night-city background (Phase 8) is `frontend/public/city-background.js`, drawn with three.js. Orbit speed, tilt, height, drift and the low-frame-rate check (`LOW_FPS`, `LOW_FPS_SECONDS`) are named constants at the top of that file. Colors come from the CSS tokens in `frontend/style.css`.
 
-It lives under `frontend/public/city/` because the public hostname only serves `/public/*`; the dashboard loads the same files. Phones (viewport under 768px with a coarse pointer), reduced motion, no WebGL and slow devices get `city-still.webp` (with a JPEG fallback) instead, and never download three.js.
+It lives under `frontend/public/` because the public hostname only serves `/public/*`; the dashboard loads the same files. Phones (viewport under 768px with a coarse pointer), reduced motion, no WebGL and machines that stay under 15 frames a second for 10 seconds get `city-still-dark.webp` (with a JPEG fallback) instead, and never download three.js. The still is always the dark one.
 
 Two things to regenerate, then commit the results:
 
 ```bash
-npm run build:three   # frontend/public/city/vendor/three.min.js, only the three.js classes the city uses
-npm run city:still    # city-still.webp and city-still.jpg, one rendered frame of the same scene (run after palette or scene changes)
+npm run vendor:three  # frontend/public/vendor/three.min.mjs, only the three.js classes the city uses
+npm run city:still    # the still images, one rendered frame of the same scene (run after palette or scene changes)
 ```
 
 ## Running the daily job by hand
