@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Summer 2027 MBA product internships</title>
+<meta name="description" content="Summer 2027 MBA product internships, found daily by Internship Watch.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<div class="wrap">
+  <p class="empty" id="unavailable" hidden>Not available right now.</p>
+
+  <div id="board" hidden>
+    <header class="hero">
+      <h1 style="font-size:clamp(28px, 7vw, 44px); line-height:1.05">Summer 2027 MBA product internships, found daily by Internship Watch.</h1>
+      <p id="lastUpdated"></p>
+    </header>
+
+    <div class="tabs" role="tablist" aria-label="Postings">
+      <button class="tab" role="tab" id="tabToday" aria-selected="true" type="button">New today<span class="n" id="nToday"></span></button>
+      <button class="tab" role="tab" id="tabEarlier" aria-selected="false" type="button">Earlier<span class="n" id="nEarlier"></span></button>
+    </div>
+    <input class="filter" id="filter" type="search" placeholder="Search by company, title, or location" aria-label="Search postings">
+
+    <ul class="list" id="list" aria-live="polite"></ul>
+
+    <div class="foot">
+      <p>Summer 2027 MBA product internships, found daily by Internship Watch.</p>
+      <p><button class="btn" id="openFeedback" type="button">Feedback</button></p>
+    </div>
+  </div>
+</div>
+
+<dialog id="feedbackDialog" aria-labelledby="feedbackTitle">
+  <div class="sheet">
+    <h2 id="feedbackTitle">Feedback</h2>
+    <p id="fbPosting" hidden></p>
+    <div class="addform" style="grid-template-columns:1fr">
+      <label>Type
+        <select id="fbKind">
+          <option value="dead_link">Dead link</option>
+          <option value="closed">Job is closed</option>
+          <option value="wrong_job">Wrong job</option>
+          <option value="suggestion">Suggestion</option>
+          <option value="other">Other</option>
+        </select>
+      </label>
+      <label>Message
+        <textarea id="fbMessage" maxlength="2000" style="min-height:14vh"></textarea>
+      </label>
+      <!-- Honeypot: people never see this. A filled value is thrown away by the server. -->
+      <div aria-hidden="true" style="position:absolute; left:-10000px; width:1px; height:1px; overflow:hidden">
+        <label>Website <input id="fbWebsite" type="text" name="website" tabindex="-1" autocomplete="off"></label>
+      </div>
+    </div>
+    <div class="row">
+      <button class="btn primary" id="fbSend" type="button">Send</button>
+      <span class="spacer"></span>
+      <button class="btn" id="fbClose" type="button">Close</button>
+    </div>
+    <div class="msg" id="fbMsg" role="status"></div>
+  </div>
+</dialog>
+
+<script src="/public/public.js"></script>
+</body>
+</html>

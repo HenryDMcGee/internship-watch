@@ -18,6 +18,7 @@
         <span class="spinner" id="searchNowSpinner" hidden aria-hidden="true"></span>
         <span id="searchNowLabel">Search now</span>
       </button>
+      <button class="ghost" id="openFeedback" type="button">Feedback</button>
     </div>
     <div class="tools">
       <button class="ghost" id="openTitles" type="button">Titles</button>
@@ -43,6 +44,7 @@
         <button class="more-item" role="menuitem" id="moreSources" type="button">Sources<span class="n" id="nSources"></span></button>
         <button class="more-item" role="menuitem" id="moreAnalytics" type="button">Analytics</button>
         <button class="more-item" role="menuitem" id="moreProposals" type="button">Proposals</button>
+        <button class="more-item" role="menuitem" id="moreFeedback" type="button">Feedback<span class="n" id="nFeedback"></span></button>
       </div>
     </div>
   </div>
@@ -133,6 +135,14 @@
       <span>Company and source changes Claude suggests will show up here for you to approve or reject.</span>
     </div>
     <div id="proposalsList"></div>
+  </section>
+
+  <section id="feedbackView" hidden>
+    <div id="feedbackEmpty" class="empty" hidden>
+      <strong>No feedback yet</strong>
+      <span>Reports from the public job board and your own Feedback button show up here.</span>
+    </div>
+    <div id="feedbackList"></div>
   </section>
 
   <div class="status" id="status"></div>
@@ -331,12 +341,45 @@
       <input type="checkbox" id="locRemote">
       <label for="locRemote">Include remote postings</label>
     </div>
+    <h3>Public site</h3>
+    <div class="checkrow">
+      <input type="checkbox" id="locPublic">
+      <label for="locPublic">Public site (jobs.mcgeehenry.com)</label>
+    </div>
+    <p class="sub" style="margin-top:-4px">Off by default. Turn it on after the DNS record is in place. The public page updates within 5 minutes of a change.</p>
     <div class="row">
       <button class="btn primary" id="locationsSave" type="button">Save</button>
       <span class="spacer"></span>
       <button class="btn" id="locationsClose" type="button">Close</button>
     </div>
     <div class="msg" id="locationsMsg"></div>
+  </div>
+</dialog>
+
+<dialog id="feedbackDialog" aria-labelledby="feedbackTitle">
+  <div class="sheet">
+    <h2 id="feedbackTitle">Feedback</h2>
+    <div class="addform" style="grid-template-columns:1fr">
+      <label>Type
+        <select id="fbKind">
+          <option value="bug">Bug</option>
+          <option value="dead_link">Dead link</option>
+          <option value="closed">Job is closed</option>
+          <option value="wrong_job">Wrong job</option>
+          <option value="suggestion">Suggestion</option>
+          <option value="other">Other</option>
+        </select>
+      </label>
+      <label>Message
+        <textarea id="fbMessage" maxlength="2000" style="min-height:14vh"></textarea>
+      </label>
+    </div>
+    <div class="row">
+      <button class="btn primary" id="fbSend" type="button">Send</button>
+      <span class="spacer"></span>
+      <button class="btn" id="fbClose" type="button">Close</button>
+    </div>
+    <div class="msg" id="fbMsg" role="status"></div>
   </div>
 </dialog>
 

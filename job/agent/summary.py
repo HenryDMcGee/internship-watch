@@ -39,6 +39,7 @@ def build_summary_payload(
     alerts: list[dict],
     health: dict | None = None,
     run_minutes: float | None = None,
+    feedback_line: str | None = None,
 ) -> dict:
     payload = {
         "date": date,
@@ -53,6 +54,9 @@ def build_summary_payload(
     }
     if run_minutes is not None:
         payload["run_minutes"] = round(run_minutes, 1)
+    if feedback_line:
+        # Counts only (for example "3 new feedback items, 1 about a dead link."); never message text.
+        payload["feedback_line"] = feedback_line
     if health is not None:
         # Failed check ids, how many days in a row found nothing new, and -- once that
         # reaches 3 -- a per-step breakdown (searches, covered, pages_loaded, classified).

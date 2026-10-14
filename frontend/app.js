@@ -13,6 +13,7 @@
     companies: [],
     analytics: null,
     proposals: [],
+    feedback: [],
     titlesOriginal: null,
     titlesDraft: null,
     titlesConfirmDelete: null,
@@ -140,7 +141,9 @@
     $("sourcesView").hidden = state.tab !== "sources";
     $("analyticsView").hidden = state.tab !== "analytics";
     $("proposalsView").hidden = state.tab !== "proposals";
+    $("feedbackView").hidden = state.tab !== "feedback";
 
+    if (state.tab === "feedback") { renderFeedback(); return; }
     if (state.tab === "sources") { renderSources(); return; }
     if (state.tab === "analytics") { renderAnalytics(); return; }
     if (state.tab === "proposals") { renderProposals(); return; }
@@ -218,6 +221,8 @@
       li.appendChild(el("div", "ti", p.title || ""));
       if (p.location_match === "unclear") li.appendChild(el("span", "tag unclear", "Location unclear"));
       else if (p.location_match === "outside") li.appendChild(el("span", "tag", "Outside your locations"));
+      if (p.public_hidden) li.appendChild(el("span", "tag", "Hidden from public"));
+      if (p.visitor_reports) li.appendChild(el("span", "tag unclear", "Reported by a visitor (" + p.visitor_reports + ")"));
       var meta = el("div", "meta");
       var locations = (p.locations || []).join(", ");
       if (locations) meta.appendChild(el("span", null, locations));
@@ -263,6 +268,12 @@
         markClosed.addEventListener("click", function () { confirmPosting(p, "closed", markClosed); });
         actions.appendChild(markClosed);
 
+        var hide = el("button", "btn", "Hide from public");
+        hide.type = "button";
+        hide.setAttribute("aria-pressed", p.public_hidden ? "true" : "false");
+        hide.addEventListener("click", function () { toggleHidden(p, hide); });
+        actions.appendChild(hide);
+
         var del = el("button", "btn del", "Delete");
         del.type = "button";
         var timer = null;
@@ -287,6 +298,17 @@
     btn.disabled = true;
     try { await apiPost("/postings/" + p.id + "/applied", { applied: !p.applied }); await loadPostings(); }
     catch (e) { setStatus("Couldn't save that change. " + e.message); }
+    btn.disabled = false;
+  }
+
+  async function toggleHidden(p, btn) {
+    btn.disabled = true;
+    var hide = !p.public_hidden;
+    try {
+      await apiPost("/postings/" + p.id + "/public-hidden", { hidden: hide });
+      await loadPostings();
+      setStatus((hide ? "Hidden from the public page." : "Shown on the public page again.") + " The public page updates within 5 minutes.");
+    } catch (e) { setStatus("Couldn't save that change. " + e.message); }
     btn.disabled = false;
   }
 
@@ -772,6 +794,123 @@
   }
 
   // -------------------------------------------------------------------
+  // Feedback
+  // -------------------------------------------------------------------
+
+  var FEEDBACK_KINDS = {
+    bug: "Bug", dead_link: "Dead link", closed: "Job is closed",
+    wrong_job: "Wrong job", suggestion: "Suggestion", other: "Other"
+  };
+
+  async function loadFeedback() {
+    try {
+      var body = await apiGet("/feedback");
+      state.feedback = body.feedback;
+    } catch (e) {
+      setStatus("Couldn't load feedback. " + e.message);
+    }
+    $("nFeedback").textContent = state.feedback.filter(function (f) { return f.status === "new"; }).length || "";
+    render();
+  }
+
+  // Jumps to a posting's card: opens the tab it is in and filters to its company.
+  function showCard(postingId, company) {
+    var tab = ["today", "earlier", "archived"].filter(function (name) {
+      return state.postings[name].some(function (p) { return p.id === postingId; });
+    })[0];
+    if (!tab) { setStatus("That posting is no longer in the lists."); return; }
+    state.query = (company || "").trim();
+    $("filter").value = state.query;
+    state.showClosed = true;
+    selectTab(tab);
+  }
+
+  function renderFeedback() {
+    var rows = state.feedback;
+    $("feedbackEmpty").hidden = !!rows.length;
+    var list = $("feedbackList");
+    list.textContent = "";
+    rows.forEach(function (f) {
+      var row = el("div", "row-item");
+      row.style.alignItems = "flex-start";
+      var name = el("div", "name");
+      name.appendChild(document.createTextNode((FEEDBACK_KINDS[f.kind] || f.kind) + (f.status === "new" ? " (new)" : "")));
+      var message = el("span", null, f.message);  // textContent only: stored text is never read as HTML
+      message.style.whiteSpace = "pre-wrap";
+      message.style.color = "var(--ink)";
+      name.appendChild(message);
+      if (f.posting_id != null) {
+        var cardLink = el("a", null, (f.posting_company || "Posting") + ", " + (f.posting_title || ""));
+        cardLink.href = "#";
+        cardLink.addEventListener("click", function (e) { e.preventDefault(); showCard(f.posting_id, f.posting_company); });
+        var wrap = el("span", null, "Posting: ");
+        wrap.appendChild(cardLink);
+        name.appendChild(wrap);
+      }
+      name.appendChild(el("span", null, (f.source === "public" ? "Visitor" : "You") + ", " + fmtDateTime(f.created_at) +
+        (f.status === "read" ? ", read" : "") + (f.status === "dismissed" ? ", dismissed" : "")));
+      if (f.issue_url && safeUrl(f.issue_url)) {
+        var issue = el("a", null, "GitHub issue");
+        issue.href = safeUrl(f.issue_url); issue.target = "_blank"; issue.rel = "noopener noreferrer";
+        var issueWrap = el("span", null, "");
+        issueWrap.appendChild(issue);
+        name.appendChild(issueWrap);
+      }
+      row.appendChild(name);
+
+      var actions = el("div", "actions");
+      actions.style.marginTop = "0";
+      actions.style.flexDirection = "column";
+      if (f.status === "new") actions.appendChild(feedbackButton("Mark read", function (b) { return decideFeedback(f, "status", { status: "read" }, b); }));
+      if (f.status !== "dismissed") actions.appendChild(feedbackButton("Dismiss", function (b) { return decideFeedback(f, "status", { status: "dismissed" }, b); }));
+      if (!f.issue_url) actions.appendChild(feedbackButton("Open as GitHub issue", function (b) { return decideFeedback(f, "issue", {}, b); }));
+      row.appendChild(actions);
+      list.appendChild(row);
+    });
+  }
+
+  function feedbackButton(label, handler) {
+    var b = el("button", "btn", label);
+    b.type = "button";
+    b.addEventListener("click", function () { handler(b); });
+    return b;
+  }
+
+  async function decideFeedback(f, action, body, btn) {
+    btn.disabled = true;
+    try {
+      await apiPost("/feedback/" + f.id + "/" + action, body);
+      if (action === "issue") setStatus("Opened a GitHub issue.");
+      await Promise.all([loadFeedback(), loadPostings()]);
+    } catch (e) {
+      btn.disabled = false;
+      setStatus("Couldn't save that. " + e.message);
+    }
+  }
+
+  $("openFeedback").addEventListener("click", function () {
+    $("fbMsg").textContent = "";
+    $("fbMessage").value = "";
+    var dialog = $("feedbackDialog");
+    if (dialog.showModal) dialog.showModal(); else dialog.setAttribute("open", "");
+  });
+  $("fbClose").addEventListener("click", function () { closeDialog($("feedbackDialog")); });
+  $("fbSend").addEventListener("click", async function () {
+    var message = $("fbMessage").value.trim();
+    if (!message) { $("fbMsg").textContent = "Write a message first."; return; }
+    $("fbSend").disabled = true;
+    try {
+      await apiPost("/feedback", { kind: $("fbKind").value, message: message, page_url: window.location.href });
+      $("fbMsg").textContent = "Thanks, sent.";
+      $("fbMessage").value = "";
+      loadFeedback();
+    } catch (e) {
+      $("fbMsg").textContent = "Couldn't send. " + e.message;
+    }
+    $("fbSend").disabled = false;
+  });
+
+  // -------------------------------------------------------------------
   // Budgets
   // -------------------------------------------------------------------
 
@@ -975,7 +1114,7 @@
   // Tabs and filter
   // -------------------------------------------------------------------
 
-  var MORE_TABS = ["sources", "analytics", "proposals"];
+  var MORE_TABS = ["sources", "analytics", "proposals", "feedback"];
 
   function selectTab(t) {
     state.tab = t;
@@ -991,6 +1130,7 @@
     if (t === "sources" && !state.sources.length) loadSources();
     if (t === "analytics") loadAnalytics();
     if (t === "proposals") loadProposals();
+    if (t === "feedback") loadFeedback();
     render();
   }
   $("tabToday").addEventListener("click", function () { selectTab("today"); });
@@ -1600,6 +1740,7 @@
       var loc = await apiGet("/settings/locations");
       $("locJP").checked = loc.countries.indexOf("JP") !== -1;
       $("locRemote").checked = !!loc.include_remote;
+      $("locPublic").checked = !!(await apiGet("/settings/public-site")).enabled;
     } catch (e) {
       $("locationsMsg").textContent = "Couldn't load locations. " + e.message;
     }
@@ -1611,7 +1752,8 @@
     $("locationsSave").disabled = true;
     try {
       await apiPut("/settings/locations", { countries: countries, include_remote: $("locRemote").checked });
-      $("locationsMsg").textContent = "Saved.";
+      await apiPut("/settings/public-site", { enabled: $("locPublic").checked });
+      $("locationsMsg").textContent = "Saved. The public page updates within 5 minutes.";
     } catch (e) {
       $("locationsMsg").textContent = "Couldn't save. " + e.message;
     }
@@ -1621,4 +1763,5 @@
   render();
   loadPostings();
   loadSources();
+  loadFeedback();
 })();
