@@ -41,10 +41,11 @@ Every morning, find open Summer 2027 MBA internships that match Henry's titles a
 5. Classify each result: matches an active title or alias, MBA-level, Summer 2027, not an excluded word, location (US, Japan, and remote if switched on). Store the matched title and an English title if the original isn't English.
 6. Verify each posting, new and existing, stopping at the first definite answer:
    1. the company's data feed (Workday, Apple, Greenhouse, Lever, Ashby, and others)
-   2. structured job data in the page (schema.org JobPosting, `validThrough`)
-   3. headless browser (Playwright and Chromium), capped by the `browser_checks_per_run` setting (default 50); Haiku reads the text only when it's unclear
-   4. mirror sites (Dreamwork, Simplify) as a tiebreaker only
-   5. Henry's Mark open or Mark closed answer, which sticks unless the posting disappears from the company's own feed
+   2. the company's careers page: a posting listed on it in this run counts as open; a posting missing from it is never marked closed, since careers pages often show only their first page of results
+   3. structured job data in the page (schema.org JobPosting, `validThrough`)
+   4. headless browser (Playwright and Chromium), capped by the `browser_checks_per_run` setting (default 50); unconfirmed postings, newest first, get these checks before the rest; Haiku reads the text only when it's unclear
+   5. mirror sites (Dreamwork, Simplify) as a tiebreaker only
+   6. Henry's Mark open or Mark closed answer, which sticks unless the posting disappears from the company's own feed
 7. Archive postings that are gone, past their deadline, no longer accepting applications, or for the wrong cycle, such as "MBA class of 2027". Never delete.
 8. Save everything to D1 and record verification method and time.
 9. Source scout: find careers pages, feeds, and job boards for companies without a working source first. New sources start as `trial` and become `active` after finding a real open posting. Sources that keep finding nothing are `demoted`. Retiring needs Henry's approval.
@@ -134,6 +135,7 @@ Map the old field names (`firstSeen`, `statusNote`, and so on) to the new schema
    - `browser_run_usage` tracking, a careers time budget, and Claude-proposed careers page repairs in Proposals
 7. **Public job board and feedback:**
    - `https://jobs.mcgeehenry.com`, no login, read only: open and closing postings with New today and Earlier tabs, search, and a "Last updated" line
+   - postings whose status isn't confirmed yet show too, tagged "Not yet confirmed", so a new find appears after the run that found it (Henry, October 2026)
    - a switch in the Locations panel (starts off) and a Hide from public toggle per posting
    - a feedback form on the public board (honeypot, 10 a day per visitor, 200 a day in total), the owner's own Feedback button, and a Feedback view with Mark read, Dismiss, and Open as GitHub issue
    - a counts-only feedback line in the daily summary

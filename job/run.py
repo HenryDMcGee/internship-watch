@@ -234,6 +234,7 @@ async def _fetch_and_store(
 async def _run_careers_pages(
     db, companies: list[dict], budget_settings: dict, titles_doc: dict, locations_setting: dict,
     *, run_id: int, run_claude, candidates: list[Candidate] | None = None,
+    seen_links: dict[int, set[str]] | None = None,
 ) -> tuple[set[int], list[int], dict]:
     """Reads careers pages for companies with a `careers_url` on file and no
     recognized feed (issue #53, phase 6 part 1). Runs after classification,
@@ -247,6 +248,8 @@ async def _run_careers_pages(
     Returns the set of company ids whose page loaded this run (so the scout
     skips them), the ids of postings saved, and a dict of counts for the run
     summary. Listings the rules couldn't place are added to `candidates`.
+    Every listing link read off a page this run is added to `seen_links`
+    (when given), by company id, for the status check at the end of the run.
     """
     started = clock()
     minutes = float(budget_settings.get("careers_minutes_per_run") or DEFAULT_CAREERS_MINUTES_PER_RUN)
@@ -410,6 +413,8 @@ async def _run_careers_pages(
             await _note_empty_page(db, company, existing, stats)
 
         for listing in listings:
+            if seen_links is not None and listing.get("link"):
+                seen_links.setdefault(company["id"], set()).add(listing["link"])
             fp_outcome = await fingerprint.match_incoming(
                 db, company_name=company["name"], title=listing["title"], url=listing.get("link"),
                 location_text=listing.get("location") or "", external_id=listing.get("job_id"),
@@ -566,14 +571,22 @@ def _careers_pages_summary_line(stats: dict | None) -> str | None:
 
 async def _verify_and_prune(
     db, companies: list[dict], feed_ok: dict[int, bool], current_urls: dict[int, set[str]],
-    browser_budget: BrowserBudget, *, unclear_reader=None,
+    browser_budget: BrowserBudget, *, unclear_reader=None, careers_links: dict[int, set[str]] | None = None,
 ) -> None:
+    """Checks every active posting's status. `careers_links` holds, per company,
+    the posting links read off its careers page this run; a posting listed
+    there counts as open. Unconfirmed postings go first, newest first, so the
+    run's limited browser checks reach new finds before older ones.
+    """
     company_ids = [c["id"] for c in companies]
     if not company_ids:
         return
+    careers_links = careers_links or {}
     clause, param = in_json("company_id", company_ids)
     postings = await db.all(
-        f"SELECT * FROM postings WHERE archived_at IS NULL AND {clause}", param
+        f"SELECT * FROM postings WHERE archived_at IS NULL AND {clause} "
+        "ORDER BY (status = 'unverified') DESC, first_seen DESC, id DESC",
+        param,
     )
 
     for posting in postings:
@@ -582,6 +595,7 @@ async def _verify_and_prune(
             posting,
             feed_checked_ok=feed_ok.get(company_id, False),
             found_in_current_feed=posting["url"] in current_urls.get(company_id, set()),
+            found_on_careers_page=bool(posting["url"]) and posting["url"] in careers_links.get(company_id, set()),
             browser_budget=browser_budget,
             now_iso=now_iso(),
             unclear_reader=unclear_reader,
@@ -786,6 +800,9 @@ async def _run_body(db, run_id: int, started_at: str, kind: str, company_ids: li
     unclear_reader = None
     unclear_results: list = []
     careers_stats = None
+    # Posting links read off careers pages this run, by company id (filled in by
+    # the careers step): a posting listed there is confirmed open below.
+    careers_links: dict[int, set[str]] = {}
     # Remembered rejections skipped while reading feeds, and (below) while
     # handling discovery results that would otherwise go to the classifier.
     feed_rejections_skipped = rejections_skipped
@@ -806,6 +823,7 @@ async def _run_body(db, run_id: int, started_at: str, kind: str, company_ids: li
                 covered, posting_ids, careers_stats = await _run_careers_pages(
                     db, companies, budget_settings, titles_doc, locations_setting,
                     run_id=run_id, run_claude=agent_client.run_claude_step, candidates=shared_candidates,
+                    seen_links=careers_links,
                 )
             except Exception as exc:  # noqa: BLE001 - a careers-pages bug must not stop the run, same as
                 # every other per-step isolation in this function.
@@ -852,7 +870,10 @@ async def _run_body(db, run_id: int, started_at: str, kind: str, company_ids: li
             "steps_succeeded": [], "claude_limit_hit": False, "errors": [], "title_pr": None,
         }
 
-    await _verify_and_prune(db, companies, feed_ok, current_urls, browser_budget, unclear_reader=unclear_reader)
+    await _verify_and_prune(
+        db, companies, feed_ok, current_urls, browser_budget,
+        unclear_reader=unclear_reader, careers_links=careers_links,
+    )
 
     for unclear_result in unclear_results:
         await record_usage(db, run_id=run_id, step="unclear_page", result=unclear_result, now_iso=now_iso())

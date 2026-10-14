@@ -982,3 +982,79 @@ def test_run_summary_reports_correct_skipped_feed_count(empty_db, monkeypatch):
 
     assert result["feeds_skipped"] == 5
     assert "5 feed(s) unchanged and skipped" in result["summary"]
+
+
+# ---------------------------------------------------------------------------
+# Verification order and careers-page confirmation (public board not
+# updating after a search)
+# ---------------------------------------------------------------------------
+
+def _insert_posting(db, company_id, **overrides):
+    row = {
+        "company_id": company_id, "company_name": "Acme", "title": "Product Intern",
+        "matched_title": "Product Intern", "url": "https://acme.example/jobs/1", "locations": "[]",
+        "location_match": "match", "first_seen": "2026-10-01", "status": "unverified",
+    }
+    row.update(overrides)
+    columns = ", ".join(row)
+    return run(db.run(f"INSERT INTO postings ({columns}) VALUES ({', '.join('?' for _ in row)})", *row.values()))
+
+
+@pytest.fixture
+def offline_checks(monkeypatch):
+    """Page-data checks find nothing, and every browser check is recorded
+    (in order) and reads as an open posting."""
+    import requests
+
+    from job.verify import browser as browser_module
+    from job.verify import structured as structured_module
+
+    def no_network(*args, **kwargs):
+        raise requests.ConnectionError("offline in tests")
+
+    monkeypatch.setattr(structured_module.requests, "get", no_network)
+    checked: list[str] = []
+
+    def fake_load_page_text(url):
+        checked.append(url)
+        return "Apply now for this internship."
+
+    monkeypatch.setattr(browser_module, "_load_page_text", fake_load_page_text)
+    return checked
+
+
+def test_unconfirmed_and_newest_postings_get_the_browser_checks_first(empty_db, offline_checks):
+    company_id = _insert_company(empty_db, feed_type=None, feed_id=None)
+    _insert_posting(empty_db, company_id, url="https://acme.example/jobs/old-open", status="open",
+                    verified_via="browser", first_seen="2026-09-01")
+    _insert_posting(empty_db, company_id, url="https://acme.example/jobs/old-unconfirmed", first_seen="2026-09-15")
+    _insert_posting(empty_db, company_id, url="https://acme.example/jobs/new-unconfirmed", first_seen="2026-10-13")
+
+    run(run_module._verify_and_prune(
+        empty_db, [{"id": company_id}], feed_ok={}, current_urls={},
+        browser_budget=run_module.BrowserBudget(remaining=2),
+    ))
+
+    assert offline_checks == ["https://acme.example/jobs/new-unconfirmed", "https://acme.example/jobs/old-unconfirmed"]
+    statuses = {p["url"]: p["status"] for p in run(empty_db.all("SELECT url, status FROM postings"))}
+    assert statuses["https://acme.example/jobs/new-unconfirmed"] == "open"
+    assert statuses["https://acme.example/jobs/old-unconfirmed"] == "open"
+
+
+def test_posting_listed_on_this_runs_careers_page_is_confirmed_open(empty_db, offline_checks):
+    company_id = _insert_company(empty_db, feed_type=None, feed_id=None, careers_url="https://acme.example/careers")
+    listed = _insert_posting(empty_db, company_id, url="https://acme.example/jobs/listed")
+    not_listed = _insert_posting(empty_db, company_id, url="https://acme.example/jobs/not-listed")
+
+    run(run_module._verify_and_prune(
+        empty_db, [{"id": company_id}], feed_ok={}, current_urls={},
+        browser_budget=run_module.BrowserBudget(remaining=0),
+        careers_links={company_id: {"https://acme.example/jobs/listed"}},
+    ))
+
+    rows = {p["id"]: p for p in run(empty_db.all("SELECT * FROM postings"))}
+    assert rows[listed]["status"] == "open"
+    assert rows[listed]["verified_via"] == "careers_page"
+    assert rows[not_listed]["status"] == "unverified"
+    assert rows[not_listed]["archived_at"] is None
+    assert offline_checks == []  # the browser budget was 0

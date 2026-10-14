@@ -249,3 +249,58 @@ def test_verify_everything_unclear_keeps_previous_status():
         check_browser=lambda url: VerifyDecision("unclear"),
     )
     assert outcome.status == "unverified"
+
+
+# ---------------------------------------------------------------------------
+# Careers pages count as confirmation (public board not updating after a search)
+# ---------------------------------------------------------------------------
+
+def _must_not_be_called(*args, **kwargs):
+    raise AssertionError("a posting listed on the careers page needs no other check")
+
+
+def test_verify_listed_on_careers_page_means_open():
+    outcome = verify_posting(
+        _posting(), feed_checked_ok=False, found_in_current_feed=False, found_on_careers_page=True,
+        browser_budget=BrowserBudget(remaining=5), now_iso="2026-10-14T08:00:00",
+        check_structured=_must_not_be_called, check_browser=_must_not_be_called,
+        check_mirror_site=_must_not_be_called,
+    )
+    assert outcome.status == "open"
+    assert outcome.verified_via == "careers_page"
+    assert outcome.verified_at == "2026-10-14T08:00:00"
+
+
+def test_verify_missing_from_careers_page_never_means_closed():
+    # A careers page often shows only its first page of results, so a posting
+    # that isn't on it falls through to the usual checks instead.
+    from job.verify.text_signals import VerifyDecision
+
+    outcome = verify_posting(
+        _posting(status="open", verified_via="careers_page", verified_at="2026-10-13T08:00:00"),
+        feed_checked_ok=False, found_in_current_feed=False, found_on_careers_page=False,
+        browser_budget=BrowserBudget(remaining=5), now_iso="2026-10-14T08:00:00",
+        check_structured=lambda url, session=None: VerifyDecision("unclear"),
+        check_browser=lambda url: VerifyDecision("unclear"),
+    )
+    assert outcome.status == "open"
+    assert outcome.verified_via == "careers_page"
+
+
+def test_verify_mark_closed_beats_the_careers_page():
+    outcome = verify_posting(
+        _posting(user_status="closed", user_status_at="2026-10-01T00:00:00"),
+        feed_checked_ok=False, found_in_current_feed=False, found_on_careers_page=True,
+        browser_budget=BrowserBudget(remaining=5), now_iso="2026-10-14T08:00:00",
+    )
+    assert outcome.status == "closed"
+    assert outcome.verified_via == "user"
+
+
+def test_verify_feed_still_decides_before_the_careers_page():
+    outcome = verify_posting(
+        _posting(), feed_checked_ok=True, found_in_current_feed=False, found_on_careers_page=True,
+        browser_budget=BrowserBudget(remaining=5), now_iso="2026-10-14T08:00:00",
+    )
+    assert outcome.status == "closed"
+    assert outcome.verified_via == "feed"

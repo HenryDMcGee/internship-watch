@@ -43,6 +43,12 @@ describe("pure helpers", () => {
     expect(mod.matches({ company_name: "X", title: "Y" }, "x")).toBe(true);
   });
 
+  test("isConfirmed is false only when the API says the posting is not confirmed", () => {
+    expect(mod.isConfirmed(posting({ confirmed: false }))).toBe(false);
+    expect(mod.isConfirmed(posting({ confirmed: true }))).toBe(true);
+    expect(mod.isConfirmed(posting())).toBe(true);
+  });
+
   test("titleOf prefers the english title", () => {
     expect(mod.titleOf({ title: "a", title_en: "b" })).toBe("b");
     expect(mod.titleOf({ title: "a" })).toBe("a");
@@ -130,6 +136,23 @@ describe("page", () => {
     filter.dispatchEvent(new Event("input"));
     document.getElementById("tabToday").click();
     expect(document.querySelectorAll("#list li.item")).toHaveLength(1);
+  });
+
+  test("an unconfirmed posting carries a Not yet confirmed tag and confirmed ones do not", async () => {
+    boot({
+      enabled: true,
+      postings: [
+        posting({ id: 1, company_name: "Nintendo", confirmed: false }),
+        posting({ id: 2, company_name: "Amazon", confirmed: true }),
+      ],
+    });
+    await flush();
+    const cards = Array.from(document.querySelectorAll("#list li.item"));
+    expect(cards).toHaveLength(2);
+    const nintendo = cards.find((c) => c.querySelector("h3").textContent === "Nintendo");
+    const amazon = cards.find((c) => c.querySelector("h3").textContent === "Amazon");
+    expect(nintendo.querySelector(".badge.unverified").textContent).toBe("Not yet confirmed");
+    expect(amazon.querySelector(".badge")).toBeNull();
   });
 
   test("empty tabs say so", async () => {

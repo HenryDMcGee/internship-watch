@@ -44,6 +44,9 @@
 
   function titleOf(p) { return p.title_en || p.title || ""; }
 
+  // The API sends confirmed: false while a posting's status isn't confirmed yet.
+  function isConfirmed(p) { return p.confirmed !== false; }
+
   function matches(p, q) {
     if (!q) return true;
     var haystack = [p.company_name, titleOf(p), p.title || "", (p.locations || []).join(" ")].join(" ").toLowerCase();
@@ -83,6 +86,7 @@
 
     rows.forEach(function (p) {
       var item = el("li", "item" + (state.tab === "today" ? " new" : ""));
+      if (!isConfirmed(p)) item.appendChild(el("span", "badge unverified", "Not yet confirmed"));
       item.appendChild(el("h3", "co", p.company_name || ""));
       item.appendChild(el("div", "ti", titleOf(p)));
       var meta = el("div", "meta");
@@ -205,7 +209,7 @@
   if (typeof module !== "undefined" && module.exports) {
     module.exports = {
       fmtDate: fmtDate, fmtDateTime: fmtDateTime, centralToday: centralToday, safeUrl: safeUrl,
-      titleOf: titleOf, matches: matches, splitByTab: splitByTab,
+      titleOf: titleOf, isConfirmed: isConfirmed, matches: matches, splitByTab: splitByTab,
       feedbackError: feedbackError, feedbackPayload: feedbackPayload, feedbackStatusText: feedbackStatusText
     };
   }

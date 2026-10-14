@@ -1,4 +1,4 @@
-"""Verification order: data feed, structured page data, headless browser, mirror sites.
+"""Verification order: data feed, careers page, structured page data, headless browser, mirror sites.
 
 Follows `docs/plan.md`'s "Daily run, in order" step 6. Henry's Mark
 open/closed answer is sticky and skips every automated check, unless the
@@ -28,6 +28,7 @@ def verify_posting(
     found_in_current_feed: bool,
     browser_budget: BrowserBudget,
     now_iso: str,
+    found_on_careers_page: bool = False,
     session=None,
     check_structured=check_structured_data,
     check_browser=check_via_browser,
@@ -52,6 +53,15 @@ def verify_posting(
         return VerifyOutcome(
             status="closed", verified_via="feed", verified_at=now_iso,
             note="No longer listed in the company's feed.",
+        )
+
+    # 1b. Listed on the company's own careers page this run. Only a listing
+    # confirms anything: careers pages often show just their first page of
+    # results, so a posting missing from one falls through to the checks below.
+    if found_on_careers_page:
+        return VerifyOutcome(
+            status="open", verified_via="careers_page", verified_at=now_iso,
+            note="Listed on the company's careers page.",
         )
 
     # 2. Structured page data (schema.org JobPosting).
