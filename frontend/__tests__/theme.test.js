@@ -168,6 +168,28 @@ describe("the city background layer", () => {
     expect(behind).toEqual([".city-bg"]);
   });
 
+  test("is fixed to the whole viewport, edge to edge, with no mask", () => {
+    const body = bodiesFor(".city-bg");
+    expect(body).toMatch(/position:\s*fixed/);
+    expect(body).toMatch(/top:\s*0/);
+    expect(body).toMatch(/left:\s*0/);
+    expect(body).toMatch(/width:\s*100(vw|%)/);
+    expect(body).toMatch(/height:\s*100(vh|%)/);
+    expect(body).not.toMatch(/height:\s*\d+px/);
+    expect(body).not.toMatch(/mask/);
+  });
+
+  test("the page color is on html, and body and the wrapper are transparent", () => {
+    expect(bodiesFor("html")).toMatch(/background:\s*var\(--bg\)/);
+    expect(bodiesFor("body")).not.toMatch(/background:\s*var\(--bg\)/);
+    expect(bodiesFor("body")).toMatch(/background:\s*transparent/);
+    expect(bodiesFor(".wrap")).not.toMatch(/background/);
+  });
+
+  test("the still image crops to cover the viewport", () => {
+    expect(bodiesFor(".city-still")).toMatch(/object-fit:\s*cover/);
+  });
+
   test("a scrim built from the page color sits over the scene", () => {
     const scrim = bodiesFor(".city-scrim");
     expect(scrim).toContain("linear-gradient");
