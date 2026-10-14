@@ -113,6 +113,30 @@ describe("WCAG AA contrast (4.5:1) for every text and control pairing", () => {
   });
 });
 
+describe("hero subtitle over the city", () => {
+  // The "Last updated" line sits straight on the animated city, where lit windows and pale towers
+  // drift behind it. The ordinary muted grey washes out there, so the subtitle gets its own,
+  // brighter token and a soft shadow behind the letters. Only the hero subtitle; muted text on
+  // cards already sits on a surface that covers the city.
+  test("uses a brighter token than ordinary muted text", () => {
+    const t = tokens();
+    expect(t["--muted-strong"]).toBeDefined();
+    expect(bodiesFor(".hero p")).toContain("var(--muted-strong)");
+    expect(bodiesFor(".hero p")).not.toContain("var(--muted)");
+    expect(contrast(t["--muted-strong"], t["--surface"])).toBeGreaterThanOrEqual(10);
+    expect(contrast(t["--muted-strong"], t["--surface"])).toBeGreaterThan(contrast(t["--muted"], t["--surface"]));
+  });
+
+  test("has a dark shadow behind the letters", () => {
+    expect(bodiesFor(".hero p")).toMatch(/text-shadow\s*:/);
+  });
+
+  test("the shadow stays on the hero subtitle only", () => {
+    const shadowed = rules().filter((r) => /text-shadow\s*:/.test(r.body)).map((r) => r.selector);
+    expect(shadowed).toEqual([".hero p"]);
+  });
+});
+
 describe("where the colors are used", () => {
   test("neon blue marks buttons, the active tab, links and focus rings", () => {
     expect(bodiesFor(".tab[aria-selected=\"true\"]")).toContain("var(--accent)");
