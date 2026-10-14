@@ -6,7 +6,7 @@ const city = require("../public/city-background.js");
 // ---- a fake of the parts of three.js the scene uses ------------------------------------
 
 function fakeThree() {
-  const made = { renderers: [], geometries: [], materials: [], meshes: [] };
+  const made = { renderers: [], geometries: [], materials: [], meshes: [], cameras: [] };
   class Vec { constructor() { this.x = 0; this.y = 0; this.z = 0; } set(x, y, z) { this.x = x; this.y = y; this.z = z; return this; } }
   class Color {
     constructor(v) { this.v = v; }
@@ -22,7 +22,7 @@ function fakeThree() {
   class Scene extends Object3D { constructor() { super(); this.fog = null; this.background = null; } }
   class Fog { constructor(color, near, far) { this.color = new Color(color); this.near = near; this.far = far; } }
   class PerspectiveCamera extends Object3D {
-    constructor(fov, aspect, near, far) { super(); this.fov = fov; this.aspect = aspect; this.near = near; this.far = far; }
+    constructor(fov, aspect, near, far) { super(); this.fov = fov; this.aspect = aspect; this.near = near; this.far = far; made.cameras.push(this); }
     updateProjectionMatrix() { this.projected = (this.projected || 0) + 1; }
   }
   class BoxGeometry { constructor() { this.dispose = jest.fn(); made.geometries.push(this); } }
@@ -497,6 +497,116 @@ describe("the scene", () => {
     const { THREE, made } = fakeThree();
     city.createScene(THREE, { canvas: document.createElement("canvas"), width: 800, height: 400, dpr: 1, colors: city.deriveColors({ bg: "#17141F", ink: "#ECE8F5", accent: "#A08CFF" }) });
     expect(made.meshes[1].material).toBeInstanceOf(THREE.MeshBasicMaterial);
+  });
+});
+
+// ---- the camera: a slow drift down a street canyon -----------------------------------------
+
+describe("the camera", () => {
+  const colors = () => city.deriveColors({ bg: "#17141F", ink: "#ECE8F5", accent: "#A08CFF" });
+  const make = () => {
+    const { THREE, made } = fakeThree();
+    const sc = city.createScene(THREE, { canvas: document.createElement("canvas"), width: 1280, height: 460, dpr: 1, colors: colors() });
+    return { sc, made };
+  };
+  const C = city.CAMERA;
+
+  test("the named constants match the approved framing", () => {
+    expect(C.FOV).toBe(55);
+    expect(C.TILT_DEGREES).toBeGreaterThanOrEqual(20);
+    expect(C.TILT_DEGREES).toBeLessThanOrEqual(25);
+    expect(C.HEIGHT / C.TOWER_HEIGHT).toBeGreaterThanOrEqual(0.2);
+    expect(C.HEIGHT / C.TOWER_HEIGHT).toBeLessThanOrEqual(0.25);
+    expect(C.BLOCK_SECONDS).toBeGreaterThanOrEqual(12);
+    expect(C.BLOCK_SECONDS).toBeLessThanOrEqual(15);
+    expect(C.SPEED * C.BLOCK_SECONDS).toBeCloseTo(city.SPACING);
+  });
+
+  test("uses a 55 degree field of view", () => {
+    expect(make().sc.camera.fov).toBe(55);
+  });
+
+  test("starts inside the canyon, low, on the street axis", () => {
+    const { sc } = make();
+    expect(sc.camera.position.y).toBeLessThan(C.TOWER_HEIGHT * 0.3);
+    expect(Math.abs(sc.camera.position.x)).toBeLessThanOrEqual(C.DRIFT_X);
+  });
+
+  test("moves forward along -z at exactly the configured rate", () => {
+    const { sc } = make();
+    const z0 = sc.camera.position.z;
+    for (let i = 0; i < 300; i++) sc.step(C.SPEED / 30); // ten seconds at 30 frames a second
+    expect(z0 - sc.camera.position.z).toBeCloseTo(C.SPEED * 10, 6);
+  });
+
+  test("one block passes in the configured number of seconds", () => {
+    const { sc } = make();
+    const z0 = sc.camera.position.z;
+    sc.step(C.SPEED * C.BLOCK_SECONDS);
+    expect(z0 - sc.camera.position.z).toBeCloseTo(city.SPACING, 6);
+  });
+
+  test("height stays within the configured drift range and the sideways drift within its range", () => {
+    const { sc } = make();
+    let minY = Infinity, maxY = -Infinity, maxX = 0;
+    for (let i = 0; i < 20000; i++) {
+      sc.step(C.SPEED * 0.5);
+      minY = Math.min(minY, sc.camera.position.y);
+      maxY = Math.max(maxY, sc.camera.position.y);
+      maxX = Math.max(maxX, Math.abs(sc.camera.position.x));
+    }
+    expect(minY).toBeGreaterThanOrEqual(C.HEIGHT - C.DRIFT_Y - 1e-9);
+    expect(maxY).toBeLessThanOrEqual(C.HEIGHT + C.DRIFT_Y + 1e-9);
+    expect(maxY - minY).toBeGreaterThan(C.DRIFT_Y); // it really does drift
+    expect(maxX).toBeLessThanOrEqual(C.DRIFT_X + 1e-9);
+    expect(maxX).toBeGreaterThan(C.DRIFT_X / 2);
+  });
+
+  test("tilts down by the configured angle, with no sideways turn, and keeps it while moving", () => {
+    const { sc } = make();
+    const expected = -(C.TILT_DEGREES * Math.PI) / 180;
+    expect(sc.camera.rotation.x).toBeCloseTo(expected, 9);
+    expect(sc.camera.rotation.y).toBe(0);
+    sc.step(500);
+    expect(sc.camera.rotation.x).toBeCloseTo(expected, 9);
+    expect(sc.camera.rotation.y).toBe(0);
+  });
+
+  test("the running animation moves the camera at the configured rate in real time", async () => {
+    const s = setup();
+    await s.start();
+    const cam = s.three.made.cameras[0];
+    const z0 = cam.position.z;
+    s.env.run(0, 10000, 1000 / 60);
+    expect(z0 - cam.position.z).toBeCloseTo(C.SPEED * 10, 0);
+  });
+
+  test("blocks recycle behind the camera and the count stays bounded over a long run", () => {
+    const { sc, made } = make();
+    const rows = sc.grid.rows.length;
+    const instances = made.meshes.map((m) => m.count);
+    const hours = 2;
+    const frames = hours * 3600 * 30;
+    for (let i = 0; i < frames; i++) {
+      sc.step(C.SPEED / 30);
+      if (i % 5000 === 0) {
+        expect(sc.grid.rows.length).toBe(rows);
+        // the nearest row is at or just behind the camera; every other row is ahead of it
+        const nearest = made.meshes[0].position.z;
+        expect(nearest).toBeGreaterThanOrEqual(sc.camera.position.z);
+        expect(nearest - sc.camera.position.z).toBeLessThan(city.SPACING);
+      }
+    }
+    expect(sc.grid.rows.length).toBe(rows);
+    expect(made.meshes.map((m) => m.count)).toEqual(instances);
+    expect(sc.grid.recycled).toBe(Math.floor((C.SPEED * hours * 3600) / city.SPACING + 1e-6));
+    expect(sc.grid.recycled).toBeGreaterThan(500);
+  });
+
+  test("fog ends well before the far end of the street", () => {
+    const { sc } = make();
+    expect(sc.scene.fog.far).toBeLessThan(sc.camera.far);
+    expect(sc.scene.fog.far).toBeLessThan(city.SPACING * sc.grid.rows.length);
   });
 });
 
