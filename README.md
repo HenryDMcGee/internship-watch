@@ -4,8 +4,10 @@ releases:
 - coconuts 9-24: fixed up ui for adding titles 
 - daiquiri 9-25: added phase 5 optimization for searches using cache aka page printing
 - eggfruit 10-5: added phase 6 reduced computation cost using Cloudflare Browser Run to read pages before rendering with playwright. Also overcomes websites blocking playwrights ip aka github, and split the searching and processing phase into async tasks
+- fig 10-14: Phase 7 Added a public facing job dashboard for other students. Switched to test driven development and setup Jest UI test cases and Playwright tests (render browser for direct use case testing) set an 80% hard gate
+- Guava 10-15: Phase 8 added 3js moving city background alongside a cyberpunk color pallette swap
+
 # Internship Watch
-- fig 10-14: Added a public facing job dashboard for other students. Switched to test driven development and setup Jest UI test cases and Playwright tests (render browser for direct use case testing) set an 80% hard gate
 Finds Summer 2027 MBA product internships every morning and shows them on a private dashboard. Claude Code builds it through GitHub Actions, and every change goes through a pull request you review.
 
 - The approved plan: `docs/plan.md`
