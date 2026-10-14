@@ -1242,11 +1242,17 @@ app.include_router(router)
 
 public_router = APIRouter(prefix="/api/public")
 
-# The only posting columns the public API may return. Never `SELECT *`.
-PUBLIC_POSTING_COLUMNS = "id, company_name, title, title_en, locations, posted_date, first_seen, url"
+# The only posting columns the public API may return. Never `SELECT *`. `confirmed`
+# is false while a posting's status isn't confirmed yet; the page tags those cards.
+PUBLIC_POSTING_COLUMNS = (
+    "id, company_name, title, title_en, locations, posted_date, first_seen, url, "
+    "status != 'unverified' AS confirmed"
+)
 # What makes a posting visible publicly; also what a visitor's report may point at.
+# Unconfirmed postings show too (with a tag), so a new find appears after the run that found it.
 PUBLIC_POSTING_FILTER = (
-    "archived_at IS NULL AND status IN ('open', 'closing') AND location_match = 'match' AND public_hidden = 0"
+    "archived_at IS NULL AND status IN ('open', 'closing', 'unverified') AND location_match = 'match' "
+    "AND public_hidden = 0"
 )
 PUBLIC_CACHE_CONTROL = "public, max-age=300"
 
@@ -1263,6 +1269,7 @@ async def public_postings(response: Response, db: Database = Depends(get_db)):
     )
     for row in rows:
         row["locations"] = json.loads(row.get("locations") or "[]")
+        row["confirmed"] = bool(row.get("confirmed"))
     last_run = await db.first(
         "SELECT finished_at FROM runs WHERE kind = 'daily' AND finished_at IS NOT NULL "
         "ORDER BY finished_at DESC LIMIT 1"
