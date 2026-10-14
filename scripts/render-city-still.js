@@ -1,80 +1,85 @@
-// Renders one frame of the city background and saves it as the still image phones (and
-// reduced-motion, no-WebGL and slow devices) show: frontend/public/city/city-still.webp plus a JPEG fallback.
-// Run it again whenever the scene or the palette in frontend/style.css changes:
+// Renders one frame of the night city (the same scene the animation uses) to the static images
+// phones, reduced-motion visitors, and browsers without WebGL see.
 //
-//     npm run city:still
+//   node scripts/render-city-still.js
 //
-// It draws the real scene with the real module, in headless Chromium, so the picture cannot drift from
-// the animation. Colors are read from the CSS tokens like they are in the browser.
+// Writes frontend/public/city-still-{dark,light}.{webp,jpg}, each under 80KB, sized for phone
+// screens (780 x 920, the 390 x 460 header box at 2x). Colors come from the CSS tokens in
+// frontend/style.css through the same code the animation uses, so a theme change plus a rerun
+// of this script keeps the still in step. Run it again whenever the scene changes.
+//
+// Needs Chromium from Playwright (`npx playwright install chromium`). It renders with the
+// software WebGL that headless Chromium ships, so it works on a machine with no GPU.
 const fs = require("fs");
-const http = require("http");
 const path = require("path");
 const { chromium } = require("@playwright/test");
 
-const FRONTEND = path.resolve(__dirname, "..", "frontend");
-const OUT = path.join(FRONTEND, "public", "city");
-const WIDTH = 720;   // sized for phone screens; the page scales it with object-fit: cover
-const HEIGHT = 1280;
-const MAX_BYTES = 78 * 1024; // the limit is 80KB; stay clear of it
-const TYPES = { ".js": "text/javascript", ".css": "text/css", ".html": "text/html" };
+const ROOT = path.resolve(__dirname, "..");
+const PUBLIC_DIR = path.join(ROOT, "frontend", "public");
+const WIDTH = 780;
+const HEIGHT = 920;
+const MAX_BYTES = 80 * 1000;
+const TARGET_BYTES = 76 * 1000; // headroom under the limit
+const FRAME_DISTANCE = 3.7; // how far into a block the frame is taken, so it is not exactly on a row line
 
-const HARNESS = `<!doctype html><meta charset="utf-8"><link rel="stylesheet" href="/style.css"><body>
-<script src="/public/city/city-background.js"></script>`;
+async function renderTheme(browser, theme, sources) {
+  const page = await browser.newPage({ viewport: { width: WIDTH, height: HEIGHT }, colorScheme: theme });
+  await page.setContent("<!doctype html><html><head></head><body><canvas id=c></canvas></body></html>");
+  await page.addStyleTag({ content: sources.css });
+  const result = await page.evaluate(async (args) => {
+    // Load the city module without starting the page behavior: giving it a `module` takes its export path.
+    const mod = { exports: {} };
+    new Function("module", args.city)(mod);
+    const city = mod.exports;
+    const blobUrl = URL.createObjectURL(new Blob([args.three], { type: "text/javascript" }));
+    const THREE = await import(blobUrl);
 
-function serve() {
-  const server = http.createServer((req, res) => {
-    const url = new URL(req.url, "http://localhost");
-    if (url.pathname === "/harness.html") {
-      res.setHeader("content-type", "text/html");
-      return res.end(HARNESS);
+    const canvas = document.getElementById("c");
+    const colors = city.deriveColors(city.readTokens(getComputedStyle(document.documentElement)));
+    const scene = city.createScene(THREE, {
+      canvas, width: args.width, height: args.height, dpr: 1, colors, preserveDrawingBuffer: true,
+    });
+    scene.step(args.distance);
+    scene.render();
+
+    function encode(type) {
+      // Highest quality that stays under the target.
+      for (let q = 0.92; q >= 0.2; q -= 0.04) {
+        const url = canvas.toDataURL(type, q);
+        const b64 = url.slice(url.indexOf(",") + 1);
+        if (Math.floor((b64.length * 3) / 4) <= args.target) return { b64, quality: q };
+      }
+      throw new Error("could not get " + type + " under the size target");
     }
-    const file = path.join(FRONTEND, path.normalize(url.pathname));
-    if (!file.startsWith(FRONTEND + path.sep) || !fs.existsSync(file) || fs.statSync(file).isDirectory()) {
-      res.statusCode = 404;
-      return res.end("not found");
-    }
-    res.setHeader("content-type", TYPES[path.extname(file)] || "application/octet-stream");
-    return res.end(fs.readFileSync(file));
-  });
-  return new Promise((resolve) => server.listen(0, "127.0.0.1", () => resolve(server)));
-}
+    const out = { colors, webp: encode("image/webp"), jpg: encode("image/jpeg") };
+    scene.dispose();
+    return out;
+  }, { city: sources.city, three: sources.three, width: WIDTH, height: HEIGHT, distance: FRAME_DISTANCE, target: TARGET_BYTES });
+  await page.close();
 
-// Highest quality that fits under the size limit.
-async function encode(page, type) {
-  for (let q = 0.9; q >= 0.3; q -= 0.05) {
-    const url = await page.evaluate(([t, quality]) => window.__canvas.toDataURL(t, quality), [type, q]);
-    if (!url.startsWith("data:" + type)) throw new Error("This browser cannot encode " + type);
-    const bytes = Buffer.from(url.split(",")[1], "base64");
-    if (bytes.length <= MAX_BYTES) return { bytes, quality: q };
+  for (const [key, ext] of [["webp", "webp"], ["jpg", "jpg"]]) {
+    const file = path.join(PUBLIC_DIR, `city-still-${theme}.${ext}`);
+    const bytes = Buffer.from(result[key].b64, "base64");
+    if (bytes.length > MAX_BYTES) throw new Error(`${file} is ${bytes.length} bytes, over the limit`);
+    fs.writeFileSync(file, bytes);
+    console.log(`${path.relative(ROOT, file)}: ${bytes.length} bytes (quality ${result[key].quality.toFixed(2)})`);
   }
-  throw new Error("Could not get " + type + " under " + MAX_BYTES + " bytes. Simplify the scene or shrink WIDTH and HEIGHT.");
 }
 
 async function main() {
-  const server = await serve();
-  const browser = await chromium.launch({ args: ["--use-angle=swiftshader", "--enable-unsafe-swiftshader", "--ignore-gpu-blocklist"] });
+  const sources = {
+    css: fs.readFileSync(path.join(ROOT, "frontend", "style.css"), "utf8"),
+    city: fs.readFileSync(path.join(PUBLIC_DIR, "city-background.js"), "utf8"),
+    three: fs.readFileSync(path.join(PUBLIC_DIR, "vendor", "three.min.mjs"), "utf8"),
+  };
+  const browser = await chromium.launch({
+    args: ["--use-angle=swiftshader", "--enable-unsafe-swiftshader", "--ignore-gpu-blocklist", "--enable-webgl"],
+  });
   try {
-    const page = await browser.newPage({ viewport: { width: WIDTH, height: HEIGHT } });
-    page.on("pageerror", (e) => { throw e; });
-    await page.goto("http://127.0.0.1:" + server.address().port + "/harness.html");
-    await page.evaluate(async ([width, height]) => {
-      const THREE = await import("/public/city/vendor/three.min.js");
-      const canvas = document.createElement("canvas");
-      const city = window.CityBackground;
-      const view = city.createView(THREE, city.readTokens(window, document), { canvas, width, height, dpr: 1, preserveDrawingBuffer: true });
-      view.render(city.STILL_TIME_S);
-      window.__canvas = view.renderer.domElement;
-    }, [WIDTH, HEIGHT]);
-
-    for (const [type, file] of [["image/webp", "city-still.webp"], ["image/jpeg", "city-still.jpg"]]) {
-      const { bytes, quality } = await encode(page, type);
-      fs.writeFileSync(path.join(OUT, file), bytes);
-      console.log(file + ": " + bytes.length + " bytes (quality " + quality.toFixed(2) + ")");
-    }
+    for (const theme of ["dark", "light"]) await renderTheme(browser, theme, sources);
   } finally {
     await browser.close();
-    server.close();
   }
 }
 
-main().catch((e) => { console.error(e); process.exit(1); });
+main().catch((err) => { console.error(err); process.exit(1); });
