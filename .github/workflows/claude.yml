@@ -61,4 +61,4 @@ jobs:
           # Nothing else is allowed.
           claude_args: >-
             --allowedTools
-            "Bash(python -m pytest:*),Bash(python -m pip install:*),Bash(uv run:*),Bash(uv sync:*),Bash(uv tool install:*),Bash(git status:*),Bash(git diff:*)"
+            "Bash(python -m pytest:*),Bash(python -m pip install:*),Bash(uv run:*),Bash(uv sync:*),Bash(uv tool install:*),Bash(git status:*),Bash(git diff:*),Bash(npm:*),Bash(npx:*),Bash(node:*)"
