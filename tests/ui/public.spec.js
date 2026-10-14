@@ -104,6 +104,7 @@ test.describe("public page, site off", () => {
   test('shows "Not available right now." and nothing else', async ({ page }) => {
     await page.goto(PUBLIC + "/");
     await expect(page.locator("#unavailable")).toHaveText("Not available right now.");
+    await expect(page.locator("#unavailable")).toBeVisible(); // toHaveText also passes while it is still hidden
     await expect(page.locator("#board")).toBeHidden();
     await expect(page.locator("#list li")).toHaveCount(0);
     const visible = await page.locator("body").innerText();

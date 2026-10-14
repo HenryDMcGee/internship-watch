@@ -33,6 +33,14 @@ async function litPixels(page) {
   }, { b64: png.toString("base64"), hex: bgColor });
 }
 
+// The first frame can take a moment to reach the screen, so look again for a few seconds before failing.
+async function expectPainted(page) {
+  await expect.poll(async () => {
+    const { lit, total } = await litPixels(page);
+    return lit / total;
+  }, { message: "share of pixels that are not the page color", timeout: 5000 }).toBeGreaterThan(0.02);
+}
+
 for (const [name, origin, ready] of PAGES) {
   test.describe(name + ", animation allowed", () => {
     test.use({ reducedMotion: "no-preference" });
@@ -48,8 +56,7 @@ for (const [name, origin, ready] of PAGES) {
       expect(box.width).toBeGreaterThan(300);
       expect(box.height).toBeGreaterThan(100);
 
-      const { lit, total } = await litPixels(page);
-      expect(lit / total, "share of pixels that are not the page color").toBeGreaterThan(0.02);
+      await expectPainted(page);
     });
 
     test("nothing sits over the city: no other layer is painted above it at the page edge", async ({ page }) => {
@@ -81,8 +88,7 @@ for (const [name, origin, ready] of PAGES) {
       await page.goto(origin + "/");
       await expect(page.locator("#cityBg")).toHaveAttribute("data-city-mode", "still");
       await expect.poll(() => page.locator("#cityBg img").evaluate((i) => i.complete && i.naturalWidth > 0)).toBe(true);
-      const { lit, total } = await litPixels(page);
-      expect(lit / total).toBeGreaterThan(0.02);
+      await expectPainted(page);
     });
   });
 
@@ -98,8 +104,7 @@ for (const [name, origin, ready] of PAGES) {
       await expect(page.locator("#cityBg")).toHaveAttribute("data-city-reason", "load-failed");
       await expect.poll(() => page.locator("#cityBg img").evaluate((i) => i.complete && i.naturalWidth > 0)).toBe(true);
       expect(errors.some((e) => /city background.*load three\.js/i.test(e)), errors.join("\n")).toBe(true);
-      const { lit, total } = await litPixels(page);
-      expect(lit / total).toBeGreaterThan(0.02);
+      await expectPainted(page);
     });
   });
 }
