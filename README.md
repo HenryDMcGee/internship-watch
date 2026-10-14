@@ -133,6 +133,21 @@ npm run coverage:ui     # prints the table, then fails below 80%
 
 The gate itself is `nyc check-coverage --statements 80 --branches 80 --functions 80 --lines 80`.
 
+Playwright runs with `reducedMotion: "reduce"`, so pages show the city's still image and don't pay for software WebGL. Only `tests/ui/city-background.spec.js` turns the animation on. Third-party code in `frontend/**/vendor/` is not measured by either gate.
+
+## City background
+
+The night-city background (Phase 8) is `frontend/public/city/city-background.js`, drawn with three.js. Orbit speed, tilt, height and drift are named constants at the top of that file. Colors come from the CSS tokens in `frontend/style.css`.
+
+It lives under `frontend/public/city/` because the public hostname only serves `/public/*`; the dashboard loads the same files. Phones (viewport under 768px with a coarse pointer), reduced motion, no WebGL and slow devices get `city-still.webp` (with a JPEG fallback) instead, and never download three.js.
+
+Two things to regenerate, then commit the results:
+
+```bash
+npm run build:three   # frontend/public/city/vendor/three.min.js, only the three.js classes the city uses
+npm run city:still    # city-still.webp and city-still.jpg, one rendered frame of the same scene (run after palette or scene changes)
+```
+
 ## Running the daily job by hand
 
 The daily job (`job/run.py`) normally runs on GitHub Actions at 08:00 America/Chicago (`.github/workflows/daily-search.yml`), or for specific companies when you click Check now on the dashboard (`.github/workflows/check-now.yml`). To run it yourself:

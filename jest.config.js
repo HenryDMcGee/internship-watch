@@ -3,7 +3,7 @@ module.exports = {
   testEnvironment: "jsdom",
   roots: ["<rootDir>/frontend"],
   testMatch: ["<rootDir>/frontend/__tests__/**/*.test.js"],
-  collectCoverageFrom: ["frontend/**/*.js", "!frontend/__tests__/**"],
+  collectCoverageFrom: ["frontend/**/*.js", "!frontend/__tests__/**", "!frontend/**/vendor/**"], // vendor/ is third-party code, not ours to test
   coverageDirectory: "coverage/jest",
   coverageReporters: ["text", "text-summary", "lcov"],
   coverageThreshold: {
