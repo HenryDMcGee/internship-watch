@@ -407,3 +407,96 @@ def test_summary_line_suggests_workers_paid_for_quota_or_minutes():
 def test_summary_line_is_none_when_nothing_happened():
     assert run_module._careers_pages_summary_line(_stats()) is None
     assert run_module._careers_pages_summary_line(None) is None
+
+
+# ---------------------------------------------------------------------------
+# A careers-page find counts as confirmed open (public board not updating
+# after a search: new careers-page postings stayed "Status not confirmed")
+# ---------------------------------------------------------------------------
+
+def _offline_page_checks(monkeypatch):
+    """Page-data and browser checks can't decide, as on most careers sites."""
+    import requests
+
+    from job.verify import browser as browser_module
+    from job.verify import structured as structured_module
+
+    def no_network(*args, **kwargs):
+        raise requests.ConnectionError("offline in tests")
+
+    def no_browser(url):
+        raise RuntimeError("no browser in tests")
+
+    monkeypatch.setattr(structured_module.requests, "get", no_network)
+    monkeypatch.setattr(browser_module, "_load_page_text", no_browser)
+
+
+def _careers_run(empty_db, monkeypatch, company_id, listings):
+    page_text = _long_page("listings page " + json.dumps(listings))
+
+    def fake_run_careers_pages(candidates, **kwargs):
+        return cp.CareersRunOutcome(
+            pages=[cp.PageOutcome(company_id=company_id, url="https://acme.example/careers", ok=True,
+                                   text=page_text, method="browser_run", browser_minutes=1.0)],
+            browser_run_minutes_used=1.0, switch_reason=None,
+        )
+
+    monkeypatch.setattr(run_module.careers_pages, "run_careers_pages", fake_run_careers_pages)
+
+    def fake_run_claude_step(step, prompt, *, model, **kwargs):
+        if step == "careers_extraction":
+            return ClaudeStepResult(step=step, model=model, text=json.dumps({"listings": listings}))
+        if step == "classification":
+            import re
+            ids = [int(i) for i in re.findall(r"id=(\d+)", prompt)]
+            return ClaudeStepResult(step=step, model=model, text=json.dumps({"decisions": [
+                {"id": i, "decision": "match", "matched_title": "MBA Product Manager Intern", "reason": "matches"}
+                for i in ids
+            ]}))
+        return ClaudeStepResult(step=step, model=model, text=_empty_discovery_scout_improvement(step, model),
+                                 web_searches=3 if step in ("discovery", "scout") else 0)
+
+    monkeypatch.setattr(agent_client, "run_claude_step", fake_run_claude_step)
+    return run(run_module.run(empty_db, kind="daily"))
+
+
+def test_posting_found_on_a_careers_page_is_open_after_the_run(empty_db, monkeypatch):
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "test-token")
+    _offline_page_checks(monkeypatch)
+    company_id = _insert_company(empty_db, name="Acme", feed_type=None, feed_id=None,
+                                 careers_url="https://acme.example/careers")
+
+    result = _careers_run(empty_db, monkeypatch, company_id, [
+        {"title": "MBA Product Manager Intern", "location": "San Francisco, CA",
+         "link": "https://acme.example/jobs/NEW", "posted_date": "2026-10-01", "job_id": "new-job"},
+    ])
+
+    assert result["new_count"] == 1
+    posting = run(empty_db.first("SELECT * FROM postings WHERE url = 'https://acme.example/jobs/NEW'"))
+    assert posting["status"] == "open"
+    assert posting["verified_via"] == "careers_page"
+    assert posting["archived_at"] is None
+
+
+def test_posting_gone_from_a_careers_page_is_not_closed(empty_db, monkeypatch):
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "test-token")
+    _offline_page_checks(monkeypatch)
+    company_id = _insert_company(empty_db, name="Acme", feed_type=None, feed_id=None,
+                                 careers_url="https://acme.example/careers")
+    earlier_id = run(empty_db.run(
+        """INSERT INTO postings (company_id, company_name, title, matched_title, url, locations,
+           location_match, first_seen, status, verified_via, verified_at)
+           VALUES (?, 'Acme', 'MBA Product Manager Intern', 'MBA Product Manager Intern',
+                   'https://acme.example/jobs/EARLIER', '[]', 'match', '2026-10-01', 'open',
+                   'careers_page', '2026-10-01T08:00:00')""",
+        company_id,
+    ))
+
+    _careers_run(empty_db, monkeypatch, company_id, [
+        {"title": "MBA Product Manager Intern", "location": "San Francisco, CA",
+         "link": "https://acme.example/jobs/OTHER", "posted_date": "2026-10-01", "job_id": "other-job"},
+    ])
+
+    earlier = run(empty_db.first("SELECT * FROM postings WHERE id = ?", earlier_id))
+    assert earlier["status"] == "open"
+    assert earlier["archived_at"] is None

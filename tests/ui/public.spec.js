@@ -79,6 +79,25 @@ test.describe("public page, site on", () => {
   });
 });
 
+test.describe("public page, unconfirmed postings", () => {
+  test.beforeEach(async ({ request }) => resetData(request, { public_site: true, unconfirmed: true }));
+
+  test("an unconfirmed posting shows with a Not yet confirmed tag, confirmed ones without", async ({ page }) => {
+    await page.goto(PUBLIC + "/");
+    await expect(page.locator("#nToday")).toHaveText("3");
+    const nintendo = page.locator("#list li.item").filter({ hasText: "Nintendo" });
+    await expect(nintendo.locator(".ti")).toHaveText("Product Strategy Intern");
+    await expect(nintendo.locator(".badge")).toHaveText("Not yet confirmed");
+    await expect(nintendo.locator("a")).toHaveAttribute("href", "https://nintendo.example/ps");
+    await expect(page.locator("#list li.item").filter({ hasText: "Google" }).locator(".badge")).toHaveCount(0);
+    await expect(page.locator("#list li.item").filter({ hasText: "Amazon" }).locator(".badge")).toHaveCount(0);
+
+    // An unconfirmed posting with an unclear location still stays off the public page.
+    await page.click("#tabEarlier");
+    await expect(page.locator("#list")).not.toContainText("Unclear Co");
+  });
+});
+
 test.describe("public page, site off", () => {
   test.beforeEach(async ({ request }) => resetData(request, { public_site: false }));
 

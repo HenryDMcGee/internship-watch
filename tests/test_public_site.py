@@ -14,7 +14,7 @@ from src.main import app, central_today, route_for_host, rewrite_public_path
 PUBLIC = "jobs.mcgeehenry.com"
 PRIVATE = "internship-watch.mcgeehenry.com"
 SALT = "test-salt"
-PUBLIC_KEYS = {"id", "company_name", "title", "title_en", "locations", "posted_date", "first_seen", "url"}
+PUBLIC_KEYS = {"id", "company_name", "title", "title_en", "locations", "posted_date", "first_seen", "url", "confirmed"}
 
 
 def run(coro):
@@ -99,12 +99,23 @@ def test_public_list_filters(client):
     seed_posting(db, title="visible closing", status="closing")
     seed_posting(db, title="archived", archived_at="2026-10-01")
     seed_posting(db, title="closed", status="closed")
-    seed_posting(db, title="unverified", status="unverified")
+    seed_posting(db, title="visible unconfirmed", status="unverified")
     seed_posting(db, title="outside", location_match="outside")
     seed_posting(db, title="unclear", location_match="unclear")
+    seed_posting(db, title="unconfirmed and unclear", status="unverified", location_match="unclear")
     seed_posting(db, title="hidden", public_hidden=1)
     titles = {p["title"] for p in tc.get("/api/public/postings").json()["postings"]}
-    assert titles == {"visible open", "visible closing"}
+    assert titles == {"visible open", "visible closing", "visible unconfirmed"}
+
+
+def test_unconfirmed_postings_are_flagged_and_confirmed_ones_are_not(client):
+    tc, db = client
+    enable_public(db)
+    seed_posting(db, title="open")
+    seed_posting(db, title="closing", status="closing")
+    seed_posting(db, title="unconfirmed", status="unverified")
+    confirmed = {p["title"]: p["confirmed"] for p in tc.get("/api/public/postings").json()["postings"]}
+    assert confirmed == {"open": True, "closing": True, "unconfirmed": False}
 
 
 def test_public_list_is_newest_first(client):
@@ -273,6 +284,13 @@ def test_invalid_public_feedback_is_rejected(client, overrides):
 def test_message_of_exactly_2000_characters_is_accepted(client):
     tc, db = client
     assert post_feedback(tc, message="x" * 2000).status_code == 204
+
+
+def test_feedback_about_an_unconfirmed_public_posting_is_accepted(client):
+    tc, db = client
+    posting_id = seed_posting(db, status="unverified")
+    assert post_feedback(tc, posting_id=posting_id).status_code == 204
+    assert [row["posting_id"] for row in feedback_rows(db)] == [posting_id]
 
 
 def test_feedback_about_a_posting_the_public_cannot_see_is_rejected(client):

@@ -13,7 +13,7 @@ rules under test are the real ones. It does not run the Pyodide entrypoint (`Def
 Cloudflare Access stays unconfigured, as it is locally. GitHub is a small in-memory fake.
 
 Test-only controls live on the dashboard port under /__test/ (never on the public port):
-  POST /__test/reset            {"public_site": bool, "rate_limited": bool}  re-seeds the database
+  POST /__test/reset            {"public_site": bool, "rate_limited": bool, "unconfirmed": bool}  re-seeds the database
   POST /__test/complete-search  {"result": {...}, "status": "completed"|"failed"}  finishes the pending "Search now" request
   POST /__test/complete-check   {"result": {...}, "status": "completed"|"failed"}  finishes the pending "Check now" request
 """
@@ -57,7 +57,7 @@ def _insert(conn, table: str, row: dict) -> int:
     return conn.execute(f"INSERT INTO {table} ({columns}) VALUES ({marks})", tuple(row.values())).lastrowid
 
 
-def seed(public_site: bool = False, rate_limited: bool = False) -> SqliteDatabase:
+def seed(public_site: bool = False, rate_limited: bool = False, unconfirmed: bool = False) -> SqliteDatabase:
     conn = fresh_schema_connection()
     today = central_today()
     earlier = (date.fromisoformat(today) - timedelta(days=5)).isoformat()
@@ -86,6 +86,10 @@ def seed(public_site: bool = False, rate_limited: bool = False) -> SqliteDatabas
     posting(company_name="Oracle", title="Archived Role", archived_at=today, archive_reason="deleted")
     posting(company_name="Unclear Co", title="Unclear Role", location_match="unclear", status="unverified",
             first_seen=earlier, url="javascript:alert(1)")
+    if unconfirmed:
+        # Found today on a careers page or by web search, status not confirmed yet: shown publicly with a tag.
+        posting(company_name="Nintendo", title="Product Strategy Intern", status="unverified", verified_via=None,
+                verified_at=None, locations=json.dumps(["Redmond, WA"]), url="https://nintendo.example/ps")
 
     conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('public_site_enabled', ?)",
                  ("true" if public_site else "false",))
@@ -170,8 +174,8 @@ class FakeGitHub:
         return 404, {"message": "not in the fake: " + method + " " + path}
 
 
-def reset(public_site: bool = False, rate_limited: bool = False) -> None:
-    app.state.db = seed(public_site, rate_limited)
+def reset(public_site: bool = False, rate_limited: bool = False, unconfirmed: bool = False) -> None:
+    app.state.db = seed(public_site, rate_limited, unconfirmed)
     app.state.github = GitHubClient(repo="HenryDMcGee/internship-watch", token="test", transport=FakeGitHub())
     app.state.access_team_domain = ""
     app.state.access_aud = ""
@@ -215,7 +219,8 @@ def make_handler(hostname: str, controls: bool):
                 payload = json.loads(raw or b"{}")
                 with LOCK:
                     if path == "/__test/reset":
-                        reset(bool(payload.get("public_site")), bool(payload.get("rate_limited")))
+                        reset(bool(payload.get("public_site")), bool(payload.get("rate_limited")),
+                              bool(payload.get("unconfirmed")))
                     elif path == "/__test/complete-search":
                         _complete("search_requests", payload.get("result") or {}, payload.get("status", "completed"))
                     elif path == "/__test/complete-check":
