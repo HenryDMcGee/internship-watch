@@ -109,6 +109,16 @@ describe("page", () => {
     expect(document.getElementById("unavailable").hidden).toBe(false);
   });
 
+  test("the headline is the short title, and the footer carries only the Feedback button", async () => {
+    boot({ enabled: true, last_run: "2026-10-14T13:00:00Z", postings: [posting()] });
+    await flush();
+    expect(document.querySelector(".hero h1").textContent).toBe("Summer 2027 MBA Product Internships");
+    expect(document.title).toBe("Summer 2027 MBA Product Internships");
+    const foot = document.querySelector(".foot");
+    expect(foot.querySelector("#openFeedback")).not.toBeNull();
+    expect(foot.textContent.trim()).toBe("Feedback");
+  });
+
   test("renders cards, tabs and search", async () => {
     boot({
       enabled: true, last_run: "2026-10-14T13:00:00Z",
