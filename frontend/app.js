@@ -847,7 +847,7 @@
         wrap.appendChild(cardLink);
         name.appendChild(wrap);
       }
-      name.appendChild(el("span", null, (f.source === "public" ? "Visitor" : "You") + ", " + fmtDateTime(f.created_at) +
+      name.appendChild(el("span", null, fmtDateTime(f.created_at) +
         (f.status === "read" ? ", read" : "") + (f.status === "dismissed" ? ", dismissed" : "")));
       if (f.issue_url && safeUrl(f.issue_url)) {
         var issue = el("a", null, "GitHub issue");
@@ -887,28 +887,6 @@
       setStatus("Couldn't save that. " + e.message);
     }
   }
-
-  $("openFeedback").addEventListener("click", function () {
-    $("fbMsg").textContent = "";
-    $("fbMessage").value = "";
-    var dialog = $("feedbackDialog");
-    if (dialog.showModal) dialog.showModal(); else dialog.setAttribute("open", "");
-  });
-  $("fbClose").addEventListener("click", function () { closeDialog($("feedbackDialog")); });
-  $("fbSend").addEventListener("click", async function () {
-    var message = $("fbMessage").value.trim();
-    if (!message) { $("fbMsg").textContent = "Write a message first."; return; }
-    $("fbSend").disabled = true;
-    try {
-      await apiPost("/feedback", { kind: $("fbKind").value, message: message, page_url: window.location.href });
-      $("fbMsg").textContent = "Thanks, sent.";
-      $("fbMessage").value = "";
-      loadFeedback();
-    } catch (e) {
-      $("fbMsg").textContent = "Couldn't send. " + e.message;
-    }
-    $("fbSend").disabled = false;
-  });
 
   // -------------------------------------------------------------------
   // Budgets

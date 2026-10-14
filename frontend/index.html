@@ -18,7 +18,6 @@
         <span class="spinner" id="searchNowSpinner" hidden aria-hidden="true"></span>
         <span id="searchNowLabel">Search now</span>
       </button>
-      <button class="ghost" id="openFeedback" type="button">Feedback</button>
     </div>
     <div class="tools">
       <button class="ghost" id="openTitles" type="button">Titles</button>
@@ -140,7 +139,7 @@
   <section id="feedbackView" hidden>
     <div id="feedbackEmpty" class="empty" hidden>
       <strong>No feedback yet</strong>
-      <span>Reports from the public job board and your own Feedback button show up here.</span>
+      <span>Reports from the public job board show up here.</span>
     </div>
     <div id="feedbackList"></div>
   </section>
@@ -353,33 +352,6 @@
       <button class="btn" id="locationsClose" type="button">Close</button>
     </div>
     <div class="msg" id="locationsMsg"></div>
-  </div>
-</dialog>
-
-<dialog id="feedbackDialog" aria-labelledby="feedbackTitle">
-  <div class="sheet">
-    <h2 id="feedbackTitle">Feedback</h2>
-    <div class="addform" style="grid-template-columns:1fr">
-      <label>Type
-        <select id="fbKind">
-          <option value="bug">Bug</option>
-          <option value="dead_link">Dead link</option>
-          <option value="closed">Job is closed</option>
-          <option value="wrong_job">Wrong job</option>
-          <option value="suggestion">Suggestion</option>
-          <option value="other">Other</option>
-        </select>
-      </label>
-      <label>Message
-        <textarea id="fbMessage" maxlength="2000" style="min-height:14vh"></textarea>
-      </label>
-    </div>
-    <div class="row">
-      <button class="btn primary" id="fbSend" type="button">Send</button>
-      <span class="spacer"></span>
-      <button class="btn" id="fbClose" type="button">Close</button>
-    </div>
-    <div class="msg" id="fbMsg" role="status"></div>
   </div>
 </dialog>
 
