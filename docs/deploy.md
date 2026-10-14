@@ -226,3 +226,9 @@ The careers-page backup needs Chromium on the runner. `daily-search.yml` already
 | Public feedback says "Something went wrong on our side" (500), or every API call returns 503 naming a table or column | A migration wasn't applied | Run step 5, then 5b. `wrangler tail` shows the cause |
 | Open as GitHub issue fails | The GitHub token lacks Issues: write | Recheck step 3 and 4b |
 | Your main website shows a Cloudflare login | The Access application was created for `mcgeehenry.com` instead of the subdomain | Fix the application's hostname in Zero Trust |
+
+### Migration `0015_feedback_issues.sql` and feedback issues
+
+Migration `0015` adds `budget_settings.feedback_issues_per_day` (default 20) and `feedback.issue_created_at`. The automatic deploy applies it (step 5). To undo it, drop the two columns.
+
+Public feedback now creates a GitHub issue labeled `visitor-feedback` (through the Worker's `GITHUB_TOKEN`, which already needs Issues: write). The daily run retries rows with no issue using the job's `GITHUB_TOKEN`, so the `permissions:` block in `.github/workflows/daily-search.yml` needs `issues: write`. Without it, retries fail quietly and the rows wait.

@@ -25,13 +25,13 @@ REQUIRED_SCHEMA: dict[str, tuple[str, ...]] = {
     "settings": ("key", "value"),
     "feedback": (
         "source", "kind", "posting_id", "message", "page_url", "visitor_hash", "status", "issue_url",
-        "created_at", "decided_at",
+        "created_at", "decided_at", "issue_created_at",
     ),
     "budget_settings": (
         "id", "updated_at", "billing_mode",
         "daily_token_budget", "daily_search_budget", "weekly_token_budget", "daily_usd_budget",
         "monthly_usd_budget", "search_limit_per_run", "search_limit_per_company", "browser_checks_per_run",
-        "model_discovery", "model_scout", "model_classification", "model_improvement",
+        "feedback_issues_per_day", "model_discovery", "model_scout", "model_classification", "model_improvement",
         "share_discovery", "share_scout", "share_classification", "share_improvement",
     ),
     "budget_changes": ("changed_at", "field", "old_value", "new_value"),

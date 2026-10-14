@@ -40,6 +40,7 @@ from budgets import (
     validate_budget_settings,
 )
 from db import Database
+from feedback_issues import create_issue_for_feedback
 from github_client import GitHubApiError, GitHubClient
 from schema_check import REQUIRED_SECRETS, check_schema, secret_problems
 from sql_helpers import in_json
@@ -866,8 +867,8 @@ async def open_feedback_issue(feedback_id: int, request: Request, db: Database =
         raise HTTPException(status_code=502, detail=f"Could not open the issue: {exc}") from exc
 
     await db.run(
-        "UPDATE feedback SET status = 'issue_opened', issue_url = ?, decided_at = ? WHERE id = ?",
-        issue.get("html_url"), now_iso(), feedback_id,
+        "UPDATE feedback SET status = 'issue_opened', issue_url = ?, decided_at = ?, issue_created_at = ? WHERE id = ?",
+        issue.get("html_url"), now_iso(), now_iso(), feedback_id,
     )
     return await db.first(f"{_FEEDBACK_OUT_SQL} WHERE f.id = ?", feedback_id)
 
@@ -1383,7 +1384,7 @@ async def public_feedback(body: PublicFeedbackCreate, request: Request, db: Data
         if (mine or {}).get("n", 0) >= PUBLIC_FEEDBACK_PER_VISITOR_PER_DAY or (total or {}).get("n", 0) >= PUBLIC_FEEDBACK_TOTAL_PER_DAY:
             raise reject(429, "Try again tomorrow.", "daily feedback limit reached")
 
-        await db.run(
+        feedback_id = await db.run(
             "INSERT INTO feedback (source, kind, posting_id, message, page_url, visitor_hash, created_at) "
             "VALUES ('public', ?, ?, ?, ?, ?, ?)",
             body.kind, body.posting_id, message, (body.page_url or "")[:PAGE_URL_MAX_CHARS] or None, visitor, now_iso(),
@@ -1393,6 +1394,9 @@ async def public_feedback(body: PublicFeedbackCreate, request: Request, db: Data
     except Exception as exc:  # noqa: BLE001 - logged, then reported to the visitor as a server failure
         _log_failure(500, "public feedback could not be saved", exc)
         raise HTTPException(status_code=500, detail=SERVER_ERROR_MESSAGE) from exc
+    # Saved first, always. The issue is best effort: a failure is logged inside, the row
+    # keeps a null issue_url for the daily run to retry, and the visitor still sees success.
+    await create_issue_for_feedback(db, request.app.state.github, feedback_id)
     return Response(status_code=204)
 
 

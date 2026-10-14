@@ -43,6 +43,7 @@ from job.agent.alerts import (
     run_degraded_alert,
     run_failed_alert,
 )
+from job.agent.github_pr import github_client_from_env
 from job.agent.budgets import load_budget_status, monthly_forecast, weekly_forecast
 from job.agent.client import is_configured as claude_is_configured
 from job.agent.pipeline import build_unclear_reader, run_agent_steps
@@ -62,6 +63,7 @@ from job.pruning import decide_prune
 from job.ranking import is_quarterly_refresh_day, refresh_ranking
 from job.verify.browser import BrowserBudget
 from job.verify.pipeline import verify_posting
+from feedback_issues import retry_pending_issues
 from sql_helpers import in_json
 
 CENTRAL = ZoneInfo("America/Chicago") if ZoneInfo else None
@@ -1060,6 +1062,16 @@ async def _browser_run_alert_inputs(db, *, today: str) -> tuple[float, float, li
     return minutes_used_today, hours_used_month, capacity_backup_days
 
 
+async def retry_feedback_issues(db) -> int:
+    """Creates GitHub issues for public feedback that has none yet (issue #96): rows saved
+    while GitHub was failing or the daily cap was reached. Never raises."""
+    try:
+        return await retry_pending_issues(db, github_client_from_env())
+    except Exception as exc:  # noqa: BLE001 - a feedback retry must never fail the daily run
+        print(f"Could not retry feedback issues: {exc}", file=sys.stderr)
+        return 0
+
+
 async def _finish_daily_run(
     db, *, run_status: str, run_reason: str | None, agent_outcome: dict | None = None, health: dict | None = None,
     run_minutes: float | None = None,
@@ -1069,6 +1081,7 @@ async def _finish_daily_run(
     raises: a summary that can't be built or sent must not turn a completed
     (or already-recorded-as-failed) run into an unhandled exception.
     """
+    await retry_feedback_issues(db)
     try:
         budget_settings = await config.load_budget_settings(db)
         today_str = today_central().isoformat()
