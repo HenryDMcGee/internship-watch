@@ -207,7 +207,7 @@ describe("page", () => {
     expect(document.getElementById("fbPosting").hidden).toBe(true);
     expect(document.getElementById("fbKind").value).toBe("suggestion");
     document.getElementById("fbMessage").value = "hello";
-    const cases = [[429, "Try again tomorrow."], [500, /Couldn't send that\. Please check/], ["net", "Couldn't send that. Please try again."]];
+    const cases = [[429, "Try again tomorrow."], [500, "Something went wrong on our side. Please try again later."], ["net", "Couldn't send that. Please try again."]];
     for (const [m, text] of cases) {
       mode = m;
       document.getElementById("fbSend").click();

@@ -108,6 +108,14 @@ Run these from the `api` folder.
 npx wrangler d1 migrations apply internship-watch-db --remote
 ```
 
+### 5b. Check the tables and columns
+```powershell
+cd ..
+python scripts/check_schema.py
+cd api
+```
+It exits with an error and names each missing table or column if a migration wasn't applied. The Worker runs the same check on its first request after each deploy: if it fails, every `/api/*` request returns 503 with the missing table or column named, and the cause is logged (`npx wrangler tail`). Fix it by running step 5.
+
 ### 6. Load your current data (first deploy only)
 ```powershell
 cd ..
@@ -206,5 +214,7 @@ The careers-page backup needs Chromium on the runner. `daily-search.yml` already
 | `jobs.mcgeehenry.com` can't be reached | The `jobs` DNS record from step 4b is missing | Add it, set to Proxied |
 | `jobs.mcgeehenry.com` asks for a login | The Access application covers the public name | Scope it to `internship-watch.mcgeehenry.com` only |
 | The public page says "Not available right now." | The Public site switch is off (the default), or the 5-minute cache hasn't expired | Turn it on in Locations |
-| Public feedback errors, or Open as GitHub issue fails | `FEEDBACK_SALT` isn't set, or the GitHub token lacks Issues: write | Recheck step 4b |
+| Public feedback says "Something went wrong on our side" (503) | `FEEDBACK_SALT` isn't set. `wrangler tail` shows "FEEDBACK_SALT is not set" | Recheck step 4b |
+| Public feedback says "Something went wrong on our side" (500), or every API call returns 503 naming a table or column | A migration wasn't applied | Run step 5, then 5b. `wrangler tail` shows the cause |
+| Open as GitHub issue fails | The GitHub token lacks Issues: write | Recheck step 3 and 4b |
 | Your main website shows a Cloudflare login | The Access application was created for `mcgeehenry.com` instead of the subdomain | Fix the application's hostname in Zero Trust |

@@ -151,7 +151,7 @@ def test_github_failures_are_logged_with_cause_and_status(client, caplog):
     cid = run(db.run("INSERT INTO companies (name, status) VALUES ('Acme', 'pinned')"))
     with caplog.at_level(logging.WARNING):
         assert tc.post("/api/companies/check", json={"company_ids": [cid]}).status_code == 502
-        assert tc.post("/api/search", json={}).status_code == 502
+        assert tc.post("/api/search/runs", json={}).status_code == 502
         assert tc.post("/api/feedback/1/issue").status_code == 502
         assert tc.get("/api/titles/pending").status_code == 502
         assert tc.get("/api/titles").status_code == 502

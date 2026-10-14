@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import re
 import time
@@ -19,6 +20,7 @@ from datetime import date, datetime, timedelta
 from typing import Any
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request, Response
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 try:
@@ -39,10 +41,23 @@ from budgets import (
 )
 from db import Database
 from github_client import GitHubApiError, GitHubClient
+from schema_check import check_schema
 from sql_helpers import in_json
 from titles import load_titles_doc, open_or_update_titles_pr, validate_titles_doc, BASE_BRANCH, TITLES_BRANCH
 
 REPO = "HenryDMcGee/internship-watch"
+
+logger = logging.getLogger("internship_watch")
+if not logging.getLogger().handlers:  # the Worker's console shows whatever reaches stderr
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
+SERVER_ERROR_MESSAGE = "Something went wrong on our side. Please try again later."
+
+
+def _log_failure(status: int, reason: str, exc: BaseException | None = None) -> None:
+    """Records why a request was rejected or failed. Call before any error response is returned."""
+    cause = f" ({type(exc).__name__}: {exc})" if exc is not None else ""
+    level = logging.ERROR if status >= 500 else logging.WARNING
+    logger.log(level, "%s: %s%s", status, reason, cause)
 DAILY_CHECK_LIMIT = 5
 SEARCH_BUDGET_WARN_FRACTION = 0.80
 
@@ -165,13 +180,36 @@ app.state.access_team_domain = os.environ.get("ACCESS_TEAM_DOMAIN", "")
 app.state.access_aud = os.environ.get("ACCESS_AUD", "")
 app.state.github = None  # set in the Worker entrypoint from the GITHUB_TOKEN secret
 app.state.feedback_salt = os.environ.get("FEEDBACK_SALT", "")  # Worker secret; public feedback is off without it
+app.state.schema_checked = False
+app.state.schema_problems = []  # filled by ensure_schema_checked; any entry makes every API request fail with a 503
+
+
+@app.exception_handler(Exception)
+async def log_unhandled_error(request: Request, exc: Exception) -> JSONResponse:
+    _log_failure(500, f"unhandled error on {request.method} {request.url.path}", exc)
+    return JSONResponse({"detail": SERVER_ERROR_MESSAGE}, status_code=500)
+
+
+async def ensure_schema_checked(application: FastAPI, db: Database) -> None:
+    """Checks the database's tables and columns once, and again on each request while it is failing."""
+    if application.state.schema_checked and not application.state.schema_problems:
+        return
+    problems = await check_schema(db)
+    application.state.schema_problems = problems
+    application.state.schema_checked = True
+    for problem in problems:
+        logger.error("Schema check failed: %s. Apply the pending migrations (docs/deploy.md).", problem)
 
 _jwks_cache: dict[str, dict[str, Any]] = {}
 
 
 def get_db(request: Request) -> Database:
     if request.app.state.db is None:
+        _log_failure(500, "Database is not configured")
         raise HTTPException(status_code=500, detail="Database is not configured")
+    problems = request.app.state.schema_problems
+    if problems:
+        raise HTTPException(status_code=503, detail="The database is out of date: " + "; ".join(problems))
     return request.app.state.db
 
 
@@ -193,6 +231,7 @@ async def require_access(request: Request) -> None:
         try:
             jwks = await fetch_jwks(team_domain)
         except Exception as exc:  # noqa: BLE001 - surfaced as a 503 below
+            _log_failure(503, "Could not fetch Cloudflare Access keys", exc)
             raise HTTPException(status_code=503, detail="Could not reach Cloudflare Access") from exc
         cached = {"jwks": jwks, "fetched_at": time.time()}
         _jwks_cache[team_domain] = cached
@@ -200,6 +239,7 @@ async def require_access(request: Request) -> None:
     try:
         verify_access_token(token, cached["jwks"], audience=aud, team_domain=team_domain)
     except AccessTokenError as exc:
+        _log_failure(401, "Cloudflare Access token rejected", exc)
         raise HTTPException(status_code=401, detail=str(exc)) from exc
 
 
@@ -574,6 +614,7 @@ async def check_companies(body: CheckCompaniesRequest, request: Request, db: Dat
                 "UPDATE check_requests SET status = 'failed', result = ? WHERE id = ?",
                 json.dumps({"error": str(exc)}), new_id,
             )
+            _log_failure(502, "Could not start the check", exc)
             raise HTTPException(status_code=502, detail=f"Could not start the check: {exc}") from exc
 
     created = await db.first("SELECT * FROM check_requests WHERE id = ?", new_id)
@@ -667,6 +708,7 @@ async def start_search(body: SearchStartRequest, request: Request, db: Database 
                 "UPDATE search_requests SET status = 'failed', result = ? WHERE id = ?",
                 json.dumps({"error": str(exc)}), new_id,
             )
+            _log_failure(502, "Could not start the search", exc)
             raise HTTPException(status_code=502, detail=f"Could not start the search: {exc}") from exc
 
     created = await db.first("SELECT * FROM search_requests WHERE id = ?", new_id)
@@ -811,6 +853,7 @@ async def open_feedback_issue(feedback_id: int, request: Request, db: Database =
     try:
         issue = await github.create_issue(f"Feedback: {label}: {first_line}", "\n".join(lines), ["feedback"])
     except GitHubApiError as exc:
+        _log_failure(502, "Could not open the GitHub issue for feedback", exc)
         raise HTTPException(status_code=502, detail=f"Could not open the issue: {exc}") from exc
 
     await db.run(
@@ -838,6 +881,7 @@ async def get_titles(request: Request):
         ref = TITLES_BRANCH if pending else BASE_BRANCH
         return await load_titles_doc(github, ref)
     except GitHubApiError as exc:
+        _log_failure(502, "Could not read titles from GitHub", exc)
         raise HTTPException(status_code=502, detail=f"Could not read titles from GitHub: {exc}") from exc
 
 
@@ -849,6 +893,7 @@ async def pending_titles_pr(request: Request):
     try:
         pr = await github.find_open_pr(TITLES_BRANCH)
     except GitHubApiError as exc:
+        _log_failure(502, "Could not check for a pending titles change", exc)
         raise HTTPException(status_code=502, detail=f"Could not check for a pending change: {exc}") from exc
     return {"pending": pr}
 
@@ -866,6 +911,7 @@ async def update_titles(body: TitlesUpdate, request: Request):
     try:
         pr = await open_or_update_titles_pr(github, body.doc)
     except GitHubApiError as exc:
+        _log_failure(502, "Could not open the titles pull request", exc)
         raise HTTPException(status_code=502, detail=f"Could not open the pull request: {exc}") from exc
     return {"pending": pr}
 
@@ -1294,39 +1340,50 @@ async def public_feedback(body: PublicFeedbackCreate, request: Request, db: Data
     if body.website:
         return Response(status_code=204)  # a bot filled the honeypot: discard silently
 
+    def reject(status: int, detail: str, log_reason: str | None = None) -> HTTPException:
+        _log_failure(status, f"public feedback rejected: {log_reason or detail}")
+        return HTTPException(status_code=status, detail=detail)
+
     message = body.message.strip()
     if body.kind not in PUBLIC_FEEDBACK_KINDS:
-        raise HTTPException(status_code=400, detail="Unknown feedback type")
+        raise reject(400, "Unknown feedback type")
     if not message or len(message) > FEEDBACK_MAX_CHARS:
-        raise HTTPException(status_code=400, detail=f"Message must be 1 to {FEEDBACK_MAX_CHARS} characters")
-    if body.posting_id is not None:
-        visible = await db.first(
-            f"SELECT id FROM postings WHERE id = ? AND {PUBLIC_POSTING_FILTER}", body.posting_id
+        raise reject(400, f"Message must be 1 to {FEEDBACK_MAX_CHARS} characters")
+
+    try:
+        if body.posting_id is not None:
+            visible = await db.first(
+                f"SELECT id FROM postings WHERE id = ? AND {PUBLIC_POSTING_FILTER}", body.posting_id
+            )
+            if not visible:
+                raise reject(400, "Unknown posting")
+
+        salt = request.app.state.feedback_salt
+        if not salt:
+            raise reject(503, SERVER_ERROR_MESSAGE, "FEEDBACK_SALT is not set on the Worker, so feedback is switched off")
+        visitor = visitor_hash(salt, request.headers.get("CF-Connecting-IP", ""))
+
+        today = central_today()
+        mine = await db.first(
+            "SELECT COUNT(*) AS n FROM feedback WHERE source = 'public' AND visitor_hash = ? AND substr(created_at, 1, 10) = ?",
+            visitor, today,
         )
-        if not visible:
-            raise HTTPException(status_code=400, detail="Unknown posting")
+        total = await db.first(
+            "SELECT COUNT(*) AS n FROM feedback WHERE source = 'public' AND substr(created_at, 1, 10) = ?", today
+        )
+        if (mine or {}).get("n", 0) >= PUBLIC_FEEDBACK_PER_VISITOR_PER_DAY or (total or {}).get("n", 0) >= PUBLIC_FEEDBACK_TOTAL_PER_DAY:
+            raise reject(429, "Try again tomorrow.", "daily feedback limit reached")
 
-    salt = request.app.state.feedback_salt
-    if not salt:
-        raise HTTPException(status_code=503, detail="Feedback isn't available right now")
-    visitor = visitor_hash(salt, request.headers.get("CF-Connecting-IP", ""))
-
-    today = central_today()
-    mine = await db.first(
-        "SELECT COUNT(*) AS n FROM feedback WHERE source = 'public' AND visitor_hash = ? AND substr(created_at, 1, 10) = ?",
-        visitor, today,
-    )
-    total = await db.first(
-        "SELECT COUNT(*) AS n FROM feedback WHERE source = 'public' AND substr(created_at, 1, 10) = ?", today
-    )
-    if (mine or {}).get("n", 0) >= PUBLIC_FEEDBACK_PER_VISITOR_PER_DAY or (total or {}).get("n", 0) >= PUBLIC_FEEDBACK_TOTAL_PER_DAY:
-        raise HTTPException(status_code=429, detail="Try again tomorrow.")
-
-    await db.run(
-        "INSERT INTO feedback (source, kind, posting_id, message, page_url, visitor_hash, created_at) "
-        "VALUES ('public', ?, ?, ?, ?, ?, ?)",
-        body.kind, body.posting_id, message, (body.page_url or "")[:PAGE_URL_MAX_CHARS] or None, visitor, now_iso(),
-    )
+        await db.run(
+            "INSERT INTO feedback (source, kind, posting_id, message, page_url, visitor_hash, created_at) "
+            "VALUES ('public', ?, ?, ?, ?, ?, ?)",
+            body.kind, body.posting_id, message, (body.page_url or "")[:PAGE_URL_MAX_CHARS] or None, visitor, now_iso(),
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001 - logged, then reported to the visitor as a server failure
+        _log_failure(500, "public feedback could not be saved", exc)
+        raise HTTPException(status_code=500, detail=SERVER_ERROR_MESSAGE) from exc
     return Response(status_code=204)
 
 
@@ -1398,6 +1455,7 @@ try:
                 return await self.env.ASSETS.fetch(request)
 
             app.state.db = D1Database(self.env.DB)
+            await ensure_schema_checked(app, app.state.db)
             app.state.feedback_salt = getattr(self.env, "FEEDBACK_SALT", "") or ""
             app.state.access_team_domain = getattr(self.env, "ACCESS_TEAM_DOMAIN", "") or ""
             app.state.access_aud = getattr(self.env, "ACCESS_AUD", "") or ""
