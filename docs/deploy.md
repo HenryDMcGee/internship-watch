@@ -108,13 +108,13 @@ Run these from the `api` folder.
 npx wrangler d1 migrations apply internship-watch-db --remote
 ```
 
-### 5b. Check the tables and columns
+### 5b. Check the tables, columns, and secrets
 ```powershell
 cd ..
 python scripts/check_schema.py
 cd api
 ```
-It exits with an error and names each missing table or column if a migration wasn't applied. The Worker runs the same check on its first request after each deploy: if it fails, every `/api/*` request returns 503 with the missing table or column named, and the cause is logged (`npx wrangler tail`). Fix it by running step 5.
+It exits with an error and names each missing table or column if a migration wasn't applied, and names each required Worker secret (`FEEDBACK_SALT`) that isn't set. The Worker runs the same check on its first request after each deploy: if it fails, every `/api/*` request returns 503 with the missing table or column named, and the cause is logged (`npx wrangler tail`). Fix it by running step 5. A missing secret is logged by name on each request (`Missing required secret FEEDBACK_SALT is not set`), and visitors see only the server-side message. Fix it with step 4b.
 
 ### 6. Load your current data (first deploy only)
 ```powershell

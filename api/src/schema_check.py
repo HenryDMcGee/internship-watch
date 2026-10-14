@@ -39,6 +39,14 @@ REQUIRED_SCHEMA: dict[str, tuple[str, ...]] = {
     "proposals": ("status", "decided_at"),
 }
 
+# Worker secrets the API cannot work without. Only the names are checked, never the values.
+REQUIRED_SECRETS: tuple[str, ...] = ("FEEDBACK_SALT",)
+
+
+def secret_problems(present: set[str]) -> list[str]:
+    """One plain-English problem per required secret that is not set."""
+    return [f"secret {name} is not set" for name in REQUIRED_SECRETS if name not in present]
+
 
 class _Reader(Protocol):
     async def all(self, sql: str, *params: Any) -> list[dict]: ...

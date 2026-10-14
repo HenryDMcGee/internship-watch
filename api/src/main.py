@@ -41,7 +41,7 @@ from budgets import (
 )
 from db import Database
 from github_client import GitHubApiError, GitHubClient
-from schema_check import check_schema
+from schema_check import REQUIRED_SECRETS, check_schema, secret_problems
 from sql_helpers import in_json
 from titles import load_titles_doc, open_or_update_titles_pr, validate_titles_doc, BASE_BRANCH, TITLES_BRANCH
 
@@ -181,6 +181,7 @@ app.state.access_aud = os.environ.get("ACCESS_AUD", "")
 app.state.github = None  # set in the Worker entrypoint from the GITHUB_TOKEN secret
 app.state.feedback_salt = os.environ.get("FEEDBACK_SALT", "")  # Worker secret; public feedback is off without it
 app.state.schema_checked = False
+app.state.secret_problems = []  # filled by log_missing_secrets; logged on every request while a secret is missing
 app.state.schema_problems = []  # filled by ensure_schema_checked; any entry makes every API request fail with a 503
 
 
@@ -199,6 +200,14 @@ async def ensure_schema_checked(application: FastAPI, db: Database) -> None:
     application.state.schema_checked = True
     for problem in problems:
         logger.error("Schema check failed: %s. Apply the pending migrations (docs/deploy.md).", problem)
+
+
+def log_missing_secrets(application: FastAPI, secrets: dict[str, str]) -> None:
+    """Logs each required Worker secret that is not set, by name, on every request while it is missing."""
+    problems = secret_problems({name for name, value in secrets.items() if value})
+    application.state.secret_problems = problems
+    for problem in problems:
+        logger.error("Missing required %s. Set it with `npx wrangler secret put` (docs/deploy.md step 4b).", problem)
 
 _jwks_cache: dict[str, dict[str, Any]] = {}
 
@@ -1457,6 +1466,7 @@ try:
             app.state.db = D1Database(self.env.DB)
             await ensure_schema_checked(app, app.state.db)
             app.state.feedback_salt = getattr(self.env, "FEEDBACK_SALT", "") or ""
+            log_missing_secrets(app, {name: getattr(self.env, name, "") or "" for name in REQUIRED_SECRETS})
             app.state.access_team_domain = getattr(self.env, "ACCESS_TEAM_DOMAIN", "") or ""
             app.state.access_aud = getattr(self.env, "ACCESS_AUD", "") or ""
             github_token = getattr(self.env, "GITHUB_TOKEN", "") or ""
