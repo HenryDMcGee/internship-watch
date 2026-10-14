@@ -526,22 +526,22 @@ describe("the camera", () => {
     expect(C.TILT_DEGREES).toBeLessThanOrEqual(25);
     expect(C.HEIGHT / C.TOWER_HEIGHT).toBeGreaterThanOrEqual(0.2);
     expect(C.HEIGHT / C.TOWER_HEIGHT).toBeLessThanOrEqual(0.25);
-    expect(C.BLOCK_SECONDS).toBe(27); // halved from 13.5
+    expect(C.BLOCK_SECONDS).toBe(81); // tripled from 27
     expect(C.SPEED * C.BLOCK_SECONDS).toBeCloseTo(city.SPACING);
   });
 
-  test("forward travel over a fixed interval is half the previous speed", () => {
-    const PREVIOUS_SPEED = city.SPACING / 13.5;
+  test("forward travel over a fixed interval is a third of the previous speed", () => {
+    const PREVIOUS_SPEED = city.SPACING / 27;
     const { sc } = make();
     const z0 = sc.camera.position.z;
-    sc.step(C.SPEED * 20); // twenty seconds at the configured rate
-    expect(z0 - sc.camera.position.z).toBeCloseTo(PREVIOUS_SPEED * 10, 6); // half of the old 20 s travel
-    expect(C.SPEED).toBeCloseTo(PREVIOUS_SPEED / 2, 9);
+    sc.step(C.SPEED * 30); // thirty seconds at the configured rate
+    expect(z0 - sc.camera.position.z).toBeCloseTo((PREVIOUS_SPEED * 30) / 3, 6); // a third of the old 30 s travel
+    expect(C.SPEED).toBeCloseTo(PREVIOUS_SPEED / 3, 9);
   });
 
-  test("drift rates are halved (cycles twice as long) and drift amplitudes are unchanged", () => {
-    expect(C.DRIFT_X_SECONDS).toBe(190);
-    expect(C.DRIFT_Y_SECONDS).toBe(140);
+  test("drift rates are a third (cycles three times as long) and drift amplitudes are unchanged", () => {
+    expect(C.DRIFT_X_SECONDS).toBe(570);
+    expect(C.DRIFT_Y_SECONDS).toBe(420);
     expect(C.DRIFT_X).toBe(1.2);
     expect(C.DRIFT_Y).toBe(0.6);
   });
@@ -624,7 +624,7 @@ describe("the camera", () => {
     expect(sc.grid.rows.length).toBe(rows);
     expect(made.meshes.map((m) => m.count)).toEqual(instances);
     expect(sc.grid.recycled).toBe(Math.floor((C.SPEED * hours * 3600) / city.SPACING + 1e-6));
-    expect(sc.grid.recycled).toBeGreaterThan(250); // 2 h at one block per 27 s is 266 rows
+    expect(sc.grid.recycled).toBeGreaterThan(80); // 2 h at one block per 81 s is 88 rows
   });
 
   test("fog ends well before the far end of the street", () => {
