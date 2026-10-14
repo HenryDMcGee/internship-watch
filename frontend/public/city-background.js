@@ -16,7 +16,6 @@
   var LOW_FPS_SECONDS = 10; // ...for this many seconds in a row (software WebGL runs in the teens)
   var STILL_THEME = "dark"; // the site has one palette, so the still is always the dark one
   var SPEED = 6; // world units per second, the slow forward drift
-  var DEFAULT_HEIGHT = 460; // matches .city-bg in style.css, used when the box has no size yet
 
   var COLS = 14;
   var ROWS = 26;
@@ -356,7 +355,7 @@
 
     function onResize() {
       if (!scene) return;
-      scene.resize(bg.clientWidth || win.innerWidth, bg.clientHeight || DEFAULT_HEIGHT);
+      scene.resize(win.innerWidth, win.innerHeight);
     }
 
     var monitor = createFpsMonitor({ onLow: function () { switchToStill("low-fps"); } });
@@ -459,8 +458,8 @@
       try {
         scene = createScene(THREE, {
           canvas: canvas,
-          width: bg.clientWidth || win.innerWidth,
-          height: bg.clientHeight || DEFAULT_HEIGHT,
+          width: win.innerWidth,
+          height: win.innerHeight,
           dpr: win.devicePixelRatio || 1,
           colors: themeColors(),
         });

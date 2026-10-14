@@ -34,12 +34,14 @@ async function expectFillsViewport(page) {
 // Share of pixels, in a small patch at each corner, that differ from the flat page color.
 async function cornerShares(page) {
   const vp = page.viewportSize();
-  const size = 24;
-  const spots = [[0, 0], [vp.width - size, 0], [0, vp.height - size], [vp.width - size, vp.height - size]];
+  // The sky is drawn in the page color, so a corner can be sky alone. The patch is tall enough to reach buildings.
+  const size = 160;
+  const tall = 360;
+  const spots = [[0, 0], [vp.width - size, 0], [0, vp.height - tall], [vp.width - size, vp.height - tall]];
   const hex = await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue("--bg").trim());
   const shares = [];
   for (const [x, y] of spots) {
-    const png = await page.screenshot({ clip: { x, y, width: size, height: size } });
+    const png = await page.screenshot({ clip: { x, y, width: size, height: tall } });
     shares.push(await page.evaluate(async ({ b64, bgHex }) => {
       const img = new Image();
       img.src = "data:image/png;base64," + b64;
@@ -77,7 +79,8 @@ for (const [name, origin, ready] of PAGES) {
       await page.goto(origin + "/");
       await expect(page.locator(ready)).toBeAttached();
       await settle(page);
-      await expect.poll(async () => Math.min(...(await cornerShares(page))), { timeout: 8000 }).toBeGreaterThan(0.02);
+      // Order: top-left, top-right, bottom-left, bottom-right. Every share must be above 2%.
+      await expect.poll(async () => (await cornerShares(page)).map((s) => s > 0.02), { timeout: 8000 }).toEqual([true, true, true, true]);
     });
 
     test("after resizing the window the canvas still matches the viewport", async ({ page }) => {
