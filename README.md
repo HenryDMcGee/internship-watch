@@ -137,7 +137,7 @@ Playwright runs with `reducedMotion: "reduce"`, so pages show the city's still i
 
 ## City background
 
-The night-city background (Phase 8) is `frontend/public/city-background.js`, drawn with three.js. Orbit speed, tilt, height, drift and the low-frame-rate check (`LOW_FPS`, `LOW_FPS_SECONDS`) are named constants at the top of that file. Colors come from the CSS tokens in `frontend/style.css`.
+The night-city background (Phase 8) is `frontend/public/city-background.js`, drawn with three.js. The camera drifts forward down a street canyon, low and tilted slightly down; its height, tilt, field of view, speed and drift (the `CAMERA` object) and the low-frame-rate check (`LOW_FPS`, `LOW_FPS_SECONDS`) are named constants at the top of that file. Colors come from the CSS tokens in `frontend/style.css`.
 
 It lives under `frontend/public/` because the public hostname only serves `/public/*`; the dashboard loads the same files. Phones (viewport under 768px with a coarse pointer), reduced motion, no WebGL and machines that stay under 15 frames a second for 10 seconds get `city-still-dark.webp` (with a JPEG fallback) instead, and never download three.js. The still is always the dark one.
 
