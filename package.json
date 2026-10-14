@@ -3,6 +3,8 @@
   "private": true,
   "description": "Dev and CI tooling for the frontend tests. Nothing here ships in the Worker.",
   "scripts": {
+    "build:three": "esbuild scripts/three-entry.js --bundle --minify --format=esm --legal-comments=none --outfile=frontend/public/city/vendor/three.min.js",
+    "city:still": "node scripts/render-city-still.js",
     "test:unit": "jest --coverage",
     "test:ui": "playwright test",
     "vendor:three": "node scripts/vendor-three.js",

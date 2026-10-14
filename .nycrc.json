@@ -1,6 +1,6 @@
 {
   "include": ["frontend/**/*.js"],
-  "exclude": ["frontend/__tests__/**"],
+  "exclude": ["frontend/__tests__/**", "frontend/**/vendor/**"],
   "temp-dir": ".nyc_output",
   "all": true
 }
