@@ -19,7 +19,8 @@ function frontendFileFor(url) {
   try { parsed = new URL(url); } catch (e) { return null; }
   if (parsed.origin !== DASHBOARD && parsed.origin !== PUBLIC) return null;
   const file = path.join(FRONTEND, parsed.pathname.replace(/^\//, ""));
-  return file.endsWith(".js") && file.startsWith(FRONTEND + path.sep) && fs.existsSync(file) ? file : null;
+  const vendored = file.includes(path.sep + "vendor" + path.sep); // third-party code is not measured
+  return file.endsWith(".js") && file.startsWith(FRONTEND + path.sep) && !vendored && fs.existsSync(file) ? file : null;
 }
 
 async function saveCoverage(entries) {

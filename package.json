@@ -3,16 +3,20 @@
   "private": true,
   "description": "Dev and CI tooling for the frontend tests. Nothing here ships in the Worker.",
   "scripts": {
+    "build:three": "esbuild scripts/three-entry.js --bundle --minify --format=esm --legal-comments=none --outfile=frontend/public/city/vendor/three.min.js",
+    "city:still": "node scripts/render-city-still.js",
     "test:unit": "jest --coverage",
     "test:ui": "playwright test",
     "coverage:ui": "nyc report --temp-dir .nyc_output --reporter=text --reporter=text-summary && nyc check-coverage --temp-dir .nyc_output --statements 80 --branches 80 --functions 80 --lines 80"
   },
   "devDependencies": {
     "@playwright/test": "1.64.0",
+    "esbuild": "0.28.2",
     "istanbul-lib-coverage": "3.2.2",
     "jest": "30.5.2",
     "jest-environment-jsdom": "30.5.2",
     "nyc": "18.0.0",
+    "three": "0.186.1",
     "v8-to-istanbul": "9.3.0"
   }
 }

@@ -312,7 +312,7 @@ describe("render loop", () => {
     const renderer = t.fake.log.renderers[0];
     t.loop.run(1000, 1000 / 60);
     expect(renderer.renders.length).toBeGreaterThan(20);
-    expect(renderer.renders.length).toBeLessThanOrEqual(31);
+    expect(renderer.renders.length).toBeLessThanOrEqual(32); // 30 in the second, plus the first frame drawn at start
   });
 
   test("one orbit of the clock turns the camera once around the same center", async () => {

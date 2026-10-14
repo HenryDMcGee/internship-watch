@@ -15,6 +15,9 @@ module.exports = defineConfig({
   use: {
     baseURL: "http://127.0.0.1:8787",
     trace: "retain-on-failure",
+    // The city background shows its still image under reduced motion. Only tests/ui/city-background.spec.js
+    // turns the animation on, so the other specs don't pay for software WebGL in CI.
+    reducedMotion: "reduce",
   },
   projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
   webServer: {

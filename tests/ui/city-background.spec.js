@@ -42,7 +42,7 @@ function ratio(a, b) {
 }
 
 test.describe("desktop", () => {
-  test.use({ viewport: VIEWPORT });
+  test.use({ viewport: VIEWPORT, reducedMotion: "no-preference" });
 
   test("the scene covers the viewport, stays fixed while the page scrolls, and sits behind content", async ({ page }) => {
     await page.goto(DASHBOARD + "/");
@@ -186,7 +186,7 @@ test.describe("desktop", () => {
 });
 
 test.describe("phone, 390px wide with a touch screen", () => {
-  test.use({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
+  test.use({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true, reducedMotion: "no-preference" });
 
   test("shows the still image, keeps the layout, and has no horizontal scroll", async ({ page }) => {
     const requested = [];

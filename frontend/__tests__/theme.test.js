@@ -21,7 +21,7 @@ function tokens() {
 
 function rules() {
   const list = [];
-  css.replace(/([^{}]+)\{([^{}]*)\}/g, (all, selector, body) => { list.push({ selector: selector.trim(), body }); return all; });
+  css.replace(/\/\*[\s\S]*?\*\//g, "").replace(/([^{}]+)\{([^{}]*)\}/g,(all, selector, body) => { list.push({ selector: selector.trim(), body }); return all; });
   return list;
 }
 
@@ -125,7 +125,7 @@ describe("where the colors are used", () => {
   });
 
   test("orange appears nowhere else", () => {
-    const users = rules().filter((r) => r.body.includes("--hot") || r.body.includes("--on-hot"));
+    const users = rules().filter((r) => /var\(--(hot|hot-soft|on-hot)\)/.test(r.body));
     const selectors = users.map((r) => r.selector);
     const allowed = ["#nToday", "#searchNowBtn[aria-busy=\"true\"]", ".badge.closing"];
     for (const selector of selectors) {
