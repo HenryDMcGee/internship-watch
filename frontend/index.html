@@ -315,6 +315,13 @@
     </div>
     <p class="sub" style="font-size:12px">These figures are measured by the daily job and may differ slightly from Cloudflare's own dashboard. See <a href="https://dash.cloudflare.com/" target="_blank" rel="noopener noreferrer">Cloudflare's dashboard</a> (Workers &amp; Pages &gt; your account &gt; Browser Rendering) for its own usage page.</p>
 
+    <h3>Public site</h3>
+    <div class="checkrow">
+      <input type="checkbox" id="locPublic">
+      <label for="locPublic">Public site (jobs.mcgeehenry.com)</label>
+    </div>
+    <p class="sub" style="margin-top:-4px">Off by default. Turn it on after the DNS record is in place. The public page updates within 5 minutes of a change.</p>
+
     <div class="row">
       <button class="btn primary" id="budgetsSave" type="button">Save</button>
       <span class="spacer"></span>
@@ -340,12 +347,6 @@
       <input type="checkbox" id="locRemote">
       <label for="locRemote">Include remote postings</label>
     </div>
-    <h3>Public site</h3>
-    <div class="checkrow">
-      <input type="checkbox" id="locPublic">
-      <label for="locPublic">Public site (jobs.mcgeehenry.com)</label>
-    </div>
-    <p class="sub" style="margin-top:-4px">Off by default. Turn it on after the DNS record is in place. The public page updates within 5 minutes of a change.</p>
     <div class="row">
       <button class="btn primary" id="locationsSave" type="button">Save</button>
       <span class="spacer"></span>

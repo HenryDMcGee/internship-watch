@@ -1038,6 +1038,7 @@
     try {
       var body = await apiGet("/budgets");
       renderBudgetsResponse(body);
+      $("locPublic").checked = !!(await apiGet("/settings/public-site")).enabled;
     } catch (e) {
       $("budgetsMsg").textContent = "Couldn't load budgets. " + e.message;
     }
@@ -1055,7 +1056,8 @@
     try {
       var body = await apiPut("/budgets", { doc: readBudgetsForm() });
       renderBudgetsResponse(body);
-      $("budgetsMsg").textContent = "Saved.";
+      await apiPut("/settings/public-site", { enabled: $("locPublic").checked });
+      $("budgetsMsg").textContent = "Saved. The public page updates within 5 minutes.";
     } catch (e) {
       $("budgetsMsg").textContent = "Couldn't save. " + e.message;
     }
@@ -1718,7 +1720,6 @@
       var loc = await apiGet("/settings/locations");
       $("locJP").checked = loc.countries.indexOf("JP") !== -1;
       $("locRemote").checked = !!loc.include_remote;
-      $("locPublic").checked = !!(await apiGet("/settings/public-site")).enabled;
     } catch (e) {
       $("locationsMsg").textContent = "Couldn't load locations. " + e.message;
     }
@@ -1730,8 +1731,7 @@
     $("locationsSave").disabled = true;
     try {
       await apiPut("/settings/locations", { countries: countries, include_remote: $("locRemote").checked });
-      await apiPut("/settings/public-site", { enabled: $("locPublic").checked });
-      $("locationsMsg").textContent = "Saved. The public page updates within 5 minutes.";
+      $("locationsMsg").textContent = "Saved.";
     } catch (e) {
       $("locationsMsg").textContent = "Couldn't save. " + e.message;
     }
