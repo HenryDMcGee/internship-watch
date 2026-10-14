@@ -15,3 +15,12 @@ git commit -m "Add CLOUDFLARE_BROWSER_TOKEN to the daily-search and check-now wo
 git push
 ```
 Do this from your own machine (or the GitHub web UI) with your own GitHub credentials, since only you can push workflow files here. See the pull request description for the rest of the after-merge checklist, including which secrets to add.
+
+**`ci.yml`** was updated for issue #81 (frontend tests). It keeps the existing pytest job and adds a `jest` job (`npm ci`, `npx jest --coverage`) and a `playwright` job (`npm ci`, Chromium, `npx playwright test`, then `nyc check-coverage` at 80%). Deploys stay gated on the whole CI workflow, so all three must pass. To install it:
+```bash
+cp docs/pending-workflows/ci.yml .github/workflows/ci.yml
+git add .github/workflows/ci.yml
+git commit -m "Add the Jest and Playwright jobs to CI"
+git push
+```
+Until it is copied, CI only runs the pytest job.

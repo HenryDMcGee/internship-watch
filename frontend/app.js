@@ -118,6 +118,27 @@
     return haystack.indexOf(q) !== -1;
   }
 
+  // The rows a list shows: filtered by the search text, closed and outside rows left out unless
+  // asked for, open rows first. Also counts the closed and outside rows the filter left in play.
+  function visibleRows(allRows, opts) {
+    var isArchived = opts.tab === "archived";
+    var rows = allRows.filter(function (p) { return matchesQuery(p, opts.query.toLowerCase()); });
+    var closedHere = !isArchived ? rows.filter(function (p) { return !isOpen(p); }).length : 0;
+    var outsideHere = !isArchived ? rows.filter(function (p) { return p.location_match === "outside"; }).length : 0;
+    if (!isArchived && !opts.showClosed) rows = rows.filter(isOpen);
+    if (!isArchived && !opts.showOutside) rows = rows.filter(function (p) { return p.location_match !== "outside"; });
+    rows.sort(function (a, b) { return (isOpen(b) ? 1 : 0) - (isOpen(a) ? 1 : 0); });
+    return { rows: rows, closedHere: closedHere, outsideHere: outsideHere };
+  }
+
+  function emptyStateFor(tab, q, closedHere) {
+    if (q) return { title: "No postings match that filter", text: "Clear the filter to see everything in this list." };
+    if (closedHere) return { title: "No open postings here", text: "Everything in this list has stopped taking applications." };
+    if (tab === "today") return { title: "Nothing new yet today", text: "Tomorrow's daily search will add anything new here." };
+    if (tab === "earlier") return { title: "No earlier postings", text: "Today's finds move here tomorrow and stay until you delete them." };
+    return { title: "Nothing archived", text: "Postings you delete land here, and can be restored." };
+  }
+
   function render() {
     var today = state.postings.today, earlier = state.postings.earlier, archived = state.postings.archived;
     var openToday = today.filter(isOpen);
@@ -155,12 +176,10 @@
     list.textContent = "";
     var q = state.query.toLowerCase();
     var isArchived = state.tab === "archived";
-    var rows = state.postings[state.tab].filter(function (p) { return matchesQuery(p, q); });
-    var closedHere = !isArchived ? rows.filter(function (p) { return !isOpen(p); }).length : 0;
-    var outsideHere = !isArchived ? rows.filter(function (p) { return p.location_match === "outside"; }).length : 0;
-    if (!isArchived && !state.showClosed) rows = rows.filter(isOpen);
-    if (!isArchived && !state.showOutside) rows = rows.filter(function (p) { return p.location_match !== "outside"; });
-    rows.sort(function (a, b) { return (isOpen(b) ? 1 : 0) - (isOpen(a) ? 1 : 0); });
+    var visible = visibleRows(state.postings[state.tab], state);
+    var rows = visible.rows;
+    var closedHere = visible.closedHere;
+    var outsideHere = visible.outsideHere;
 
     function addToggle() {
       if (closedHere) {
@@ -188,22 +207,9 @@
     if (!rows.length) {
       var li = el("li");
       var box = el("div", "empty");
-      if (q) {
-        box.appendChild(el("strong", null, "No postings match that filter"));
-        box.appendChild(document.createTextNode("Clear the filter to see everything in this list."));
-      } else if (closedHere) {
-        box.appendChild(el("strong", null, "No open postings here"));
-        box.appendChild(document.createTextNode("Everything in this list has stopped taking applications."));
-      } else if (state.tab === "today") {
-        box.appendChild(el("strong", null, "Nothing new yet today"));
-        box.appendChild(document.createTextNode("Tomorrow's daily search will add anything new here."));
-      } else if (state.tab === "earlier") {
-        box.appendChild(el("strong", null, "No earlier postings"));
-        box.appendChild(document.createTextNode("Today's finds move here tomorrow and stay until you delete them."));
-      } else {
-        box.appendChild(el("strong", null, "Nothing archived"));
-        box.appendChild(document.createTextNode("Postings you delete land here, and can be restored."));
-      }
+      var empty = emptyStateFor(state.tab, q, closedHere);
+      box.appendChild(el("strong", null, empty.title));
+      box.appendChild(document.createTextNode(empty.text));
       li.appendChild(box);
       list.appendChild(li);
       addToggle();
@@ -914,14 +920,19 @@
     });
   }
 
-  function readBudgetsForm() {
+  // The PUT body's `doc`: numeric fields as numbers, the rest as typed.
+  function buildBudgetsDoc(values) {
     var doc = {};
-    Object.keys(BUDGET_FIELDS).forEach(function (id) {
-      var field = BUDGET_FIELDS[id];
-      var raw = $(id).value;
-      doc[field] = NUMERIC_BUDGET_FIELDS.indexOf(field) !== -1 ? Number(raw) : raw;
+    Object.keys(values).forEach(function (field) {
+      doc[field] = NUMERIC_BUDGET_FIELDS.indexOf(field) !== -1 ? Number(values[field]) : values[field];
     });
     return doc;
+  }
+
+  function readBudgetsForm() {
+    var values = {};
+    Object.keys(BUDGET_FIELDS).forEach(function (id) { values[BUDGET_FIELDS[id]] = $(id).value; });
+    return buildBudgetsDoc(values);
   }
 
   function renderBudgetsHistory(changes) {
@@ -1219,11 +1230,11 @@
     return null;
   }
 
-  function countTitlesChanges() {
-    if (!state.titlesOriginal || !state.titlesDraft) return 0;
+  function countTitlesChanges(original, draft) {
+    if (!original || !draft) return 0;
     var origByTitle = {}, draftByTitle = {};
-    state.titlesOriginal.titles.forEach(function (t) { origByTitle[t.title] = t; });
-    state.titlesDraft.titles.forEach(function (t) { draftByTitle[t.title] = t; });
+    original.titles.forEach(function (t) { origByTitle[t.title] = t; });
+    draft.titles.forEach(function (t) { draftByTitle[t.title] = t; });
     var count = 0;
     Object.keys(origByTitle).forEach(function (k) { if (!(k in draftByTitle)) count++; });
     Object.keys(draftByTitle).forEach(function (k) {
@@ -1233,7 +1244,8 @@
     return count;
   }
 
-  function hasUnsavedTitlesChanges() { return countTitlesChanges() > 0; }
+  function draftChangeCount() { return countTitlesChanges(state.titlesOriginal, state.titlesDraft); }
+  function hasUnsavedTitlesChanges() { return draftChangeCount() > 0; }
 
   function titleMatchesFilter(t, q) {
     if (!q) return true;
@@ -1311,7 +1323,7 @@
   }
 
   function updateTitlesUnsavedCount() {
-    var n = countTitlesChanges();
+    var n = draftChangeCount();
     $("titlesUnsaved").textContent = n === 0 ? "No unsaved changes." : (n === 1 ? "1 unsaved change." : n + " unsaved changes.");
     $("titlesSave").disabled = n === 0;
   }
@@ -1448,13 +1460,13 @@
   });
 
   function closeTitlesDialogIfConfirmed() {
-    if (hasUnsavedTitlesChanges() && !window.confirm("Discard " + countTitlesChanges() + " unsaved title change(s)?")) return false;
+    if (hasUnsavedTitlesChanges() && !window.confirm("Discard " + draftChangeCount() + " unsaved title change(s)?")) return false;
     closeDialog($("titlesDialog"));
     return true;
   }
   $("titlesClose").addEventListener("click", function () { closeTitlesDialogIfConfirmed(); });
   $("titlesDialog").addEventListener("cancel", function (e) {
-    if (hasUnsavedTitlesChanges() && !window.confirm("Discard " + countTitlesChanges() + " unsaved title change(s)?")) e.preventDefault();
+    if (hasUnsavedTitlesChanges() && !window.confirm("Discard " + draftChangeCount() + " unsaved title change(s)?")) e.preventDefault();
   });
   window.addEventListener("beforeunload", function (e) {
     if ($("titlesDialog").open && hasUnsavedTitlesChanges()) { e.preventDefault(); e.returnValue = ""; }
@@ -1742,4 +1754,16 @@
   loadPostings();
   loadSources();
   loadFeedback();
+
+  // Lets the Jest unit tests reach the pure helpers. A browser has no `module`, so nothing changes there.
+  if (typeof module !== "undefined" && module.exports) {
+    module.exports = {
+      fmtDate: fmtDate, fmtDateTime: fmtDateTime, safeUrl: safeUrl, fmtPct: fmtPct, fmtUsd: fmtUsd, fmtMin: fmtMin, fmtHrs: fmtHrs,
+      isOpen: isOpen, matchesQuery: matchesQuery, visibleRows: visibleRows, emptyStateFor: emptyStateFor,
+      briefSearchResult: briefSearchResult, formatSearchResult: formatSearchResult, searchErrorMessage: searchErrorMessage,
+      proposalSummary: proposalSummary, normalizeTitleKey: normalizeTitleKey, titlesGroupsInOrder: titlesGroupsInOrder,
+      findDuplicateTitleOwner: findDuplicateTitleOwner, findExcludedWordIn: findExcludedWordIn,
+      titleMatchesFilter: titleMatchesFilter, countTitlesChanges: countTitlesChanges, buildBudgetsDoc: buildBudgetsDoc
+    };
+  }
 })();

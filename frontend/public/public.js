@@ -50,11 +50,18 @@
     return haystack.indexOf(q) !== -1;
   }
 
+  // Splits postings into the "New today" and "Earlier" tabs.
+  function splitByTab(postings, today) {
+    return {
+      today: postings.filter(function (p) { return p.first_seen === today; }),
+      earlier: postings.filter(function (p) { return p.first_seen !== today; })
+    };
+  }
+
   function render() {
-    var today = centralToday();
-    var isToday = function (p) { return p.first_seen === today; };
-    var todayRows = state.postings.filter(isToday);
-    var earlierRows = state.postings.filter(function (p) { return !isToday(p); });
+    var split = splitByTab(state.postings, centralToday());
+    var todayRows = split.today;
+    var earlierRows = split.earlier;
     $("nToday").textContent = todayRows.length;
     $("nEarlier").textContent = earlierRows.length;
 
@@ -134,25 +141,39 @@
 
   $("openFeedback").addEventListener("click", function () { openFeedback(null); });
   $("fbClose").addEventListener("click", closeFeedback);
+  function feedbackError(message) {
+    return String(message || "").trim() ? null : "Write a message first.";
+  }
+
+  function feedbackPayload(f) {
+    return { kind: f.kind, message: f.message, posting_id: f.postingId, page_url: f.pageUrl, website: f.website };
+  }
+
+  function feedbackStatusText(resp) {
+    if (resp.status === 429) return "Try again tomorrow.";
+    if (resp.ok) return "Thanks, sent.";
+    return "Couldn't send that. Please check the message and try again.";
+  }
+
   $("fbSend").addEventListener("click", async function () {
     var message = $("fbMessage").value.trim();
-    if (!message) { $("fbMsg").textContent = "Write a message first."; return; }
+    var problem = feedbackError(message);
+    if (problem) { $("fbMsg").textContent = problem; return; }
     $("fbSend").disabled = true;
     try {
       var resp = await fetch("/api/public/feedback", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
+        body: JSON.stringify(feedbackPayload({
           kind: $("fbKind").value,
           message: message,
-          posting_id: state.reportId,
-          page_url: window.location.href,
+          postingId: state.reportId,
+          pageUrl: window.location.href,
           website: $("fbWebsite").value
-        })
+        }))
       });
-      if (resp.status === 429) $("fbMsg").textContent = "Try again tomorrow.";
-      else if (resp.ok) { $("fbMsg").textContent = "Thanks, sent."; $("fbMessage").value = ""; }
-      else $("fbMsg").textContent = "Couldn't send that. Please check the message and try again.";
+      $("fbMsg").textContent = feedbackStatusText(resp);
+      if (resp.ok) $("fbMessage").value = "";
     } catch (e) {
       $("fbMsg").textContent = "Couldn't send that. Please try again.";
     }
@@ -179,4 +200,13 @@
   }
 
   load();
+
+  // Lets the Jest unit tests reach the pure helpers. A browser has no `module`, so nothing changes there.
+  if (typeof module !== "undefined" && module.exports) {
+    module.exports = {
+      fmtDate: fmtDate, fmtDateTime: fmtDateTime, centralToday: centralToday, safeUrl: safeUrl,
+      titleOf: titleOf, matches: matches, splitByTab: splitByTab,
+      feedbackError: feedbackError, feedbackPayload: feedbackPayload, feedbackStatusText: feedbackStatusText
+    };
+  }
 })();

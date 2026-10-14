@@ -1,0 +1,98 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install jsonschema pytest
+          if [ -f requirements-dev.txt ]; then pip install -r requirements-dev.txt; fi
+
+      - name: Validate titles
+        run: python scripts/validate_titles.py
+
+      - name: Run tests
+        run: |
+          set +e
+          pytest -q
+          code=$?
+          if [ "$code" -eq 5 ]; then echo "No tests collected yet"; exit 0; fi
+          exit $code
+
+  # Frontend unit tests (Jest, jsdom). Fails if statements, branches, functions or lines
+  # fall below 80% of frontend/**/*.js; the threshold lives in jest.config.js.
+  jest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - run: npm ci
+
+      - name: Jest with the 80% coverage gate
+        run: npx jest --coverage
+
+  # Frontend browser tests (Playwright, Chromium) against tests/ui/serve.py, which needs the
+  # same Python packages as pytest. Coverage is measured from this run alone and gated by nyc.
+  playwright:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install the test server's Python packages
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - run: npm ci
+
+      - run: npx playwright install --with-deps chromium
+
+      - name: Playwright suite
+        run: npx playwright test
+
+      - name: Playwright coverage gate (80% of frontend/**/*.js)
+        run: npx nyc check-coverage --statements 80 --branches 80 --functions 80 --lines 80
+
+      - name: Upload the Playwright report on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-test-results
+          path: test-results/
+          if-no-files-found: ignore
