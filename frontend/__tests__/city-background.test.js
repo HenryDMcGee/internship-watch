@@ -422,15 +422,24 @@ describe("the render loop", () => {
     expect(document.getElementById("cityBg")).toBeNull();
   });
 
-  test("a resize resizes the renderer to the container", async () => {
+  test("the renderer starts at the window size, not the size of any element", async () => {
+    const s = setup({ width: 1920 });
+    s.env.win.innerHeight = 1080;
+    await s.start();
+    expect(s.three.made.renderers[0].size).toEqual([1920, 1080, false]);
+  });
+
+  test("a resize sizes the renderer and the camera from the window, ignoring the container", async () => {
     const s = setup();
     await s.start();
     const renderer = s.three.made.renderers[0];
     const bg = document.getElementById("cityBg");
     Object.defineProperty(bg, "clientWidth", { configurable: true, value: 900 });
     Object.defineProperty(bg, "clientHeight", { configurable: true, value: 400 });
+    s.env.win.innerWidth = 1600;
+    s.env.win.innerHeight = 900;
     s.env.listeners.resize();
-    expect(renderer.size).toEqual([900, 400, false]);
+    expect(renderer.size).toEqual([1600, 900, false]);
   });
 
   test("a theme change recolors the scene without rebuilding it", async () => {

@@ -26,7 +26,7 @@ for (const [name, origin, ready] of [
       });
       expect(style.events).toBe("none");
       expect(Number(style.z)).toBeLessThan(0);
-      expect(style.position).toBe("absolute");
+      expect(style.position).toBe("fixed");
     });
 
     test("is a child of the body, not of the content", async ({ page }) => {

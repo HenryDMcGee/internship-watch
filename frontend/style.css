@@ -9,7 +9,8 @@
 }
 *{box-sizing:border-box}
 html,body{margin:0}
-body{background:var(--bg); color:var(--ink); font:16px/1.5 var(--body); -webkit-font-smoothing:antialiased}
+html{background:var(--bg)}
+body{background:transparent; color:var(--ink); font:16px/1.5 var(--body); -webkit-font-smoothing:antialiased}
 a:not(.btn){color:var(--accent)}
 button,input,textarea{font:inherit; color:inherit}
 :focus-visible{outline:3px solid var(--accent); outline-offset:2px}
@@ -57,14 +58,13 @@ input[type="checkbox"]:checked{outline-color:var(--accent)}
 .hero h1 .dim{display:block; color:var(--muted); font-weight:500; font-size:.42em; letter-spacing:-.01em; margin-bottom:10px}
 .hero p{margin:14px 0 0; color:var(--muted); max-width:56ch}
 
-/* Night city behind the header (public/city-background.js). It covers the top of the page only,
-   sits behind everything, ignores the pointer, and fades into the flat background. */
-.city-bg{position:absolute; top:0; left:0; width:100%; height:460px; z-index:-1; pointer-events:none; overflow:hidden;
-  -webkit-mask-image:linear-gradient(to bottom, black 50%, transparent); mask-image:linear-gradient(to bottom, black 50%, transparent)}
+/* Night city behind the page (public/city-background.js). Fixed to the whole viewport, behind
+   everything, ignores the pointer. The page color lives on html, so nothing above it paints over the city. */
+.city-bg{position:fixed; top:0; left:0; width:100vw; height:100vh; height:100dvh; z-index:-1; pointer-events:none; overflow:hidden}
 .city-canvas, .city-still{position:absolute; top:0; left:0; width:100%; height:100%; display:block}
 .city-still{object-fit:cover; object-position:center bottom}
 .city-scrim{position:absolute; top:0; left:0; width:100%; height:100%;
-  background:linear-gradient(to bottom, color-mix(in srgb, var(--bg) 72%, transparent), var(--bg))}
+  background:linear-gradient(to bottom, color-mix(in srgb, var(--bg) 20%, transparent), color-mix(in srgb, var(--bg) 45%, transparent))}
 @media print{ .city-bg{display:none} }
 
 .tabs{display:flex; gap:4px; background:color-mix(in srgb, var(--surface) 94%, transparent); border:1px solid var(--line); border-radius:14px; padding:4px}

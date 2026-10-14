@@ -381,7 +381,7 @@
 
     function onResize() {
       if (!scene) return;
-      scene.resize(bg.clientWidth || win.innerWidth, bg.clientHeight || DEFAULT_HEIGHT);
+      scene.resize(win.innerWidth, win.innerHeight);
     }
 
     var monitor = createFpsMonitor({ onLow: function () { switchToStill("low-fps"); } });
@@ -484,8 +484,8 @@
       try {
         scene = createScene(THREE, {
           canvas: canvas,
-          width: bg.clientWidth || win.innerWidth,
-          height: bg.clientHeight || DEFAULT_HEIGHT,
+          width: win.innerWidth,
+          height: win.innerHeight,
           dpr: win.devicePixelRatio || 1,
           colors: themeColors(),
         });
