@@ -52,5 +52,12 @@ A private tool that finds Summer 2027 MBA product-type internships every morning
 
 * The deployed Worker only contains `api/src` (see `api/wrangler.toml`'s `main = "src/main.py"`). Never read repo files by path from the API (e.g. `config/titles.json`) — they aren't there in production, only on disk locally and in CI. Read them through `github_client` instead.
 
+## Test-driven development
+
+* Every change is built test-first. Before writing implementation code, write the tests that express the issue's requirements and confirm they fail for the right reason. Then implement until they pass, and refactor with the tests green.
+* This applies to every suite the change touches: pytest for API, job, and agent logic; Jest for frontend logic; Playwright for user-visible flows. A new endpoint, function, or flow with no new or changed test is out of scope by definition.
+* Commit in an order that shows the tests came first (tests in an earlier commit than the implementation, or clearly separated commits), and say in the pull request description which tests were written first and what they pin down.
+* Bug fixes start with a test that reproduces the bug and fails on the current code. The fix is done when that test passes without breaking the others.
+* Keep both frontend coverage gates at or above 80%. Never lower a threshold or exclude files to get green.
 
 
