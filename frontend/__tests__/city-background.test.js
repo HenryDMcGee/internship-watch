@@ -534,8 +534,8 @@ describe("the camera", () => {
     const PREVIOUS_SPEED = city.SPACING / 13.5;
     const { sc } = make();
     const z0 = sc.camera.position.z;
-    sc.step(PREVIOUS_SPEED * 20); // twenty seconds' worth at the old rate
-    expect(z0 - sc.camera.position.z).toBeCloseTo(PREVIOUS_SPEED * 10, 6);
+    sc.step(C.SPEED * 20); // twenty seconds at the configured rate
+    expect(z0 - sc.camera.position.z).toBeCloseTo(PREVIOUS_SPEED * 10, 6); // half of the old 20 s travel
     expect(C.SPEED).toBeCloseTo(PREVIOUS_SPEED / 2, 9);
   });
 
@@ -624,7 +624,7 @@ describe("the camera", () => {
     expect(sc.grid.rows.length).toBe(rows);
     expect(made.meshes.map((m) => m.count)).toEqual(instances);
     expect(sc.grid.recycled).toBe(Math.floor((C.SPEED * hours * 3600) / city.SPACING + 1e-6));
-    expect(sc.grid.recycled).toBeGreaterThan(500);
+    expect(sc.grid.recycled).toBeGreaterThan(250); // 2 h at one block per 27 s is 266 rows
   });
 
   test("fog ends well before the far end of the street", () => {
