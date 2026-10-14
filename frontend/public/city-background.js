@@ -28,12 +28,12 @@
     HEIGHT: TOWER_HEIGHT * 0.23, // 20 to 25 percent of the tallest towers, below most rooftops
     TILT_DEGREES: 20, // downward, from horizontal
     FOV: 55,
-    BLOCK_SECONDS: 27, // one block passes every 27 seconds: barely moving
-    SPEED: SPACING / 27, // world units per second, forward along -z
+    BLOCK_SECONDS: 81, // one block passes every 81 seconds: barely moving
+    SPEED: SPACING / 81, // world units per second, forward along -z
     DRIFT_X: 1.2, // sideways drift, units either side of the avenue's middle
     DRIFT_Y: 0.6, // vertical drift, units either side of HEIGHT
-    DRIFT_X_SECONDS: 190, // each drift runs on its own long cycle
-    DRIFT_Y_SECONDS: 140,
+    DRIFT_X_SECONDS: 570, // each drift runs on its own long cycle
+    DRIFT_Y_SECONDS: 420,
   };
   var FOG_FAR = SPACING * (ROWS - 5); // the far end of the street fades out before the last rows
   var MAX_WINDOWS = 6;
