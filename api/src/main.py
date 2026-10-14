@@ -740,11 +740,10 @@ async def update_public_site(body: PublicSiteUpdate, db: Database = Depends(get_
 
 
 # ---------------------------------------------------------------------------
-# Feedback (private side): the owner's own submissions and the Feedback view
+# Feedback (private side): the Feedback view, where visitor submissions are read
 # ---------------------------------------------------------------------------
 
-FEEDBACK_KINDS = ("bug", "dead_link", "closed", "wrong_job", "suggestion", "other")
-PUBLIC_FEEDBACK_KINDS = ("dead_link", "closed", "wrong_job", "suggestion", "other")  # visitors can't file a Bug
+PUBLIC_FEEDBACK_KINDS = ("dead_link", "closed", "wrong_job", "suggestion", "other")
 FEEDBACK_KIND_LABELS = {
     "bug": "Bug", "dead_link": "Dead link", "closed": "Job is closed",
     "wrong_job": "Wrong job", "suggestion": "Suggestion", "other": "Other",
@@ -762,13 +761,6 @@ _FEEDBACK_OUT_SQL = (
 )
 
 
-class OwnerFeedbackCreate(BaseModel):
-    kind: str
-    message: str
-    posting_id: int | None = None
-    page_url: str | None = None
-
-
 class FeedbackStatusUpdate(BaseModel):
     status: str  # "read" or "dismissed"
 
@@ -777,22 +769,6 @@ class FeedbackStatusUpdate(BaseModel):
 async def list_feedback(db: Database = Depends(get_db)):
     rows = await db.all(f"{_FEEDBACK_OUT_SQL} ORDER BY f.created_at DESC, f.id DESC")
     return {"feedback": rows}
-
-
-@router.post("/feedback", status_code=201)
-async def create_owner_feedback(body: OwnerFeedbackCreate, db: Database = Depends(get_db)):
-    if body.kind not in FEEDBACK_KINDS:
-        raise HTTPException(status_code=400, detail="Unknown feedback type")
-    message = body.message.strip()
-    if not message or len(message) > FEEDBACK_MAX_CHARS:
-        raise HTTPException(status_code=400, detail=f"Message must be 1 to {FEEDBACK_MAX_CHARS} characters")
-    if body.posting_id is not None and not await db.first("SELECT id FROM postings WHERE id = ?", body.posting_id):
-        raise HTTPException(status_code=400, detail="Posting not found")
-    new_id = await db.run(
-        "INSERT INTO feedback (source, kind, posting_id, message, page_url, created_at) VALUES ('owner', ?, ?, ?, ?, ?)",
-        body.kind, body.posting_id, message, (body.page_url or "")[:PAGE_URL_MAX_CHARS] or None, now_iso(),
-    )
-    return await db.first(f"{_FEEDBACK_OUT_SQL} WHERE f.id = ?", new_id)
 
 
 @router.post("/feedback/{feedback_id}/status")
@@ -826,7 +802,7 @@ async def open_feedback_issue(feedback_id: int, request: Request, db: Database =
 
     label = FEEDBACK_KIND_LABELS.get(row["kind"], row["kind"])
     first_line = " ".join(row["message"].split())[:60]
-    lines = [_fenced(row["message"]), "", f"Type: {label}", f"Source: {'Visitor' if row['source'] == 'public' else 'Owner'}",
+    lines = [_fenced(row["message"]), "", f"Type: {label}", "Source: Visitor",
              f"Date: {row['created_at']}"]
     if row["posting_id"] is not None:
         lines.append(f"Posting: {row['posting_company']}, {row['posting_title']}")

@@ -300,14 +300,10 @@ def test_missing_salt_returns_503_and_stores_nothing(client):
 
 # -- owner feedback and the Feedback view ---------------------------------------------
 
-def test_owner_feedback_is_stored_with_source_owner_and_may_be_a_bug(client):
+def test_private_api_has_no_owner_feedback_submission(client):
     tc, db = client
-    resp = tc.post("/api/feedback", json={"kind": "bug", "message": "The tab is broken"})
-    assert resp.status_code == 201
-    (row,) = feedback_rows(db)
-    assert row["source"] == "owner" and row["kind"] == "bug" and row["visitor_hash"] is None
-    assert tc.post("/api/feedback", json={"kind": "bug", "message": ""}).status_code == 400
-    assert tc.post("/api/feedback", json={"kind": "nope", "message": "x"}).status_code == 400
+    assert tc.post("/api/feedback", json={"kind": "bug", "message": "x"}).status_code == 405
+    assert feedback_rows(db) == []
 
 
 def test_feedback_list_is_newest_first_with_the_posting_joined(client):
