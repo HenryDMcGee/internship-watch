@@ -13,3 +13,7 @@ __pycache__/
 .pytest_cache/
 dist/
 .DS_Store
+coverage/
+.nyc_output/
+test-results/
+playwright-report/
