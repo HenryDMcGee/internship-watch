@@ -207,6 +207,47 @@ describe("which background a device gets", () => {
     expect(ctl.reason).toBe("no-webgl");
   });
 
+  test("a failed three.js download logs a console error that names the step", async () => {
+    const err = jest.spyOn(console, "error").mockImplementation(() => {});
+    const s = setup();
+    s.startOpts.loadThree = jest.fn(async () => { throw new Error("404"); });
+    await city.start(s.startOpts);
+    expect(err).toHaveBeenCalledTimes(1);
+    expect(err.mock.calls[0].join(" ")).toMatch(/city background.*load three\.js.*404/i);
+  });
+
+  test("a renderer that cannot be created logs a console error that names the step", async () => {
+    const err = jest.spyOn(console, "error").mockImplementation(() => {});
+    const s = setup();
+    s.three.THREE.WebGLRenderer = function () { throw new Error("no context"); };
+    await s.start();
+    expect(err.mock.calls.map((c) => c.join(" ")).join("\n")).toMatch(/city background.*create the scene.*no context/i);
+  });
+
+  test("a first render that throws falls back to the static image and logs the step", async () => {
+    const err = jest.spyOn(console, "error").mockImplementation(() => {});
+    const s = setup();
+    s.three.THREE.WebGLRenderer.prototype.render = function () { throw new Error("shader failed"); };
+    const ctl = await s.start();
+    expect(ctl.mode).toBe("still");
+    expect(ctl.reason).toBe("render-failed");
+    expect(document.querySelector("#cityBg canvas")).toBeNull();
+    expect(document.querySelector("#cityBg img")).not.toBeNull();
+    expect(err.mock.calls.map((c) => c.join(" ")).join("\n")).toMatch(/city background.*render.*shader failed/i);
+  });
+
+  test("a render that throws in a later frame also falls back to the static image", async () => {
+    const err = jest.spyOn(console, "error").mockImplementation(() => {});
+    const s = setup();
+    const ctl = await s.start();
+    expect(ctl.mode).toBe("animated");
+    s.three.made.renderers[0].render = () => { throw new Error("context gone"); };
+    s.env.frame(100);
+    expect(ctl.mode).toBe("still");
+    expect(ctl.reason).toBe("render-failed");
+    expect(err).toHaveBeenCalled();
+  });
+
   test("the mode and reason are recorded on the container", async () => {
     const s = setup({ width: 390, coarse: true });
     await s.start();

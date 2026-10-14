@@ -288,6 +288,7 @@ test.describe("Titles", () => {
   test("filter, and apply JSON", async ({ page }) => {
     await page.goto("/");
     await page.click("#openTitles");
+    await expect(rowsIn(page).first()).toBeVisible(); // the rows load after the dialog opens; count only once they are there
     const all = await rowsIn(page).count();
     await page.fill("#titlesFilter", "Product Management");
     expect(await rowsIn(page).count()).toBeLessThan(all);

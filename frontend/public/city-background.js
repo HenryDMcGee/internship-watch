@@ -262,6 +262,12 @@
 
   // ---- the page ---------------------------------------------------------------------------
 
+  // A failure here must never be silent: name the step in the console, then the caller shows the still image.
+  function logFailure(step, error) {
+    var detail = error && error.message ? error.message : String(error);
+    if (typeof console !== "undefined" && console.error) console.error("City background: " + step + " failed: " + detail, error);
+  }
+
   function mediaMatches(win, query) {
     try { return !!(win.matchMedia && win.matchMedia(query).matches); } catch (e) { return false; }
   }
@@ -373,8 +379,14 @@
       if (!scene) return; // the monitor may have swapped to the still image
       if (lastRender === null || t - lastRender >= FRAME_MS - 1) {
         var dt = lastTick === null ? 0 : Math.min((t - lastTick) / 1000, 0.1);
-        scene.step(dt * SPEED);
-        scene.render();
+        try {
+          scene.step(dt * SPEED);
+          scene.render();
+        } catch (e) {
+          logFailure("render a frame", e);
+          switchToStill("render-failed");
+          return;
+        }
         lastRender = t;
         lastTick = t;
       }
@@ -464,6 +476,7 @@
           colors: themeColors(),
         });
       } catch (e) {
+        logFailure("create the scene", e);
         canvas = null;
         showStill("no-webgl");
         return ctl;
@@ -473,12 +486,21 @@
       win.addEventListener("resize", onResize);
       doc.addEventListener("visibilitychange", onVisibility);
       record("animated");
-      scene.step(0);
-      scene.render();
+      try {
+        scene.step(0);
+        scene.render();
+      } catch (e) {
+        logFailure("render the first frame", e);
+        switchToStill("render-failed");
+        return ctl;
+      }
       if (doc.visibilityState !== "hidden") rafId = raf(frame);
       return ctl;
-    }, function () {
-      if (!disposed) showStill("load-failed");
+    }, function (e) {
+      if (!disposed) {
+        logFailure("load three.js from " + THREE_URL, e);
+        showStill("load-failed");
+      }
       return ctl;
     });
   }
@@ -498,6 +520,10 @@
     module.exports = api;
   } else {
     window.CityBackground = api;
-    start();
+    try {
+      start();
+    } catch (e) {
+      logFailure("start", e);
+    }
   }
 })();

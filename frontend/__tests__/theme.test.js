@@ -155,16 +155,17 @@ describe("where the colors are used", () => {
 });
 
 describe("the city background layer", () => {
-  test("is fixed to the viewport, behind content, and ignores the pointer", () => {
-    const body = bodiesFor("#cityBackground");
-    expect(body).toMatch(/position:\s*fixed/);
-    expect(body).toMatch(/inset:\s*0/);
+  test("is behind content, ignores the pointer, and is the only layer at z-index -1", () => {
+    const body = bodiesFor(".city-bg");
     expect(body).toMatch(/z-index:\s*-1/);
     expect(body).toMatch(/pointer-events:\s*none/);
+    // A second z-index:-1 layer that comes later in the page paints over the city. This is what hid it.
+    const behind = rules().filter((r) => /z-index:\s*-1/.test(r.body)).map((r) => r.selector);
+    expect(behind).toEqual([".city-bg"]);
   });
 
   test("a scrim built from the page color sits over the scene", () => {
-    const scrim = bodiesFor("#cityBackground::after");
+    const scrim = bodiesFor(".city-scrim");
     expect(scrim).toContain("linear-gradient");
     expect(scrim).toContain("var(--bg)");
   });
@@ -175,11 +176,11 @@ describe("the city background layer", () => {
     }
   });
 
-  test("both pages hold the background layer and load its script", () => {
+  test("both pages load the background script, and neither holds an empty layer that would cover it", () => {
     for (const file of ["index.html", "public/index.html"]) {
       const html = read(file);
-      expect(html).toContain('id="cityBackground"');
-      expect(html).toContain('src="/public/city/city-background.js"');
+      expect(html).toContain('src="/public/city-background.js"');
+      expect(html).not.toContain('id="cityBackground"');
       expect(html).not.toMatch(/three(\.min)?\.js|unpkg|cdn\./);
     }
   });

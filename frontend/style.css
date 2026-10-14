@@ -60,14 +60,14 @@ input[type="checkbox"]:checked{outline-color:var(--accent)}
 /* Night city behind the header (public/city-background.js). It covers the top of the page only,
    sits behind everything, ignores the pointer, and fades into the flat background. */
 .city-bg{position:absolute; top:0; left:0; width:100%; height:460px; z-index:-1; pointer-events:none; overflow:hidden;
-  -webkit-mask-image:linear-gradient(to bottom, #000 50%, transparent); mask-image:linear-gradient(to bottom, #000 50%, transparent)}
+  -webkit-mask-image:linear-gradient(to bottom, black 50%, transparent); mask-image:linear-gradient(to bottom, black 50%, transparent)}
 .city-canvas, .city-still{position:absolute; top:0; left:0; width:100%; height:100%; display:block}
 .city-still{object-fit:cover; object-position:center bottom}
 .city-scrim{position:absolute; top:0; left:0; width:100%; height:100%;
   background:linear-gradient(to bottom, color-mix(in srgb, var(--bg) 72%, transparent), var(--bg))}
 @media print{ .city-bg{display:none} }
 
-.tabs{display:flex; gap:4px; background:var(--surface); border:1px solid var(--line); border-radius:14px; padding:4px}
+.tabs{display:flex; gap:4px; background:color-mix(in srgb, var(--surface) 94%, transparent); border:1px solid var(--line); border-radius:14px; padding:4px}
 .tab{flex:1; min-width:0; border:0; background:transparent; border-radius:10px; padding:10px 8px; cursor:pointer; font-weight:700; color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
 .tab[aria-selected="true"]{background:var(--accent-soft); color:var(--accent)}
 .tab .n{font-weight:400; margin-left:4px}
@@ -245,9 +245,3 @@ dialog::backdrop{background:color-mix(in srgb, var(--bg) 70%, transparent)}
   .item.flash{animation:flash 1.2s ease-out 1}
   @keyframes flash{from{background:var(--accent-soft)} to{background:color-mix(in srgb, var(--surface) 94%, transparent)}}
 }
-
-/* Night city behind the page (city-background.js). Fixed to the viewport, never takes clicks. */
-#cityBackground{position:fixed; inset:0; z-index:-1; pointer-events:none; overflow:hidden; background:var(--bg)}
-#cityBackground canvas, .city-still, .city-still img{position:absolute; inset:0; width:100%; height:100%; display:block}
-.city-still img{object-fit:cover}
-#cityBackground::after{content:""; position:absolute; inset:0; background:linear-gradient(180deg, color-mix(in srgb, var(--bg) 45%, transparent), color-mix(in srgb, var(--bg) 78%, transparent) 60%, color-mix(in srgb, var(--bg) 88%, transparent))}
