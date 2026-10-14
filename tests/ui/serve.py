@@ -14,8 +14,8 @@ Cloudflare Access stays unconfigured, as it is locally. GitHub is a small in-mem
 
 Test-only controls live on the dashboard port under /__test/ (never on the public port):
   POST /__test/reset            {"public_site": bool, "rate_limited": bool}  re-seeds the database
-  POST /__test/complete-search  {"result": {...}}  finishes the pending "Search now" request
-  POST /__test/complete-check   {"result": {...}}  finishes the pending "Check now" request
+  POST /__test/complete-search  {"result": {...}, "status": "completed"|"failed"}  finishes the pending "Search now" request
+  POST /__test/complete-check   {"result": {...}, "status": "completed"|"failed"}  finishes the pending "Check now" request
 """
 from __future__ import annotations
 
@@ -178,10 +178,10 @@ def reset(public_site: bool = False, rate_limited: bool = False) -> None:
     app.state.feedback_salt = SALT
 
 
-def _complete(table: str, result: dict) -> None:
+def _complete(table: str, result: dict, status: str = "completed") -> None:
     db = app.state.db
-    db._conn.execute(f"UPDATE {table} SET status = 'completed', result = ? WHERE status IN ('pending', 'running')",
-                     (json.dumps(result),))
+    db._conn.execute(f"UPDATE {table} SET status = ?, result = ? WHERE status IN ('pending', 'running')",
+                     (status, json.dumps(result)))
     db._conn.commit()
 
 
@@ -217,9 +217,9 @@ def make_handler(hostname: str, controls: bool):
                     if path == "/__test/reset":
                         reset(bool(payload.get("public_site")), bool(payload.get("rate_limited")))
                     elif path == "/__test/complete-search":
-                        _complete("search_requests", payload.get("result") or {})
+                        _complete("search_requests", payload.get("result") or {}, payload.get("status", "completed"))
                     elif path == "/__test/complete-check":
-                        _complete("check_requests", payload.get("result") or {})
+                        _complete("check_requests", payload.get("result") or {}, payload.get("status", "completed"))
                     else:
                         return self._send(404, b"Not found")
                 return self._send(204)

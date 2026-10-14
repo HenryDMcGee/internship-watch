@@ -128,7 +128,7 @@ uv run pywrangler deploy
 
 ## Deploying later changes
 
-From phase 4, merging a pull request to `master` deploys automatically: once CI passes, `.github/workflows/deploy.yml` runs step 5 (apply migrations) and step 7 (deploy the Worker) for you, using the `CLOUDFLARE_DEPLOY_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` secrets. Watch the **Actions** tab for the **Deploy** run.
+From phase 4, merging a pull request to `master` deploys automatically: once CI passes (all three jobs: pytest, the Jest frontend tests, and the Playwright browser tests, each with its own 80% frontend coverage gate), `.github/workflows/deploy.yml` runs step 5 (apply migrations) and step 7 (deploy the Worker) for you, using the `CLOUDFLARE_DEPLOY_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` secrets. Watch the **Actions** tab for the **Deploy** run.
 
 The manual commands above still work as a fallback (for example, if Actions is down, or you're deploying from a branch that isn't `master`):
 1. If the change added files in `db/migrations/`, run step 5.

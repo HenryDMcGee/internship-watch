@@ -2,5 +2,5 @@
   "include": ["frontend/**/*.js"],
   "exclude": ["frontend/__tests__/**"],
   "temp-dir": ".nyc_output",
-  "all": false
+  "all": true
 }

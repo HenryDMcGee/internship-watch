@@ -104,6 +104,35 @@ pytest
 python scripts/validate_titles.py
 ```
 
+## Frontend tests
+
+Two independent suites cover the dashboard (`frontend/app.js`) and the public page (`frontend/public/public.js`). Each one has its own hard gate: at least 80% of statements, branches, functions and lines of `frontend/**/*.js`, measured from that suite alone (the two are never merged). Below 80% on any measure, the suite fails and so does CI. Node is dev and CI tooling only; nothing from it ships in the Worker, and there is still no build step.
+
+Install once from the repository root (Node 22):
+
+```bash
+npm ci
+npx playwright install chromium     # add --with-deps on a fresh Linux machine
+pip install -r requirements-dev.txt # the Playwright test server is Python
+```
+
+**Jest (unit tests, jsdom).** Tests are in `frontend/__tests__/`. They load the real `index.html` files into jsdom and run the real scripts against a faked API.
+
+```bash
+npx jest --coverage
+```
+
+The 80% threshold is `coverageThreshold` in `jest.config.js`.
+
+**Playwright (browser tests, Chromium).** Tests are in `tests/ui/`. `playwright.config.js` starts `tests/ui/serve.py`, which serves the real FastAPI app on the in-memory database with seeded postings, plus `frontend/` the way the `ASSETS` binding does. Port 8787 stands in for the dashboard hostname and port 8788 for the public one (`/` shows `frontend/public/index.html`). Cloudflare Access stays unconfigured, GitHub is a small in-memory fake, and Google Fonts requests are blocked. The Pyodide entrypoint in `api/src/main.py` is not run.
+
+```bash
+npx playwright test     # also writes Chromium's V8 coverage to .nyc_output/
+npm run coverage:ui     # prints the table, then fails below 80%
+```
+
+The gate itself is `nyc check-coverage --statements 80 --branches 80 --functions 80 --lines 80`.
+
 ## Running the daily job by hand
 
 The daily job (`job/run.py`) normally runs on GitHub Actions at 08:00 America/Chicago (`.github/workflows/daily-search.yml`), or for specific companies when you click Check now on the dashboard (`.github/workflows/check-now.yml`). To run it yourself:
