@@ -1,6 +1,6 @@
 :root{
   color-scheme: dark;
-  --bg:#05060A; --surface:#0B0E14; --ink:#F2F6FF; --muted:#8A9AB8; --line:#1B2434;
+  --bg:#05060A; --surface:#0B0E14; --ink:#F2F6FF; --muted:#8A9AB8; --muted-strong:#C9D4E8; --line:#1B2434;
   --accent:#22D3EE; --accent-deep:#1E6BFF; --accent-soft:#0C2A3D; --on-accent:#FFFFFF;
   --hot:#FF7A1A; --hot-soft:#2A1608; --on-hot:#05060A;
   --ok:#22D3EE; --ok-soft:#0C2A3D; --danger:#FF4D5E; --on-danger:#05060A;
@@ -56,7 +56,7 @@ input[type="checkbox"]:checked{outline-color:var(--accent)}
 .hero{margin:20px 0 20px}
 .hero h1{font:800 clamp(40px, 11vw, 72px)/.95 var(--display); letter-spacing:-.035em; margin:0}
 .hero h1 .dim{display:block; color:var(--muted); font-weight:500; font-size:.42em; letter-spacing:-.01em; margin-bottom:10px}
-.hero p{margin:14px 0 0; color:var(--muted); max-width:56ch}
+.hero p{margin:14px 0 0; color:var(--muted-strong); max-width:56ch; text-shadow:0 1px 3px color-mix(in srgb, var(--bg) 70%, transparent)}
 
 /* Night city behind the page (public/city-background.js). Fixed to the whole viewport, behind
    everything, ignores the pointer. The page color lives on html, so nothing above it paints over the city. */
