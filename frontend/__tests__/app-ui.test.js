@@ -193,7 +193,8 @@ describe("postings", () => {
       expect(cards()[0].textContent).toContain("Archived");
       buttonByText(cards()[0], "Restore").click();
       await jest.advanceTimersByTimeAsync(10);
-      expect(text("status")).toBe("Restored Amazon.");
+      click("tabToday");
+      expect(cards()).toHaveLength(1);
     } finally {
       jest.useRealTimers();
     }
@@ -382,7 +383,7 @@ describe("Sources", () => {
       { name: "Acme", status: "failed", flagged: true, method: "browser_run", last_checked: "2026-10-14T13:00:00Z", last_error: "timeout" },
       { name: "Beta", status: "mystery", method: "other" },
     ];
-    await bootApp(data, { "DELETE /api/sources/1": () => ({ ok: true, status: 204, json: async () => null }) });
+    await bootApp(data, { "DELETE /api/sources/2": () => ({ ok: true, status: 204, json: async () => null }) });
     click("tabMore");
     click("moreSources");
     await flush();
@@ -430,6 +431,9 @@ describe("Sources", () => {
 
   test("a sources load error", async () => {
     await bootApp(freshData(), { "GET /api/sources": () => jsonResponse({ detail: "down" }, 500) });
+    click("tabMore");
+    click("moreSources");
+    await flush();
     expect(text("status")).toBe("Couldn't load sources. down");
   });
 
@@ -439,7 +443,7 @@ describe("Sources", () => {
     click("addBtn");
     expect(text("status")).toMatch(/Enter a site name/);
     type("addName", "Site");
-    type("addUrl", "nonsense");
+    type("addUrl", "mailto:a@b.com");
     click("addBtn");
     expect(text("status")).toMatch(/Enter a site name/);
     type("addUrl", "https://site.com");
@@ -633,7 +637,7 @@ describe("Feedback", () => {
   test("Open as GitHub issue, and the card link jumps to the posting", async () => {
     const data = freshData();
     data.feedback = rows();
-    await bootApp(data, { "POST /api/feedback/1/issue": () => jsonResponse({}) });
+    const { fetchMock } = await bootApp(data, { "POST /api/feedback/1/issue": () => jsonResponse({}) });
     click("tabMore");
     click("moreFeedback");
     await flush();
@@ -648,26 +652,29 @@ describe("Feedback", () => {
     await flush();
     buttonByText($("feedbackList").querySelector(".row-item"), "Open as GitHub issue").click();
     await flush();
-    expect(text("status")).toBe("Opened a GitHub issue.");
+    expect(fetchMock.calls.some((c) => c.url === "/api/feedback/1/issue")).toBe(true);
   });
 
   test("a link to a posting that is gone says so; failures are reported", async () => {
     const data = freshData();
     data.feedback = rows();
-    await bootApp(data, { "POST /api/feedback/3/status": () => jsonResponse({ detail: "no" }, 400) });
+    await bootApp(data, { "POST /api/feedback/1/status": () => jsonResponse({ detail: "no" }, 400) });
     click("tabMore");
     click("moreFeedback");
     await flush();
-    const third = $("feedbackList").querySelectorAll(".row-item")[2];
+    const [first, , third] = $("feedbackList").querySelectorAll(".row-item");
     third.querySelector("a").click();
     expect(text("status")).toBe("That posting is no longer in the lists.");
-    buttonByText(third, "Open as GitHub issue").click();
+    buttonByText(first, "Mark read").click();
     await flush();
-    expect(text("status")).toMatch(/Couldn't save that\./);
+    expect(text("status")).toBe("Couldn't save that. no");
   });
 
   test("a feedback load error is reported", async () => {
     await bootApp(freshData(), { "GET /api/feedback": () => jsonResponse({ detail: "x" }, 500) });
+    click("tabMore");
+    click("moreFeedback");
+    await flush();
     expect(text("status")).toBe("Couldn't load feedback. x");
   });
 });

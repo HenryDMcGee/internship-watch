@@ -41,7 +41,11 @@ function loadPage(htmlFile, scriptFile, fetchImpl) {
 }
 
 async function flush(n) {
-  for (let i = 0; i < (n || 10); i++) await new Promise((r) => setTimeout(r, 0));
+  const fake = typeof setTimeout.clock !== "undefined"; // jest's fake timers: real ones would never fire
+  for (let i = 0; i < (n || 10); i++) {
+    if (fake) await jest.advanceTimersByTimeAsync(0);
+    else await new Promise((r) => setTimeout(r, 0));
+  }
 }
 
 module.exports = { jsonResponse, makeFetch, loadPage, flush };

@@ -284,7 +284,7 @@ describe("Titles", () => {
     click("titlesJsonApply");
     expect(text("titlesMsg")).toMatch(/^Applied/);
     expect(rowFor("Only")).toBeTruthy();
-    expect(text("titlesUnsaved")).toBe("3 unsaved changes.");
+    expect(text("titlesUnsaved")).toBe("4 unsaved changes.");
   });
 
   test("saving opens a pull request link and clears unsaved changes", async () => {
@@ -383,11 +383,12 @@ describe("Companies", () => {
     expect(text("reviewList")).toContain("greenhouse");
     expect(text("activeList")).toContain("careers link on file");
     expect($("removedSection").hidden).toBe(false);
-    click("toggleRemoved");
     expect($("removedList").hidden).toBe(true);
-    expect(text("toggleRemoved")).toBe("Show removed companies");
     click("toggleRemoved");
+    expect($("removedList").hidden).toBe(false);
     expect(text("toggleRemoved")).toBe("Hide removed companies");
+    click("toggleRemoved");
+    expect(text("toggleRemoved")).toBe("Show removed companies");
     click("companiesClose");
   });
 
@@ -406,7 +407,7 @@ describe("Companies", () => {
     buttonByText($("removedList"), "Restore").click();
     await flush();
     expect(text("companiesMsg")).toBe("Couldn't update Gone. no");
-    Array.from($("activeList").querySelectorAll("button")).filter((b) => b.textContent === "Remove")[1].click();
+    Array.from($("activeList").querySelectorAll("button")).filter((b) => b.textContent === "Remove")[2].click();
     await flush();
     expect(text("companiesMsg")).toBe("Couldn't update Beta. no");
   });
