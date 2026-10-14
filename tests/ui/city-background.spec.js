@@ -46,6 +46,9 @@ for (const [name, origin, ready] of [
 }
 
 test.describe("animation", () => {
+  // playwright.config.js sets reducedMotion to "reduce" for every spec, so the animation tests turn it back on.
+  test.use({ reducedMotion: "no-preference" });
+
   test("loads three.js from the site and paints the canvas, when the browser has WebGL", async ({ page }) => {
     const requested = [];
     page.on("request", (r) => requested.push(r.url()));
@@ -154,7 +157,8 @@ test.describe("reduced motion", () => {
 });
 
 test.describe("at 390px wide on a touch screen", () => {
-  test.use({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
+  // "no-preference" so the phone check is what picks the image, not reduced motion.
+  test.use({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true, reducedMotion: "no-preference" });
 
   for (const [name, origin, ready] of [
     ["dashboard", DASHBOARD, "#dateLine"],
