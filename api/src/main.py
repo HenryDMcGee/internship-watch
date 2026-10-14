@@ -1367,23 +1367,24 @@ try:
 
     class Default(WorkerEntrypoint):  # pragma: no cover - only runs under Pyodide
         async def fetch(self, request):
-            from js import Request, Response as JsResponse, URL  # type: ignore
+            from js import URL  # type: ignore
+            from workers import Response as WorkersResponse  # type: ignore
 
             url = URL.new(request.url)
             path = url.pathname
             public_hostname = getattr(self.env, "PUBLIC_HOSTNAME", "") or ""
             route = route_for_host(url.hostname, path, public_hostname)
             if route == "not_found":
-                return JsResponse.new("Not found", status=404, headers={"Content-Type": "text/plain; charset=utf-8"})
+                return WorkersResponse("Not found", status=404, headers={"Content-Type": "text/plain; charset=utf-8"})
 
             if route == "public" and not path.startswith("/api/"):
                 url.pathname = rewrite_public_path(path)
-                response = await self.env.ASSETS.fetch(Request.new(url.toString(), request))
+                response = await self.env.ASSETS.fetch(url.toString())
                 if response.status in (301, 302, 307, 308) and response.headers.get("Location"):
                     # Assets may redirect /public/index.html to /public/; follow it here so the address stays `/`.
                     target = URL.new(response.headers.get("Location"), url.toString())
                     if target.pathname.startswith("/public/"):
-                        response = await self.env.ASSETS.fetch(Request.new(target.toString(), request))
+                        response = await self.env.ASSETS.fetch(target.toString())
                 return response
 
             if not path.startswith("/api"):
