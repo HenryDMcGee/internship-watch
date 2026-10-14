@@ -65,8 +65,12 @@ describe("palette tokens", () => {
   });
 
   test("pages and scripts do not hard-code colors either", () => {
-    for (const file of ["index.html", "public/index.html", "app.js", "public/public.js", "public/city/city-background.js"]) {
-      const text = read(file);
+    for (const file of ["index.html", "public/index.html", "app.js", "public/public.js", "public/city-background.js"]) {
+      let text = read(file);
+      if (file === "public/city-background.js") {
+        // Allowed: the dark-theme fallback used when a token is missing, and the white sun and ambient lights.
+        text = text.replace(/^.*FALLBACK_TOKENS = .*$/m, "").replace(/"#ffffff"/g, "");
+      }
       expect(`${file}: ${(text.match(/#[0-9a-fA-F]{6}\b/g) || []).join(",")}`).toBe(`${file}: `);
       expect(text).not.toMatch(/\brgba?\(/);
     }

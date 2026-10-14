@@ -56,7 +56,7 @@ test.describe("animation", () => {
     await settle(page);
     const webgl = await page.evaluate(() => !!document.createElement("canvas").getContext("webgl"));
     test.skip(!webgl, "this browser has no WebGL, so the static image is the right answer");
-    // A slow software renderer may swap to the image after 3 seconds; the first look is the animation.
+    // A very slow renderer may swap to the image (15 fps or less for 10 seconds); the first look is the animation.
     const mode = await page.locator("#cityBg").getAttribute("data-city-mode");
     if (mode === "animated") {
       expect(requested.some((u) => u.endsWith("/public/vendor/three.min.mjs"))).toBe(true);
@@ -69,6 +69,7 @@ test.describe("animation", () => {
   });
 
   test("swaps to the static image when the frame rate stays low", async ({ page }) => {
+    test.setTimeout(60000);
     await page.addInitScript(() => {
       // Slow the display down to about 10 frames a second.
       const raf = window.requestAnimationFrame.bind(window);
@@ -78,7 +79,7 @@ test.describe("animation", () => {
     await settle(page);
     const webgl = await page.evaluate(() => !!document.createElement("canvas").getContext("webgl"));
     test.skip(!webgl, "this browser has no WebGL");
-    await expect(page.locator("#cityBg")).toHaveAttribute("data-city-reason", "low-fps", { timeout: 10000 });
+    await expect(page.locator("#cityBg")).toHaveAttribute("data-city-reason", "low-fps", { timeout: 25000 });
     await expect(page.locator("#cityBg canvas")).toHaveCount(0);
     await expect(page.locator("#cityBg img")).toBeAttached();
   });
@@ -195,4 +196,16 @@ test.describe("at 390px wide on a touch screen", () => {
     await page.tap("#openBudgets");
     await expect(page.locator("#budgetsDialog")).toBeVisible();
   });
+});
+
+test.describe("the still image in a light-mode browser", () => {
+  test.use({ colorScheme: "light", reducedMotion: "reduce" });
+
+  for (const [name, origin] of [["dashboard", DASHBOARD], ["public board", PUBLIC]]) {
+    test(`${name} still uses the dark picture`, async ({ page }) => {
+      await page.goto(origin + "/");
+      await settle(page);
+      await expect(page.locator("#cityBg img")).toHaveAttribute("src", "/public/city-still-dark.jpg");
+    });
+  }
 });
