@@ -134,6 +134,14 @@ The manual commands above still work as a fallback (for example, if Actions is d
 1. If the change added files in `db/migrations/`, run step 5.
 2. Run step 7.
 
+### The night-city background (phase 8)
+
+No new setup or deploy step. The background is static files in `frontend/public/`, so the Worker serves them with the rest of `frontend/`, and the public hostname can serve them because they sit under `/public/`. Nothing in them is read by path from the API.
+
+Two committed files are generated. Regenerate them and commit the result when you change the scene or the three.js version:
+- `node scripts/vendor-three.js` rebuilds `frontend/public/vendor/three.min.mjs` (three.js, cut down to the classes the scene uses).
+- `node scripts/render-city-still.js` rebuilds the four static images, `frontend/public/city-still-{dark,light}.{webp,jpg}` (needs `npx playwright install chromium` once).
+
 ### Rolling back
 
 Two options, depending on what's wrong:

@@ -45,6 +45,42 @@ for (const [name, origin, ready] of [
   });
 }
 
+test.describe("animation", () => {
+  test("loads three.js from the site and paints the canvas, when the browser has WebGL", async ({ page }) => {
+    const requested = [];
+    page.on("request", (r) => requested.push(r.url()));
+    await page.goto(DASHBOARD + "/");
+    await settle(page);
+    const webgl = await page.evaluate(() => !!document.createElement("canvas").getContext("webgl"));
+    test.skip(!webgl, "this browser has no WebGL, so the static image is the right answer");
+    // A slow software renderer may swap to the image after 3 seconds; the first look is the animation.
+    const mode = await page.locator("#cityBg").getAttribute("data-city-mode");
+    if (mode === "animated") {
+      expect(requested.some((u) => u.endsWith("/public/vendor/three.min.mjs"))).toBe(true);
+      const box = await page.locator("#cityBg canvas").boundingBox();
+      expect(box.width).toBeGreaterThan(300);
+      expect(box.height).toBeGreaterThan(100);
+    } else {
+      expect(await page.locator("#cityBg").getAttribute("data-city-reason")).toBe("low-fps");
+    }
+  });
+
+  test("swaps to the static image when the frame rate stays low", async ({ page }) => {
+    await page.addInitScript(() => {
+      // Slow the display down to about 10 frames a second.
+      const raf = window.requestAnimationFrame.bind(window);
+      window.requestAnimationFrame = (fn) => raf(() => setTimeout(() => fn(performance.now()), 100));
+    });
+    await page.goto(DASHBOARD + "/");
+    await settle(page);
+    const webgl = await page.evaluate(() => !!document.createElement("canvas").getContext("webgl"));
+    test.skip(!webgl, "this browser has no WebGL");
+    await expect(page.locator("#cityBg")).toHaveAttribute("data-city-reason", "low-fps", { timeout: 10000 });
+    await expect(page.locator("#cityBg canvas")).toHaveCount(0);
+    await expect(page.locator("#cityBg img")).toBeAttached();
+  });
+});
+
 test.describe("dashboard, with the background on", () => {
   test("header buttons and posting actions still work", async ({ page }) => {
     await page.goto(DASHBOARD + "/");
