@@ -90,6 +90,8 @@ describe("pure helpers", () => {
     expect(mod.feedbackStatusText({ status: 429, ok: false })).toBe("Try again tomorrow.");
     expect(mod.feedbackStatusText({ status: 204, ok: true })).toBe("Thanks, sent.");
     expect(mod.feedbackStatusText({ status: 400, ok: false })).toMatch(/Couldn't send that\. Please check/);
+    expect(mod.feedbackStatusText({ status: 500, ok: false })).toBe("Something went wrong on our side. Please try again later.");
+    expect(mod.feedbackStatusText({ status: 503, ok: false })).toBe("Something went wrong on our side. Please try again later.");
   });
 });
 

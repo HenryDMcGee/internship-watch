@@ -186,6 +186,10 @@ test.describe("public feedback form", () => {
     await page.click("#fbSend");
     await expect(page.locator("#fbMsg")).toHaveText("Couldn't send that. Please check the message and try again.");
     await page.unroute("**/api/public/feedback");
+    await page.route("**/api/public/feedback", (route) => route.fulfill({ status: 500, body: "{}" }));
+    await page.click("#fbSend");
+    await expect(page.locator("#fbMsg")).toHaveText("Something went wrong on our side. Please try again later.");
+    await page.unroute("**/api/public/feedback");
     await page.route("**/api/public/feedback", (route) => route.abort());
     await page.click("#fbSend");
     await expect(page.locator("#fbMsg")).toHaveText("Couldn't send that. Please try again.");
