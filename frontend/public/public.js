@@ -156,6 +156,7 @@
   function feedbackStatusText(resp) {
     if (resp.status === 429) return "Try again tomorrow.";
     if (resp.ok) return "Thanks, sent.";
+    if (resp.status >= 500) return "Something went wrong on our side. Please try again later.";
     return "Couldn't send that. Please check the message and try again.";
   }
 
