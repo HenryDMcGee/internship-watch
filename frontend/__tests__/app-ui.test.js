@@ -485,10 +485,11 @@ describe("Analytics", () => {
     ],
     discovery_searches_per_run: [{ started_at: "2026-10-14T13:00:00Z", searches: 1 }, { started_at: "2026-10-13T13:00:00Z", searches: 2 }],
     recent_runs: [
-      { started_at: "2026-10-14T13:00:00Z", finished_at: "2026-10-14T13:00:30Z", status: "completed", new_count: 1 },
-      { started_at: "2026-10-13T13:00:00Z", finished_at: "2026-10-13T14:00:00Z", status: "degraded", summary: "x. Run degraded because y. No new postings today", new_count: 0 },
-      { started_at: "2026-10-12T13:00:00Z", finished_at: "2026-10-12T13:10:00Z", status: "degraded", summary: "plain" },
-      { started_at: "2026-10-11T13:00:00Z", status: null },
+      { started_at: "2026-10-14T13:00:00Z", finished_at: "2026-10-14T13:00:30Z", status: "completed", new_count: 1, source: "cloudflare" },
+      { started_at: "2026-10-13T13:00:00Z", finished_at: "2026-10-13T14:00:00Z", status: "degraded", summary: "x. Run degraded because y. No new postings today", new_count: 0, source: "manual" },
+      { started_at: "2026-10-12T13:00:00Z", finished_at: "2026-10-12T13:10:00Z", status: "degraded", summary: "plain", source: "schedule" },
+      { started_at: "2026-10-11T13:00:00Z", status: null, source: "github-fallback" },
+      { started_at: "2026-10-10T13:00:00Z", finished_at: "2026-10-10T13:20:00Z", status: "completed", new_count: 0 },
     ],
   });
 
@@ -517,6 +518,21 @@ describe("Analytics", () => {
     expect(text("recentRunsList")).toContain("(over 30)");
     expect(text("recentRunsList")).toContain("Run degraded because y");
     expect(text("recentRunsList")).toContain("under 1 min");
+  });
+
+  test("each recent run says which path started it", async () => {
+    const data = freshData();
+    data.analytics = analytics();
+    await bootApp(data);
+    click("tabMore");
+    click("moreAnalytics");
+    await flush();
+    const lines = Array.from($("recentRunsList").querySelectorAll("li")).map(function (li) { return li.textContent; });
+    expect(lines[0]).toContain("1 new, under 1 min, started by Cloudflare");
+    expect(lines[1]).toContain("0 new, 60 min (over 30), started by hand. Run degraded because y");
+    expect(lines[2]).toContain("started by the GitHub schedule");
+    expect(lines[3]).toContain("started by github-fallback");
+    expect(lines[4]).not.toContain("started by");
   });
 
   test("empty analytics show the empty note, and sparse data uses fallbacks", async () => {

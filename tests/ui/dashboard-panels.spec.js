@@ -189,6 +189,8 @@ test.describe("Analytics", () => {
     await expect(page.locator("#recentRunsList")).toContainText("completed, 2 new");
     await expect(page.locator("#recentRunsList")).toContainText("Degraded");
     await expect(page.locator("#recentRunsList")).toContainText("(over 30)");
+    await expect(page.locator("#recentRunsList")).toContainText("completed, 2 new, 5 min, started by Cloudflare");
+    await expect(page.locator("#recentRunsList")).toContainText("started by the GitHub schedule");
   });
 });
 
