@@ -637,10 +637,21 @@ async def _claim_pending_search_request(db, run_id: int) -> int | None:
     return row["id"]
 
 
-async def run(db, *, kind: str = "daily", company_ids: list[int] | None = None) -> dict:
+def run_source_from_env(environ) -> str:
+    """Which path started this daily run, from the `run_source` workflow input
+    (`RUN_SOURCE` in the job-run step's env): `cloudflare` from the Worker's cron
+    trigger, `manual` from Run workflow in GitHub. On a `schedule` event the
+    inputs don't exist and the variable is unset or empty, so that means the
+    GitHub Actions cron: `schedule`.
+    """
+    value = (environ.get("RUN_SOURCE") or "").strip()
+    return value or "schedule"
+
+
+async def run(db, *, kind: str = "daily", company_ids: list[int] | None = None, source: str | None = None) -> dict:
     started_at = now_iso()
     run_id = await db.run(
-        "INSERT INTO runs (kind, started_at, status) VALUES (?, ?, 'running')", kind, started_at
+        "INSERT INTO runs (kind, started_at, status, source) VALUES (?, ?, 'running', ?)", kind, started_at, source
     )
     search_request_id = await _claim_pending_search_request(db, run_id) if kind == "daily" else None
 
@@ -1201,7 +1212,7 @@ def main(argv: list[str] | None = None) -> int:
     async def _main() -> dict:
         if args.request_id is not None:
             return await run_check_request(db, args.request_id)
-        return await run(db, kind="daily")
+        return await run(db, kind="daily", source=run_source_from_env(os.environ))
 
     result = asyncio.run(_main())
     print(json.dumps(result, default=str))

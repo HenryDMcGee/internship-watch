@@ -646,6 +646,13 @@
     render();
   }
 
+  // runs.source: which path started a run (phase 1 of the Cloudflare daily trigger).
+  var RUN_SOURCE_LABELS = { cloudflare: "Cloudflare", manual: "hand", schedule: "the GitHub schedule" };
+
+  function runSourceLabel(source) {
+    return RUN_SOURCE_LABELS[source] || source;
+  }
+
   function fillList(id, items, emptyText, formatItem) {
     var ul = $(id);
     ul.textContent = "";
@@ -733,6 +740,7 @@
         var mins = (new Date(r.finished_at) - new Date(r.started_at)) / 60000;
         if (mins >= 0) line += ", " + (mins < 1 ? "under 1" : Math.round(mins)) + " min" + (mins > 30 ? " (over 30)" : "");
       }
+      if (r.source) line += ", started by " + runSourceLabel(r.source);
       if (r.status === "degraded" && r.summary) {
         var at = r.summary.indexOf("Run degraded");
         if (at >= 0) line += ". " + r.summary.slice(at).split(". No new postings")[0];

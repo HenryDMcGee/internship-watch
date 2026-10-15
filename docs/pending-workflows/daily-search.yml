@@ -2,6 +2,10 @@
 # 14:00 UTC, to cover both sides of US daylight saving time; the guard step
 # only lets the real work through at the correct hour. Manual runs
 # (workflow_dispatch) skip the guard.
+#
+# The Worker's cron trigger (api/src/cron.py) also starts this workflow
+# through workflow_dispatch, on time, with run_source set to "cloudflare".
+# Both paths run side by side until the Cloudflare one is proved.
 name: Daily search
 
 on:
@@ -9,6 +13,12 @@ on:
     - cron: "0 13 * * *"
     - cron: "0 14 * * *"
   workflow_dispatch:
+    inputs:
+      run_source:
+        description: "Which path started this run (recorded in runs.source)"
+        required: false
+        default: "manual"
+        type: string
 
 concurrency:
   group: internship-watch-job
@@ -64,11 +74,6 @@ jobs:
           CLOUDFLARE_D1_TOKEN: ${{ secrets.CLOUDFLARE_D1_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           D1_DATABASE_ID: ${{ secrets.D1_DATABASE_ID }}
-          # Cloudflare Browser Run, for reading careers pages (job/fetchers/careers_pages.py,
-          # phase 6 part 1). A token scoped to the Browser Rendering permission only. Missing
-          # this sends every careers page to the Playwright backup instead (see the daily
-          # summary's note when that happens).
-          CLOUDFLARE_BROWSER_TOKEN: ${{ secrets.CLOUDFLARE_BROWSER_TOKEN }}
           # Set only one of these two -- whichever is set is what the
           # `claude` CLI authenticates with (see job/agent/client.py).
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
@@ -81,4 +86,19 @@ jobs:
           # preview; see job/agent/summary.py). Leave unset to skip it.
           CLAUDE_ROUTINE_URL: ${{ secrets.CLAUDE_ROUTINE_URL }}
           CLAUDE_ROUTINE_TOKEN: ${{ secrets.CLAUDE_ROUTINE_TOKEN }}
+          CLOUDFLARE_BROWSER_TOKEN: ${{ secrets.CLOUDFLARE_BROWSER_TOKEN }}
+          # Which path started this run, written to runs.source by job/run.py.
+          # Empty on a schedule event (no inputs exist there), which the job
+          # records as "schedule".
+          RUN_SOURCE: ${{ inputs.run_source }}
         run: python -m job.run
+
+      - name: Close the run if the job was stopped
+        if: always() && steps.guard.outputs.should_run == 'true'
+        env:
+          CLOUDFLARE_D1_TOKEN: ${{ secrets.CLOUDFLARE_D1_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          D1_DATABASE_ID: ${{ secrets.D1_DATABASE_ID }}
+          CLAUDE_ROUTINE_URL: ${{ secrets.CLAUDE_ROUTINE_URL }}
+          CLAUDE_ROUTINE_TOKEN: ${{ secrets.CLAUDE_ROUTINE_TOKEN }}
+        run: python -m job.close_stuck_runs

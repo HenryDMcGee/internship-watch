@@ -22,7 +22,7 @@ Every morning, find open Summer 2027 MBA internships that match Henry's titles a
 
 | Part | Where it runs | Notes |
 | --- | --- | --- |
-| Daily job | GitHub Actions, Python 3.12 | 08:00 America/Chicago. Scheduled at 13:00 and 14:00 UTC with a guard step. Can also be started by hand. |
+| Daily job | GitHub Actions, Python 3.12 | 08:00 America/Chicago. Scheduled at 13:00 and 14:00 UTC with a guard step. Can also be started by hand. From the Cloudflare daily trigger (phase 1), the Worker's cron trigger also dispatches it at 08:00 Central, on time; each run records which path started it in `runs.source`. |
 | Check now | GitHub Actions `check-now.yml` | Started by the Worker through GitHub's API. Checks specific companies only. Max 5 per day. |
 | App | One Cloudflare Python Worker, FastAPI | Serves `/api/*` and the dashboard's static files from `frontend/` through the `ASSETS` binding (`run_worker_first = true`; unmatched paths go to `ASSETS`). Verifies the Cloudflare Access token on every API request. `workers_dev` and preview URLs are off. Developed and deployed with `pywrangler` (`uv run pywrangler dev`, `uv run pywrangler deploy`). Uses the Python version Cloudflare's runtime requires (3.13 at the time of writing). |
 | Address | Worker route | `internship-watch.mcgeehenry.com/*` on the mcgeehenry.com zone, with a proxied `AAAA internship-watch 100::` DNS record added once by Henry. |
