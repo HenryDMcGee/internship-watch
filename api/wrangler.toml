@@ -24,6 +24,15 @@ routes = [
   { pattern = "jobs.mcgeehenry.com/*", zone_name = "mcgeehenry.com" }
 ]
 
+# The daily search's alarm clock (src/cron.py). Cloudflare crons are UTC only, so
+# both hours that can be 08:00 America/Chicago are listed: 13:00 UTC under daylight
+# time, 14:00 UTC under standard time. The handler dispatches on only the one that is
+# 08:00 Central that day. It POSTs a workflow_dispatch for daily-search.yml using the
+# GITHUB_DISPATCH_TOKEN secret (Actions: write on this repository only), which is never
+# in this file. See docs/deploy.md, step 3d.
+[triggers]
+crons = ["0 13 * * *", "0 14 * * *"]
+
 # Dashboard files. Every request reaches FastAPI first, so /api/* routes win;
 # FastAPI hands everything else to the ASSETS binding.
 [assets]

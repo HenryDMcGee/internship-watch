@@ -113,9 +113,10 @@ def seed(public_site: bool = False, rate_limited: bool = False, unconfirmed: boo
                                              "method": "browser_run", "consecutive_failures": 3, "last_error": "timeout"})
 
     run_id = _insert(conn, "runs", {"kind": "daily", "started_at": today + "T13:00:00Z", "finished_at": today + "T13:05:00Z",
-                                    "status": "completed", "new_count": 2, "summary": "Found 2."})
+                                    "status": "completed", "new_count": 2, "summary": "Found 2.", "source": "cloudflare"})
     _insert(conn, "runs", {"kind": "daily", "started_at": earlier + "T13:00:00Z", "finished_at": earlier + "T14:10:00Z",
-                           "status": "degraded", "new_count": 0, "summary": "x. Run degraded because a feed failed. No new postings"})
+                           "status": "degraded", "new_count": 0, "summary": "x. Run degraded because a feed failed. No new postings",
+                           "source": "schedule"})
     _insert(conn, "usage", {"run_id": run_id, "step": "discovery", "model": "sonnet", "input_tokens": 1000,
                             "output_tokens": 500, "web_searches": 2, "est_cost_usd": 0.12, "at": today + "T13:01:00Z"})
     _insert(conn, "alerts", {"type": "feed_down", "severity": "warning", "message": "A feed is down",

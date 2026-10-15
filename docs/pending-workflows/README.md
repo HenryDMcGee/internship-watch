@@ -4,6 +4,8 @@ Files here are meant to live in `.github/workflows/`, but the GitHub App token t
 
 **`daily-search.yml`** was updated in phase 3 (the Claude agent) to add `contents: write` and `pull-requests: write` permissions, install the `claude` CLI, and pass through `CLAUDE_CODE_OAUTH_TOKEN`/`ANTHROPIC_API_KEY`, `GITHUB_TOKEN`, and `CLAUDE_ROUTINE_URL`/`CLAUDE_ROUTINE_TOKEN`. Phase 6 part 1 (issue #53) added `CLOUDFLARE_BROWSER_TOKEN`, for reading careers pages through Cloudflare Browser Run.
 
+Phase 1 of the Cloudflare daily trigger added a `run_source` input to `workflow_dispatch` (default `manual`) and passes it to the job-run step as `RUN_SOURCE`, so `job/run.py` can record which path started each run. The crons and the guard step are unchanged in that phase. The copy here is the installed file plus that change (it also carries the "Close the run if the job was stopped" step the installed file already had).
+
 **`check-now.yml`** was unchanged from phase 2 through phase 5; phase 6 part 1 (issue #53) added `CLOUDFLARE_BROWSER_TOKEN` here too, alongside the existing secrets.
 
 To install both, from the repository root:
