@@ -65,6 +65,20 @@ Until at least one of `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY` is set, t
 
 If it's left unset, the daily job still runs -- every careers page just goes to the Playwright backup instead of Browser Run for the whole run, and the run's summary says so.
 
+### 3d. Dispatch token for the Worker's cron trigger
+
+The Worker's cron trigger (`api/src/cron.py`, the `[triggers]` block in `api/wrangler.toml`) starts `daily-search.yml` at 08:00 America/Chicago by POSTing a `workflow_dispatch` to GitHub. It uses its own token, separate from the `GITHUB_TOKEN` in step 3, so the dashboard's token never needs to be shared with the clock.
+
+1. In GitHub, **Settings**, **Developer settings**, **Personal access tokens**, **Fine-grained tokens**, **Generate new token**. Resource owner: your account. Repository access: **Only select repositories**, pick `internship-watch`. Repository permissions: **Actions**, **Read and write**, and nothing else. Pick an expiration date and put it in your calendar: an expired token is the most likely way this breaks a year from now.
+2. Store it as a Worker secret, from `api/`:
+   ```powershell
+   npx wrangler secret put GITHUB_DISPATCH_TOKEN
+   ```
+3. Confirm it landed. `npx wrangler secret list` should show `GITHUB_DISPATCH_TOKEN` next to `GITHUB_TOKEN` and `FEEDBACK_SALT`.
+4. After the next deploy (step 7), open the Worker in Cloudflare, **Settings**, **Trigger Events**, and check both cron entries (`0 13 * * *` and `0 14 * * *`) are listed. If they are not, the deploy did not pick up `[triggers]` and nothing will fire.
+
+Without the secret, the trigger still fires, decides, and then fails loudly on the one cron that is 08:00 Central (`wrangler tail` shows "GITHUB_DISPATCH_TOKEN is not set"); the GitHub Actions crons keep running the job as before.
+
 ### 4. DNS record for the subdomain
 
 The Worker's route needs a proxied DNS record to answer on the subdomain. The record doesn't point at a real server.
@@ -225,6 +239,8 @@ The careers-page backup needs Chromium on the runner. `daily-search.yml` already
 | Public feedback says "Something went wrong on our side" (503) | `FEEDBACK_SALT` isn't set. `wrangler tail` shows "FEEDBACK_SALT is not set" | Recheck step 4b |
 | Public feedback says "Something went wrong on our side" (500), or every API call returns 503 naming a table or column | A migration wasn't applied | Run step 5, then 5b. `wrangler tail` shows the cause |
 | Open as GitHub issue fails | The GitHub token lacks Issues: write | Recheck step 3 and 4b |
+| No daily run starts at 08:00 Central, and `wrangler tail` at 13:00 or 14:00 UTC shows "GITHUB_DISPATCH_TOKEN is not set" or a 401 from GitHub | The dispatch token is missing or expired | Recheck step 3d |
+| Nothing at all in `wrangler tail` at 13:00 and 14:00 UTC | The cron triggers didn't register on deploy | Check **Trigger Events** (step 3d, point 4) and redeploy |
 | Your main website shows a Cloudflare login | The Access application was created for `mcgeehenry.com` instead of the subdomain | Fix the application's hostname in Zero Trust |
 
 ### Migration `0015_feedback_issues.sql` and feedback issues
@@ -232,3 +248,7 @@ The careers-page backup needs Chromium on the runner. `daily-search.yml` already
 Migration `0015` adds `budget_settings.feedback_issues_per_day` (default 20) and `feedback.issue_created_at`. The automatic deploy applies it (step 5). To undo it, drop the two columns.
 
 Public feedback now creates a GitHub issue labeled `visitor-feedback` (through the Worker's `GITHUB_TOKEN`, which already needs Issues: write). The daily run retries rows with no issue using the job's `GITHUB_TOKEN`, so the `permissions:` block in `.github/workflows/daily-search.yml` needs `issues: write`. Without it, retries fail quietly and the rows wait.
+
+### Migration `0016_run_source.sql` and the cron trigger
+
+Migration `0016` adds the nullable `runs.source` column (`cloudflare`, `manual` or `schedule`; older runs stay NULL), which the Recent runs list shows. The automatic deploy applies it (step 5). The same deploy registers the two cron triggers from `api/wrangler.toml`; the dispatch token is step 3d. To roll the trigger back, remove the `[triggers]` block and redeploy; the GitHub Actions crons are untouched and keep running the job.

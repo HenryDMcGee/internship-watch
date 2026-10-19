@@ -53,13 +53,15 @@ class GitHubClient:
     async def _request(self, method: str, path: str, json_body: dict | None = None) -> tuple[int, Any]:
         return await self.transport(method, f"{GITHUB_API}{path}", token=self.token, json_body=json_body)
 
-    async def dispatch_workflow(self, workflow_file: str, ref: str, inputs: dict) -> None:
+    async def dispatch_workflow(self, workflow_file: str, ref: str, inputs: dict) -> int:
+        """Starts a workflow_dispatch run and returns GitHub's status (204 when accepted)."""
         status, body = await self._request(
             "POST", f"/repos/{self.repo}/actions/workflows/{workflow_file}/dispatches",
             {"ref": ref, "inputs": inputs},
         )
         if status != 204:
             raise GitHubApiError(f"starting the workflow failed ({status}): {body}")
+        return status
 
     async def get_file(self, path: str, ref: str) -> tuple[str, str] | None:
         """Return (content, sha) for a file on `ref`, or None if it doesn't exist there."""

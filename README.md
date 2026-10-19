@@ -415,6 +415,17 @@ The Titles panel, Check now, and title edits all call GitHub's API through the `
 
 To re-seed from scratch, delete `api/.wrangler/` (the local D1 state) and repeat the steps above.
 
+**The cron trigger.** The Worker's `scheduled` handler (`api/src/cron.py`) is what starts the daily search at 08:00 Central in production. To exercise it locally, start the Worker with the scheduled-test route switched on and then request it with the cron you want to simulate (Python Workers expose it at `/cdn-cgi/local/scheduled`; the `/__scheduled` path is the JavaScript one):
+
+```bash
+cd api
+uv run pywrangler dev --test-scheduled
+curl "http://localhost:8787/cdn-cgi/local/scheduled?cron=0+13+*+*+*"
+curl "http://localhost:8787/cdn-cgi/local/scheduled?cron=0+14+*+*+*"
+```
+
+Under daylight time the first dispatches and the second does nothing; under standard time it is the other way round. Leave `GITHUB_DISPATCH_TOKEN` unset in `api/.dev.vars` so a local dispatch fails with a clear error instead of starting a real 40-minute run.
+
 ## Running tests
 
 ```bash
@@ -471,7 +482,7 @@ npm run city:still    # the still images, one rendered frame of the same scene (
 
 The daily job (`job/run.py`) normally runs on GitHub Actions at 08:00 America/Chicago (`.github/workflows/daily-search.yml`), or for specific companies when you click Check now on the dashboard (`.github/workflows/check-now.yml`). To run it yourself:
 
-**From GitHub Actions (writes to the real database):** open the **Actions** tab, choose **Daily search**, and click **Run workflow**. Manual runs skip the 08:00 guard and run immediately. This needs `CLOUDFLARE_D1_TOKEN`, `CLOUDFLARE_ACCOUNT_ID` and `D1_DATABASE_ID` saved as repository secrets first.
+**From GitHub Actions (writes to the real database):** open the **Actions** tab, choose **Daily search**, and click **Run workflow**. Manual runs skip the 08:00 guard and run immediately. This needs `CLOUDFLARE_D1_TOKEN`, `CLOUDFLARE_ACCOUNT_ID` and `D1_DATABASE_ID` saved as repository secrets first. Leave the `run_source` input at `manual`; the dashboard's Recent runs list shows it, next to `cloudflare` for runs the Worker's cron trigger started and `schedule` for the GitHub Actions cron.
 
 **From your own computer (also writes to the real database, since the job always talks to D1's HTTP API, not a local database):**
 

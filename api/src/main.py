@@ -29,6 +29,7 @@ except ImportError:  # pragma: no cover - zoneinfo is stdlib on 3.9+
     ZoneInfo = None  # type: ignore
 
 import companies as companies_logic
+import cron
 from access import ACCESS_HEADER, AccessTokenError, fetch_jwks, verify_access_token
 from browser_run_budgets import summarize as summarize_browser_run_usage
 from budgets import (
@@ -1128,7 +1129,7 @@ async def get_analytics(db: Database = Depends(get_db)):
     discovery_searches_per_run.reverse()
 
     recent_runs = await db.all(
-        "SELECT id, kind, started_at, finished_at, status, new_count, summary FROM runs ORDER BY id DESC LIMIT 10"
+        "SELECT id, kind, started_at, finished_at, status, new_count, summary, source FROM runs ORDER BY id DESC LIMIT 10"
     )
 
     return {
@@ -1476,6 +1477,19 @@ try:
             github_token = getattr(self.env, "GITHUB_TOKEN", "") or ""
             app.state.github = GitHubClient(repo=REPO, token=github_token) if github_token else None
             return await asgi.fetch(app, request, self.env)
+
+        async def scheduled(self, controller, env, ctx):
+            """Cloudflare's cron trigger (api/wrangler.toml `[triggers]`), never an HTTP request.
+
+            Each configured cron calls this with its own string in
+            `controller.cron`; `cron.run_scheduled` decides whether that one is
+            08:00 America/Chicago today and dispatches `daily-search.yml` if so.
+            An error here (no token, GitHub refused) is raised on purpose, so
+            the invocation shows as failed in the Worker's cron history.
+            """
+            token = getattr(env, "GITHUB_DISPATCH_TOKEN", "") or ""
+            when = cron.scheduled_time(getattr(controller, "scheduledTime", None))
+            await cron.run_scheduled(controller.cron, when, token=token)
 
 except ImportError:
     # Not running inside a Python Worker (e.g. plain CPython under pytest).
