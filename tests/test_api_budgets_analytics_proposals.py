@@ -56,7 +56,8 @@ def test_get_budgets_returns_settings_and_a_dollars_forecast(client):
     assert body["settings"]["daily_usd_budget"] == 1.50
     assert body["settings"]["public_feedback_daily_limit"] == 20
     assert set(body["forecast"]) == {"weekly_usd", "monthly_usd"}
-    assert body["changes"] == []
+    # A migrated database starts with the phase 9 migration's own history rows and nothing else.
+    assert {c["field"] for c in body["changes"]} == {"billing_mode", "daily_token_budget", "weekly_token_budget"}
 
 
 def test_budgets_payload_has_month_dollars_the_public_site_block_and_no_token_fields(client):
@@ -122,7 +123,9 @@ def test_put_budgets_ignores_the_removed_fields_from_a_stale_dashboard(client):
     assert resp.status_code == 200
     for key in ("billing_mode", "daily_token_budget", "weekly_token_budget"):
         assert key not in resp.json()["settings"]
-    assert all(c["field"] not in ("billing_mode", "daily_token_budget", "weekly_token_budget") for c in resp.json()["changes"])
+    # Nothing new in the history for them either: only the migration's own rows mention them.
+    stale = [c for c in resp.json()["changes"] if c["field"] in ("billing_mode", "daily_token_budget", "weekly_token_budget")]
+    assert all(c["new_value"].startswith("removed") for c in stale) and len(stale) == 3
 
 
 def test_put_budgets_rejects_shares_not_summing_to_100_percent(client):

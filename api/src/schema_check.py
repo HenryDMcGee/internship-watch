@@ -28,15 +28,17 @@ REQUIRED_SCHEMA: dict[str, tuple[str, ...]] = {
         "created_at", "decided_at", "issue_created_at",
     ),
     "budget_settings": (
-        "id", "updated_at", "billing_mode",
-        "daily_token_budget", "daily_search_budget", "weekly_token_budget", "daily_usd_budget",
-        "monthly_usd_budget", "search_limit_per_run", "search_limit_per_company", "browser_checks_per_run",
+        "id", "updated_at",
+        "daily_usd_budget", "monthly_usd_budget", "daily_search_budget",
+        "search_limit_per_run", "search_limit_per_company", "browser_checks_per_run",
+        "public_feedback_daily_limit",
         "feedback_issues_per_day", "model_discovery", "model_scout", "model_classification", "model_improvement",
         "share_discovery", "share_scout", "share_classification", "share_improvement",
     ),
     "budget_changes": ("changed_at", "field", "old_value", "new_value"),
     "budget_resets": ("scope", "reset_at", "note"),
     "proposals": ("status", "decided_at"),
+    "public_board_views": ("day", "views"),
 }
 
 # Worker secrets the API cannot work without. Only the names are checked, never the values.

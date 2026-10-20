@@ -667,10 +667,9 @@
     $("analyticsBody").hidden = !hasData;
     if (!a) return;
 
-    var settings = a.budgets || {};
-    var mode = settings.billing_mode === "api_key" ? "API key" : "subscription";
-    $("usageSummary").textContent = "Billing: " + mode + ". Forecast this week: " +
-      (a.forecast.weekly_tokens || 0).toLocaleString() + " tokens. Forecast this month: " + fmtUsd(a.forecast.monthly_usd) + ".";
+    var forecast = a.forecast || {};
+    $("usageSummary").textContent = "Forecast this week: " + fmtUsd(forecast.weekly_usd) +
+      ". Forecast this month: " + fmtUsd(forecast.monthly_usd) + ".";
     fillList("usageByStep", a.usage_by_step, "No Claude calls recorded yet.", function (u) {
       return (u.step || "") + " (" + (u.model || "") + "): " + (u.tokens || 0).toLocaleString() + " tokens, " +
         (u.searches || 0) + " searches, " + fmtUsd(u.usd);
@@ -906,35 +905,91 @@
   // Budgets
   // -------------------------------------------------------------------
 
+  // Dollars only (phase 9): the API contract is unchanged apart from the removed
+  // billing_mode and token budgets. Shares travel as 0-1 decimals and show as whole percents.
   var BUDGET_FIELDS = {
-    bBillingMode: "billing_mode", bDailyTokens: "daily_token_budget", bDailySearches: "daily_search_budget",
-    bWeeklyTokens: "weekly_token_budget", bDailyUsd: "daily_usd_budget", bMonthlyUsd: "monthly_usd_budget",
+    bDailyUsd: "daily_usd_budget", bMonthlyUsd: "monthly_usd_budget", bDailySearches: "daily_search_budget",
     bSearchPerRun: "search_limit_per_run", bSearchPerCompany: "search_limit_per_company",
-    bBrowserChecks: "browser_checks_per_run", bShareDiscovery: "share_discovery", bShareScout: "share_scout",
+    bBrowserChecks: "browser_checks_per_run", bFeedbackCap: "public_feedback_daily_limit",
+    bShareDiscovery: "share_discovery", bShareScout: "share_scout",
     bShareClassification: "share_classification", bShareImprovement: "share_improvement",
     bModelDiscovery: "model_discovery", bModelScout: "model_scout",
     bModelClassification: "model_classification", bModelImprovement: "model_improvement",
   };
-  var NUMERIC_BUDGET_FIELDS = [
-    "daily_token_budget", "daily_search_budget", "weekly_token_budget", "daily_usd_budget", "monthly_usd_budget",
-    "search_limit_per_run", "search_limit_per_company", "browser_checks_per_run",
-    "share_discovery", "share_scout", "share_classification", "share_improvement",
+  var SHARE_BUDGET_FIELDS = ["share_discovery", "share_scout", "share_classification", "share_improvement"];
+  var INTEGER_BUDGET_FIELDS = [
+    "daily_search_budget", "search_limit_per_run", "search_limit_per_company", "browser_checks_per_run",
+    "public_feedback_daily_limit",
   ];
+  var NUMERIC_BUDGET_FIELDS = ["daily_usd_budget", "monthly_usd_budget"].concat(INTEGER_BUDGET_FIELDS, SHARE_BUDGET_FIELDS);
+  var SAVE_GATE_MESSAGE = "Fix the flagged fields to save.";
 
-  function fillBudgetsForm(settings) {
-    Object.keys(BUDGET_FIELDS).forEach(function (id) {
-      var field = BUDGET_FIELDS[id];
-      if (settings[field] !== undefined && settings[field] !== null) $(id).value = settings[field];
-    });
+  function shareToPercent(decimal) { return Math.round(Number(decimal) * 100); }
+  function percentToShare(percent) { return Number(percent) / 100; }
+
+  function fieldIdFor(field) {
+    var ids = Object.keys(BUDGET_FIELDS);
+    for (var i = 0; i < ids.length; i++) if (BUDGET_FIELDS[ids[i]] === field) return ids[i];
+    return null;
   }
 
-  // The PUT body's `doc`: numeric fields as numbers, the rest as typed.
+  // What the form shows for a settings doc: shares as whole percents, everything else as stored.
+  function budgetsFormValues(settings) {
+    var values = {};
+    Object.keys(BUDGET_FIELDS).forEach(function (id) {
+      var field = BUDGET_FIELDS[id];
+      var value = settings[field];
+      if (value === undefined || value === null) return;
+      values[field] = SHARE_BUDGET_FIELDS.indexOf(field) !== -1 ? shareToPercent(value) : value;
+    });
+    return values;
+  }
+
+  // The PUT body's `doc`: numeric fields as numbers, percents back to 0-1 shares, the rest as typed.
   function buildBudgetsDoc(values) {
     var doc = {};
     Object.keys(values).forEach(function (field) {
-      doc[field] = NUMERIC_BUDGET_FIELDS.indexOf(field) !== -1 ? Number(values[field]) : values[field];
+      if (SHARE_BUDGET_FIELDS.indexOf(field) !== -1) doc[field] = percentToShare(values[field]);
+      else if (NUMERIC_BUDGET_FIELDS.indexOf(field) !== -1) doc[field] = Number(values[field]);
+      else doc[field] = values[field];
     });
     return doc;
+  }
+
+  // The problem with one numeric field's raw input, or null when it is fine.
+  function budgetFieldProblem(field, raw) {
+    var text = String(raw == null ? "" : raw).trim();
+    if (text === "") return "Enter a number.";
+    var n = Number(text);
+    if (!isFinite(n)) return "Enter a number.";
+    if (n < 0) return "Must be 0 or more.";
+    if (SHARE_BUDGET_FIELDS.indexOf(field) !== -1 && n > 100) return "Must be 100 or less.";
+    if ((SHARE_BUDGET_FIELDS.indexOf(field) !== -1 || INTEGER_BUDGET_FIELDS.indexOf(field) !== -1) && n % 1 !== 0) return "Enter a whole number.";
+    return null;
+  }
+
+  // The total pill: green and complete at exactly 100%, dashed red otherwise.
+  function sharesTotalState(percents) {
+    var total = 0;
+    percents.forEach(function (p) {
+      var n = Number(String(p == null ? "" : p).trim());
+      if (String(p).trim() !== "" && isFinite(n)) total += n;
+    });
+    total = Math.round(total * 100) / 100;
+    if (total === 100) return { total: total, complete: true, text: "Total: 100% ✓" };
+    var text = total < 100
+      ? "Total: " + total + "% — " + (100 - total) + "% left to assign"
+      : "Total: " + total + "% — " + (total - 100) + "% over";
+    return { total: total, complete: false, text: text };
+  }
+
+  function fillBudgetsForm(settings) {
+    var values = budgetsFormValues(settings);
+    Object.keys(BUDGET_FIELDS).forEach(function (id) {
+      var field = BUDGET_FIELDS[id];
+      if (values[field] !== undefined) $(id).value = values[field];
+    });
+    validateBudgetsForm();
   }
 
   function readBudgetsForm() {
@@ -942,6 +997,45 @@
     Object.keys(BUDGET_FIELDS).forEach(function (id) { values[BUDGET_FIELDS[id]] = $(id).value; });
     return buildBudgetsDoc(values);
   }
+
+  function setFieldProblem(id, problem) {
+    var input = $(id);
+    var note = document.querySelector('.field-error[data-for="' + id + '"]');
+    if (note) note.textContent = problem || "";
+    if (problem) input.setAttribute("aria-invalid", "true"); else input.removeAttribute("aria-invalid");
+  }
+
+  // Flags every numeric problem next to its field, updates the total pill, and gates Save.
+  // Returns true when the form can be sent. Server validation stays as the backstop.
+  function validateBudgetsForm() {
+    var anyProblem = false;
+    NUMERIC_BUDGET_FIELDS.forEach(function (field) {
+      var id = fieldIdFor(field);
+      var problem = budgetFieldProblem(field, $(id).value);
+      setFieldProblem(id, problem);
+      if (problem) anyProblem = true;
+    });
+    var total = sharesTotalState(SHARE_BUDGET_FIELDS.map(function (field) { return $(fieldIdFor(field)).value; }));
+    var pill = $("sharesTotal");
+    pill.textContent = total.text;
+    pill.classList.toggle("complete", total.complete);
+    pill.classList.toggle("incomplete", !total.complete);
+
+    var ok = !anyProblem && total.complete;
+    $("budgetsSave").disabled = !ok;
+    var msg = $("budgetsMsg");
+    if (!ok) msg.textContent = SAVE_GATE_MESSAGE;
+    else if (msg.textContent === SAVE_GATE_MESSAGE) msg.textContent = "";
+    return ok;
+  }
+
+  NUMERIC_BUDGET_FIELDS.forEach(function (field) {
+    $(fieldIdFor(field)).addEventListener("input", validateBudgetsForm);
+  });
+  $("sharesEvenSplit").addEventListener("click", function () {
+    SHARE_BUDGET_FIELDS.forEach(function (field) { $(fieldIdFor(field)).value = 25; });
+    validateBudgetsForm();
+  });
 
   function renderBudgetsHistory(changes) {
     var ul = $("budgetsHistory");
@@ -952,29 +1046,36 @@
     });
   }
 
+  function emptyUsage() { return { daily: { searches: 0, usd: 0 }, weekly: { usd: 0 }, monthly: { usd: 0 } }; }
+
   function renderBudgetsUsage(body) {
     var settings = body.settings || {};
-    var usage = body.usage || { daily: { tokens: 0, searches: 0, usd: 0 }, weekly: { tokens: 0 } };
+    var usage = body.usage || emptyUsage();
     var resets = body.resets || {};
-    var dailyBudgetText = settings.billing_mode === "api_key"
-      ? fmtUsd(usage.daily.usd) + " of " + fmtUsd(settings.daily_usd_budget)
-      : (usage.daily.tokens || 0).toLocaleString() + " of " + (settings.daily_token_budget || 0).toLocaleString() + " tokens";
-    $("budgetsUsage").textContent = "Today: " + dailyBudgetText + ", " + (usage.daily.searches || 0) +
-      " of " + (settings.daily_search_budget || 0) + " searches used. This week: " +
-      (usage.weekly.tokens || 0).toLocaleString() + " of " + (settings.weekly_token_budget || 0).toLocaleString() + " tokens used.";
+    $("budgetsUsage").textContent = "Today: " + fmtUsd(usage.daily.usd) + " of " + fmtUsd(settings.daily_usd_budget) +
+      " · This month: " + fmtUsd(usage.monthly.usd) + " of " + fmtUsd(settings.monthly_usd_budget) +
+      " · " + (usage.daily.searches || 0) + " of " + (settings.daily_search_budget || 0) + " searches used.";
 
     var dailyReset = resets.daily ? "Daily count reset " + fmtDateTime(resets.daily.reset_at) + "." : "Daily count never reset.";
     var weeklyReset = resets.weekly ? "Weekly count reset " + fmtDateTime(resets.weekly.reset_at) + "." : "Weekly count never reset.";
     $("budgetsLastReset").textContent = dailyReset + " " + weeklyReset;
   }
 
+  function renderPublicSite(block, settings) {
+    var site = block || {};
+    var cap = site.feedback_daily_limit != null ? site.feedback_daily_limit : ((settings || {}).public_feedback_daily_limit || 0);
+    $("publicSiteStatus").textContent = "Today: " + (site.feedback_today || 0) + " of " + cap + " used · " +
+      (site.board_views_today || 0) + " board views";
+  }
+
   function renderBudgetsResponse(body) {
     state.budgets = body;
     fillBudgetsForm(body.settings || {});
-    $("budgetsForecast").textContent = "Forecast this week: " + (body.forecast.weekly_tokens || 0).toLocaleString() +
-      " tokens. Forecast this month: " + fmtUsd(body.forecast.monthly_usd) + ".";
+    var forecast = body.forecast || {};
+    $("budgetsForecast").textContent = "This week: " + fmtUsd(forecast.weekly_usd) + " · This month: " + fmtUsd(forecast.monthly_usd);
     renderBudgetsUsage(body);
     renderBudgetsHistory(body.changes || []);
+    renderPublicSite(body.public_site, body.settings);
     renderBrowserRun(body.browser_run);
   }
 
@@ -1005,29 +1106,7 @@
     backupText += backup.reasons.length ? " (" + backup.reasons.join(", ") + ")." : ".";
     $("browserRunBackupToday").textContent = backupText;
 
-    renderBrowserRunChart(br.series_7d || [], br.today.minutes_budget);
     renderBrowserRunRunsTable(br.last_runs || []);
-  }
-
-  function renderBrowserRunChart(series, dailyLimit) {
-    var chart = $("browserRunChart");
-    chart.textContent = "";
-    var max = Math.max(dailyLimit || 0, 1, Math.max.apply(null, series.map(function (d) { return d.minutes; }).concat([0])));
-    series.forEach(function (d) {
-      var col = el("div", "br-bar-col");
-      var bar = el("div", "br-bar");
-      bar.style.height = Math.max(2, Math.round((d.minutes / max) * 84)) + "px";
-      bar.title = d.date + ": " + fmtMin(d.minutes);
-      col.appendChild(bar);
-      col.appendChild(el("span", "d", fmtDate(d.date)));
-      chart.appendChild(col);
-    });
-    if (dailyLimit) {
-      var line = el("div", "br-limit-line");
-      line.style.bottom = Math.round((dailyLimit / max) * 84) + "px";
-      line.title = "Daily budget: " + fmtMin(dailyLimit);
-      chart.appendChild(line);
-    }
   }
 
   function renderBrowserRunRunsTable(runs) {
@@ -1070,6 +1149,7 @@
   });
   $("budgetsClose").addEventListener("click", function () { closeDialog($("budgetsDialog")); });
   $("budgetsSave").addEventListener("click", async function () {
+    if (!validateBudgetsForm()) return; // flagged fields: nothing is sent
     $("budgetsSave").disabled = true;
     $("budgetsMsg").textContent = "Saving…";
     try {
@@ -1084,14 +1164,13 @@
   });
 
   async function resetBudget(scope, btn) {
-    var usage = (state.budgets && state.budgets.usage) || { daily: { tokens: 0, searches: 0 }, weekly: { tokens: 0 } };
+    var usage = (state.budgets && state.budgets.usage) || emptyUsage();
     var settings = (state.budgets && state.budgets.settings) || {};
     var message = scope === "daily"
-      ? "Today: " + (usage.daily.tokens || 0).toLocaleString() + " of " + (settings.daily_token_budget || 0).toLocaleString() +
-        " tokens and " + (usage.daily.searches || 0) + " of " + (settings.daily_search_budget || 0) +
+      ? "Today: " + fmtUsd(usage.daily.usd) + " of " + fmtUsd(settings.daily_usd_budget) +
+        " and " + (usage.daily.searches || 0) + " of " + (settings.daily_search_budget || 0) +
         " searches used. Reset the count to zero? Past usage stays in Analytics."
-      : "This week: " + (usage.weekly.tokens || 0).toLocaleString() + " of " + (settings.weekly_token_budget || 0).toLocaleString() +
-        " tokens used. Reset the count to zero? Past usage stays in Analytics.";
+      : "This week: " + fmtUsd(usage.weekly.usd) + " used. Reset the count to zero? Past usage stays in Analytics.";
     if (!window.confirm(message)) return;
 
     btn.disabled = true;
@@ -1771,7 +1850,9 @@
       briefSearchResult: briefSearchResult, formatSearchResult: formatSearchResult, searchErrorMessage: searchErrorMessage,
       proposalSummary: proposalSummary, normalizeTitleKey: normalizeTitleKey, titlesGroupsInOrder: titlesGroupsInOrder,
       findDuplicateTitleOwner: findDuplicateTitleOwner, findExcludedWordIn: findExcludedWordIn,
-      titleMatchesFilter: titleMatchesFilter, countTitlesChanges: countTitlesChanges, buildBudgetsDoc: buildBudgetsDoc
+      titleMatchesFilter: titleMatchesFilter, countTitlesChanges: countTitlesChanges, buildBudgetsDoc: buildBudgetsDoc,
+      budgetsFormValues: budgetsFormValues, shareToPercent: shareToPercent, percentToShare: percentToShare,
+      sharesTotalState: sharesTotalState, budgetFieldProblem: budgetFieldProblem
     };
   }
 })();

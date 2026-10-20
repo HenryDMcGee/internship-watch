@@ -80,7 +80,7 @@ describe("Budgets", () => {
     expect(document.querySelectorAll("#budgetsDialog .br-chart, #budgetsDialog .br-bar-col, #budgetsDialog .br-limit-line")).toHaveLength(0);
     const dialogText = $("budgetsDialog").textContent;
     expect(dialogText).not.toMatch(/[Bb]illing|[Tt]oken/);
-    expect(dialogText).not.toContain("Weekly");
+    expect(dialogText).not.toContain("Weekly tokens"); // the weekly reset button stays; the weekly limit is gone
     // Exactly three inputs under Limits: Daily $, Monthly $, Daily searches.
     const limits = Array.from($("budgetsLimits").querySelectorAll("input")).map((i) => i.id);
     expect(limits).toEqual(["bDailyUsd", "bMonthlyUsd", "bDailySearches"]);

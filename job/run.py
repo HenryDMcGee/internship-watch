@@ -1152,15 +1152,13 @@ async def _finish_daily_run(
             date=today_str, run_status=run_status, run_reason=run_reason,
             tokens_today=status.today.tokens, searches_today=status.today.searches,
             budgets={
-                "billing_mode": status.billing_mode,
                 "daily_fraction_used": round(status.fraction_used(), 4),
-                "weekly_fraction_used": round(status.weekly_fraction_used(), 4),
                 "monthly_fraction_used": round(status.monthly_fraction_used(), 4),
             },
             tokens_week_to_date=status.week.tokens,
             usage_by_step=usage_by_step,
             forecast={
-                "weekly_tokens": round(weekly_forecast(status), 2),
+                "weekly_usd": round(weekly_forecast(status), 2),
                 "monthly_usd": round(monthly_forecast(status), 2),
             },
             alerts=[{"type": a["type"], "severity": a["severity"]} for a in recorded_alerts],

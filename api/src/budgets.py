@@ -1,6 +1,11 @@
 """Budget settings validation and forecasting for the dashboard's Budgets
 panel.
 
+One billing model since phase 9: API-key dollars. Daily and monthly dollar
+limits, a daily search limit, a share of the day's dollars per step, a
+model per step, and the rarely changed per-run limits. The old
+subscription mode and its token budgets are gone (`REMOVED_FIELDS`).
+
 Deliberately self-contained rather than importing `job/agent/budgets.py`:
 the Worker only ships what's under `api/` (see `api/wrangler.toml`), so
 anything the deployed Worker needs at runtime has to live in `api/src`,
@@ -11,22 +16,30 @@ from __future__ import annotations
 SHARE_FIELDS = ("share_discovery", "share_scout", "share_classification", "share_improvement")
 MODEL_FIELDS = ("model_discovery", "model_scout", "model_classification", "model_improvement")
 NUMERIC_FIELDS = (
-    "daily_token_budget", "daily_search_budget", "weekly_token_budget",
-    "daily_usd_budget", "monthly_usd_budget", "search_limit_per_run",
-    "search_limit_per_company", "browser_checks_per_run",
+    "daily_usd_budget", "monthly_usd_budget", "daily_search_budget",
+    "search_limit_per_run", "search_limit_per_company", "browser_checks_per_run",
+    "public_feedback_daily_limit",
 )
+# Numeric fields that must be whole numbers (a count, not an amount).
+INTEGER_FIELDS = ("public_feedback_daily_limit",)
+# Removed in phase 9. Never required, never validated, never written: a stale
+# dashboard that still sends them is ignored rather than refused.
+REMOVED_FIELDS = ("billing_mode", "daily_token_budget", "weekly_token_budget")
+
+
+def _is_number(value) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
 
 
 def validate_budget_settings(doc: dict) -> list[str]:
     problems: list[str] = []
 
-    billing_mode = doc.get("billing_mode")
-    if billing_mode not in ("subscription", "api_key"):
-        problems.append("billing_mode must be 'subscription' or 'api_key'")
-
     for field in NUMERIC_FIELDS:
         value = doc.get(field)
-        if not isinstance(value, (int, float)) or isinstance(value, bool) or value < 0:
+        if field in INTEGER_FIELDS:
+            if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+                problems.append(f"{field} must be a non-negative integer")
+        elif not _is_number(value) or value < 0:
             problems.append(f"{field} must be a non-negative number")
 
     for field in MODEL_FIELDS:
@@ -36,7 +49,7 @@ def validate_budget_settings(doc: dict) -> list[str]:
     shares = []
     for field in SHARE_FIELDS:
         value = doc.get(field)
-        if not isinstance(value, (int, float)) or isinstance(value, bool) or value < 0:
+        if not _is_number(value) or value < 0:
             problems.append(f"{field} must be a non-negative number")
         else:
             shares.append(value)
@@ -53,20 +66,14 @@ def linear_forecast(used_to_date: float, elapsed_units: int, total_units: int) -
     return used_to_date / elapsed_units * total_units
 
 
-def daily_fraction_used(settings: dict, *, tokens: float, searches: float, usd: float) -> float:
-    """The worse of today's token/dollar and search fractions -- mirrors
+def daily_fraction_used(settings: dict, *, searches: float, usd: float) -> float:
+    """The worse of today's dollar and search fractions -- mirrors
     `job/agent/budgets.py`'s `BudgetStatus.fraction_used()`, kept separate
     (see this module's docstring) since the Worker only ships `api/src`.
     Used for Search now's 80%-used confirmation (issue #35).
     """
-    billing_mode = settings.get("billing_mode") or "subscription"
-    if billing_mode == "api_key":
-        daily_budget = float(settings.get("daily_usd_budget") or 0)
-        daily_used = usd
-    else:
-        daily_budget = float(settings.get("daily_token_budget") or 0)
-        daily_used = tokens
-    daily_fraction = (daily_used / daily_budget) if daily_budget > 0 else 0.0
+    daily_budget = float(settings.get("daily_usd_budget") or 0)
+    daily_fraction = (usd / daily_budget) if daily_budget > 0 else 0.0
 
     search_budget = float(settings.get("daily_search_budget") or 0)
     search_fraction = (searches / search_budget) if search_budget > 0 else 0.0

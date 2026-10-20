@@ -122,48 +122,46 @@ async def _budget_cutoffs(db: Database, today_date: date) -> tuple[datetime, dat
 
 
 async def _current_usage(db: Database, today_date: date) -> dict:
-    """Today's and this week's usage, counting only usage since the later
-    of the window's start or its most recent reset (issue #38).
+    """Today's, this week's and this month's usage in dollars (plus today's
+    searches), counting only usage since the later of the window's start or
+    its most recent reset (issue #38). No token fields: budgets are API-key
+    dollars only (phase 9).
     """
     daily_cutoff, weekly_cutoff, week_start_date = await _budget_cutoffs(db, today_date)
     today = today_date.isoformat()
     week_start = week_start_date.isoformat()
+    month_start = today_date.replace(day=1).isoformat()
 
     today_rows = await db.all(
-        "SELECT input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, web_searches, "
-        "est_cost_usd, at FROM usage WHERE substr(at, 1, 10) = ?",
-        today,
+        "SELECT web_searches, est_cost_usd, at FROM usage WHERE substr(at, 1, 10) = ?", today,
     )
     week_rows = await db.all(
-        "SELECT input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, at "
-        "FROM usage WHERE substr(at, 1, 10) >= ? AND substr(at, 1, 10) <= ?",
+        "SELECT est_cost_usd, at FROM usage WHERE substr(at, 1, 10) >= ? AND substr(at, 1, 10) <= ?",
         week_start, today,
     )
+    month_row = await db.first(
+        "SELECT SUM(est_cost_usd) AS usd FROM usage WHERE substr(at, 1, 10) >= ? AND substr(at, 1, 10) <= ?",
+        month_start, today,
+    )
 
-    daily_tokens = daily_searches = 0
+    daily_searches = 0
     daily_usd = 0.0
     for row in today_rows:
         if _parse_central(row["at"]) < daily_cutoff:
             continue
-        daily_tokens += (
-            (row.get("input_tokens") or 0) + (row.get("output_tokens") or 0)
-            + (row.get("cache_read_tokens") or 0) + (row.get("cache_write_tokens") or 0)
-        )
         daily_searches += row.get("web_searches") or 0
         daily_usd += row.get("est_cost_usd") or 0
 
-    weekly_tokens = 0
+    weekly_usd = 0.0
     for row in week_rows:
         if _parse_central(row["at"]) < weekly_cutoff:
             continue
-        weekly_tokens += (
-            (row.get("input_tokens") or 0) + (row.get("output_tokens") or 0)
-            + (row.get("cache_read_tokens") or 0) + (row.get("cache_write_tokens") or 0)
-        )
+        weekly_usd += row.get("est_cost_usd") or 0
 
     return {
-        "daily": {"tokens": daily_tokens, "searches": daily_searches, "usd": round(daily_usd, 4)},
-        "weekly": {"tokens": weekly_tokens},
+        "daily": {"searches": daily_searches, "usd": round(daily_usd, 4)},
+        "weekly": {"usd": round(weekly_usd, 4)},
+        "monthly": {"usd": round((month_row or {}).get("usd") or 0, 4)},
     }
 
 
@@ -691,12 +689,7 @@ async def start_search(body: SearchStartRequest, request: Request, db: Database 
     settings = await db.first("SELECT * FROM budget_settings WHERE id = 1") or {}
     today = central_today()
     usage = await _current_usage(db, date.fromisoformat(today))
-    fraction = daily_fraction_used(
-        settings,
-        tokens=usage["daily"]["tokens"],
-        searches=usage["daily"]["searches"],
-        usd=usage["daily"]["usd"],
-    )
+    fraction = daily_fraction_used(settings, searches=usage["daily"]["searches"], usd=usage["daily"]["usd"])
     if fraction >= SEARCH_BUDGET_WARN_FRACTION and not body.confirm_budget:
         raise HTTPException(
             status_code=409,
@@ -804,7 +797,23 @@ FEEDBACK_KIND_LABELS = {
 FEEDBACK_MAX_CHARS = 2000
 PAGE_URL_MAX_CHARS = 500
 PUBLIC_FEEDBACK_PER_VISITOR_PER_DAY = 10
-PUBLIC_FEEDBACK_TOTAL_PER_DAY = 200
+# The total a day across all visitors is the `public_feedback_daily_limit` budget
+# setting (phase 9); this is only the fallback if the settings row can't be read.
+PUBLIC_FEEDBACK_TOTAL_PER_DAY_DEFAULT = 20
+
+
+async def _public_feedback_daily_limit(db: Database) -> int:
+    row = await db.first("SELECT public_feedback_daily_limit AS n FROM budget_settings WHERE id = 1")
+    value = (row or {}).get("n")
+    return int(value) if value is not None else PUBLIC_FEEDBACK_TOTAL_PER_DAY_DEFAULT
+
+
+async def _public_feedback_today(db: Database, today: str) -> int:
+    """Visitor submissions today, Central. Henry's own feedback never counts toward the cap."""
+    row = await db.first(
+        "SELECT COUNT(*) AS n FROM feedback WHERE source = 'public' AND substr(created_at, 1, 10) = ?", today
+    )
+    return int((row or {}).get("n") or 0)
 
 # Columns sent to the dashboard. `visitor_hash` stays in the database only.
 _FEEDBACK_OUT_SQL = (
@@ -931,26 +940,53 @@ async def update_titles(body: TitlesUpdate, request: Request):
 # Budgets
 # ---------------------------------------------------------------------------
 
-_BUDGET_FIELDS = (*NUMERIC_FIELDS, *MODEL_FIELDS, *SHARE_FIELDS, "billing_mode")
+# Everything the PUT writes. The removed phase 9 fields (`budgets.REMOVED_FIELDS`)
+# are never read from the body, so a stale dashboard can't bring them back.
+_BUDGET_FIELDS = (*NUMERIC_FIELDS, *MODEL_FIELDS, *SHARE_FIELDS)
 
 
-async def _budget_forecast(db: Database, settings: dict) -> dict:
-    today = central_today()
-    today_date = date.fromisoformat(today)
-    month_start = today_date.replace(day=1).isoformat()
+async def _budget_forecast(db: Database, usage: dict | None = None) -> dict:
+    """This week's and this month's dollars, projected linearly to the end of each period."""
+    today_date = date.fromisoformat(central_today())
     days_in_month = (
         31 if today_date.month == 12
         else (date(today_date.year, today_date.month + 1, 1) - date(today_date.year, today_date.month, 1)).days
     )
+    if usage is None:
+        usage = await _current_usage(db, today_date)
+    weekly_usd = linear_forecast(usage["weekly"]["usd"], today_date.isoweekday(), 7)
+    monthly_usd = linear_forecast(usage["monthly"]["usd"], today_date.day, days_in_month)
+    return {"weekly_usd": round(weekly_usd, 2), "monthly_usd": round(monthly_usd, 2)}
 
-    usage = await _current_usage(db, today_date)
-    month_row = await db.first(
-        "SELECT SUM(est_cost_usd) AS usd FROM usage WHERE substr(at, 1, 10) >= ? AND substr(at, 1, 10) <= ?",
-        month_start, today,
-    )
-    weekly_tokens = linear_forecast(usage["weekly"]["tokens"], today_date.isoweekday(), 7)
-    monthly_usd = linear_forecast((month_row or {}).get("usd") or 0, today_date.day, days_in_month)
-    return {"weekly_tokens": round(weekly_tokens, 2), "monthly_usd": round(monthly_usd, 2)}
+
+async def _board_views_today(db: Database, today: str) -> int:
+    row = await db.first("SELECT views FROM public_board_views WHERE day = ?", today)
+    return int((row or {}).get("views") or 0)
+
+
+async def _count_board_view(db: Database) -> None:
+    """One more load of the public job board today. Best effort: a counting
+    problem is logged and never fails the public response.
+    """
+    try:
+        await db.run(
+            "INSERT INTO public_board_views (day, views) VALUES (?, 1) "
+            "ON CONFLICT(day) DO UPDATE SET views = views + 1",
+            central_today(),
+        )
+    except Exception as exc:  # noqa: BLE001 - the board must load even if the counter can't
+        logger.warning("public board view was not counted (%s: %s)", type(exc).__name__, exc)
+
+
+async def _public_site_block(db: Database, settings: dict) -> dict:
+    """The Budgets dialog's Public site line: today's visitor feedback against the cap, and board views."""
+    today = central_today()
+    limit = settings.get("public_feedback_daily_limit")
+    return {
+        "feedback_daily_limit": int(limit) if limit is not None else PUBLIC_FEEDBACK_TOTAL_PER_DAY_DEFAULT,
+        "feedback_today": await _public_feedback_today(db, today),
+        "board_views_today": await _board_views_today(db, today),
+    }
 
 
 class BudgetsUpdate(BaseModel):
@@ -975,12 +1011,13 @@ async def _browser_run_summary(db: Database, settings: dict) -> dict:
 
 async def _budgets_payload(db: Database, settings: dict, usage: dict) -> dict:
     changes = await db.all("SELECT * FROM budget_changes ORDER BY id DESC LIMIT 50")
-    forecast = await _budget_forecast(db, settings or {})
+    forecast = await _budget_forecast(db, usage)
     resets = await _latest_resets(db)
     browser_run = await _browser_run_summary(db, settings or {})
+    public_site = await _public_site_block(db, settings or {})
     return {
         "settings": settings, "changes": changes, "forecast": forecast, "usage": usage, "resets": resets,
-        "browser_run": browser_run,
+        "browser_run": browser_run, "public_site": public_site,
     }
 
 
@@ -1028,9 +1065,9 @@ async def create_budget_reset(body: BudgetResetCreate, db: Database = Depends(ge
     at = now_iso()
 
     if body.scope == "daily":
-        old_value = f"{usage['daily']['tokens']:,} tokens, {usage['daily']['searches']} searches"
+        old_value = f"${usage['daily']['usd']:.2f}, {usage['daily']['searches']} searches"
     else:
-        old_value = f"{usage['weekly']['tokens']:,} tokens"
+        old_value = f"${usage['weekly']['usd']:.2f}"
 
     await db.run(
         "INSERT INTO budget_resets (scope, reset_at, note) VALUES (?, ?, ?)",
@@ -1104,7 +1141,7 @@ async def get_analytics(db: Database = Depends(get_db)):
     )
     alerts = await db.all("SELECT * FROM alerts ORDER BY id DESC LIMIT 50")
     settings = await db.first("SELECT * FROM budget_settings WHERE id = 1")
-    forecast = await _budget_forecast(db, settings or {})
+    forecast = await _budget_forecast(db)
 
     postings_by_source_row = await db.all(
         "SELECT source_name, COUNT(*) AS n FROM postings WHERE archived_at IS NULL GROUP BY source_name"
@@ -1319,6 +1356,7 @@ async def public_postings(response: Response, db: Database = Depends(get_db)):
     response.headers["Cache-Control"] = PUBLIC_CACHE_CONTROL
     if not await _public_site_enabled(db):
         return {"enabled": False, "postings": [], "last_run": None}
+    await _count_board_view(db)
 
     rows = await db.all(
         f"SELECT {PUBLIC_POSTING_COLUMNS} FROM postings WHERE {PUBLIC_POSTING_FILTER} "
@@ -1382,8 +1420,10 @@ async def public_feedback(body: PublicFeedbackCreate, request: Request, db: Data
         total = await db.first(
             "SELECT COUNT(*) AS n FROM feedback WHERE source = 'public' AND substr(created_at, 1, 10) = ?", today
         )
-        if (mine or {}).get("n", 0) >= PUBLIC_FEEDBACK_PER_VISITOR_PER_DAY or (total or {}).get("n", 0) >= PUBLIC_FEEDBACK_TOTAL_PER_DAY:
-            raise reject(429, "Try again tomorrow.", "daily feedback limit reached")
+        if (mine or {}).get("n", 0) >= PUBLIC_FEEDBACK_PER_VISITOR_PER_DAY:
+            raise reject(429, "Try again tomorrow.", "daily feedback limit reached for this visitor")
+        if (total or {}).get("n", 0) >= await _public_feedback_daily_limit(db):
+            raise reject(429, "Try again tomorrow.", "daily feedback limit reached (public_feedback_daily_limit)")
 
         feedback_id = await db.run(
             "INSERT INTO feedback (source, kind, posting_id, message, page_url, visitor_hash, created_at) "

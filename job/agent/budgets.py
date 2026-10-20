@@ -2,8 +2,12 @@
 
 Loads today's, this week's, and this month's usage from the `usage` table
 and compares it against `budget_settings`, per `docs/plan.md`'s Budgets
-feature: daily/weekly/monthly limits, a share per step, and search limits.
-Budget is checked before every Claude step (`allow_step`).
+feature. Since phase 9 there is one billing model, API-key dollars:
+enforcement is today's dollars and today's searches (`allow_step`, checked
+before every Claude step), the month's dollars feed the budget alerts, and
+this week's dollars are only forecast, never enforced. Tokens are still
+recorded per call for Analytics and the usage-spike alert, but no budget
+is set in tokens any more.
 
 Order for cutting steps as usage climbs toward and past the daily budget,
 per `docs/plan.md`: scout, then low-yield discovery, then the rest
@@ -78,7 +82,6 @@ class UsageTotals:
 
 @dataclass
 class BudgetStatus:
-    billing_mode: str
     settings: dict
     today: UsageTotals = field(default_factory=UsageTotals)
     today_by_step: dict[str, UsageTotals] = field(default_factory=dict)
@@ -91,12 +94,10 @@ class BudgetStatus:
     # -- daily --------------------------------------------------------
 
     def daily_budget(self) -> float:
-        if self.billing_mode == "api_key":
-            return float(self.settings.get("daily_usd_budget") or 0)
-        return float(self.settings.get("daily_token_budget") or 0)
+        return float(self.settings.get("daily_usd_budget") or 0)
 
     def daily_used(self) -> float:
-        return self.today.usd if self.billing_mode == "api_key" else self.today.tokens
+        return self.today.usd
 
     def daily_fraction_used(self) -> float:
         budget = self.daily_budget()
@@ -107,25 +108,17 @@ class BudgetStatus:
         return (self.today.searches / budget) if budget > 0 else 0.0
 
     def fraction_used(self) -> float:
-        """The worse of the token/dollar and search fractions -- either can force cuts."""
+        """The worse of today's dollar and search fractions -- either can force cuts."""
         return max(self.daily_fraction_used(), self.search_fraction_used())
 
-    # -- weekly / monthly ----------------------------------------------
-
-    def weekly_fraction_used(self) -> float:
-        if self.billing_mode == "api_key":
-            return 0.0
-        budget = float(self.settings.get("weekly_token_budget") or 0)
-        return (self.week.tokens / budget) if budget > 0 else 0.0
+    # -- monthly (alerts only; this week's dollars are forecast, not enforced) ----
 
     def monthly_fraction_used(self) -> float:
-        if self.billing_mode != "api_key":
-            return 0.0
         budget = float(self.settings.get("monthly_usd_budget") or 0)
         return (self.month.usd / budget) if budget > 0 else 0.0
 
     def worst_fraction_used(self) -> float:
-        return max(self.fraction_used(), self.weekly_fraction_used(), self.monthly_fraction_used())
+        return max(self.fraction_used(), self.monthly_fraction_used())
 
     # -- per-step gating -------------------------------------------------
 
@@ -142,7 +135,7 @@ class BudgetStatus:
         used = 0.0
         for other_step, totals in self.today_by_step.items():
             if SHARE_SETTING.get(other_step, other_step) == share_key:
-                used += totals.usd if self.billing_mode == "api_key" else totals.tokens
+                used += totals.usd
         return used
 
     def allow_step(self, step: str) -> tuple[bool, str | None]:
@@ -166,7 +159,7 @@ def forecast(used_to_date: float, elapsed_units: int, total_units: int) -> float
 
 
 def weekly_forecast(status: BudgetStatus) -> float:
-    return forecast(status.week.tokens, status.day_of_week, 7)
+    return forecast(status.week.usd, status.day_of_week, 7)
 
 
 def monthly_forecast(status: BudgetStatus) -> float:
@@ -282,7 +275,6 @@ async def load_budget_status(db, budget_settings: dict, *, today: str) -> Budget
         month_totals.usd += totals.usd
 
     return BudgetStatus(
-        billing_mode=budget_settings.get("billing_mode") or "subscription",
         settings=budget_settings,
         today=today_totals,
         today_by_step=today_by_step,

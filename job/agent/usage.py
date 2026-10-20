@@ -1,8 +1,8 @@
 """Records every Claude call in the `usage` table, with its cost.
 
-`est_cost_usd` matters most in `api_key` billing mode, where it's what
-`budgets.py` enforces against; in `subscription` mode it's kept only for
-Analytics, since budgets there are tokens and searches, not dollars.
+`est_cost_usd` is what `budgets.py` enforces against (budgets are API-key
+dollars only since phase 9); the token counts are kept for Analytics and
+the usage-spike alert.
 """
 from __future__ import annotations
 

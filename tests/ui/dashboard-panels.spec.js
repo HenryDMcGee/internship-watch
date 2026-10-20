@@ -67,7 +67,9 @@ test.describe("Budgets panel", () => {
   test("budget numbers and percent shares save, round-trip, and show in the history", async ({ page, request }) => {
     await page.goto("/");
     await page.click("#openBudgets");
-    await expect(page.locator("#budgetsHistory")).toHaveText("No changes yet.");
+    // A migrated database starts with the phase 9 migration's own rows in the history.
+    await expect(page.locator("#budgetsHistory")).toContainText("billing_mode subscription → removed");
+    await expect(page.locator("#budgetsHistory")).not.toContainText("daily_search_budget");
     await page.fill("#bDailySearches", "7");
     await page.fill("#bDailyUsd", "2.5");
     await page.fill("#bFeedbackCap", "30");
