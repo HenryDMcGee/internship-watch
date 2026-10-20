@@ -157,8 +157,50 @@ describe("titles", () => {
 });
 
 describe("budgets", () => {
-  test("buildBudgetsDoc turns numeric fields into numbers", () => {
-    const values = { billing_mode: "api_key", daily_token_budget: "1500", model_scout: "haiku" };
-    expect(m.buildBudgetsDoc(values)).toEqual({ billing_mode: "api_key", daily_token_budget: 1500, model_scout: "haiku" });
+  test("buildBudgetsDoc turns numeric fields into numbers and percents into 0-1 shares", () => {
+    const values = { daily_usd_budget: "1.50", daily_search_budget: "35", public_feedback_daily_limit: "20", share_discovery: "60", model_scout: "haiku" };
+    expect(m.buildBudgetsDoc(values)).toEqual({
+      daily_usd_budget: 1.5, daily_search_budget: 35, public_feedback_daily_limit: 20, share_discovery: 0.6, model_scout: "haiku",
+    });
+  });
+
+  test("shares round-trip between whole percents and decimals", () => {
+    expect(m.shareToPercent(0.6)).toBe(60);
+    expect(m.shareToPercent(0.15)).toBe(15);
+    expect(m.shareToPercent(0.05)).toBe(5);
+    expect(m.shareToPercent(1)).toBe(100);
+    expect(m.shareToPercent(0.29)).toBe(29); // floating point: 0.29 * 100 is 28.999999999999996
+    expect(m.percentToShare(60)).toBe(0.6);
+    expect(m.percentToShare("15")).toBe(0.15);
+    for (const share of [0.6, 0.2, 0.15, 0.05, 0.29, 0.07, 1, 0]) {
+      expect(m.percentToShare(m.shareToPercent(share))).toBeCloseTo(share, 10);
+    }
+    const settings = { share_discovery: 0.6, share_scout: 0.2, share_classification: 0.15, share_improvement: 0.05, daily_usd_budget: 2 };
+    const values = m.budgetsFormValues(settings);
+    expect(values).toMatchObject({ share_discovery: 60, share_scout: 20, share_classification: 15, share_improvement: 5, daily_usd_budget: 2 });
+    const doc = m.buildBudgetsDoc(values);
+    expect(doc.share_discovery + doc.share_scout + doc.share_classification + doc.share_improvement).toBeCloseTo(1, 10);
+  });
+
+  test("sharesTotalState describes 90%, 100% and over 100%", () => {
+    expect(m.sharesTotalState([60, 20, 5, 5])).toEqual({ total: 90, complete: false, text: "Total: 90% — 10% left to assign" });
+    expect(m.sharesTotalState([60, 20, 15, 5])).toEqual({ total: 100, complete: true, text: "Total: 100% ✓" });
+    expect(m.sharesTotalState([60, 30, 15, 5])).toEqual({ total: 110, complete: false, text: "Total: 110% — 10% over" });
+    expect(m.sharesTotalState(["25", "25", "25", "25"]).complete).toBe(true);
+    expect(m.sharesTotalState(["", "x", "25", "25"])).toEqual({ total: 50, complete: false, text: "Total: 50% — 50% left to assign" });
+  });
+
+  test("budgetFieldProblem flags empty, non-numeric, negative, out-of-range and fractional values", () => {
+    expect(m.budgetFieldProblem("daily_usd_budget", "1.5")).toBeNull();
+    expect(m.budgetFieldProblem("daily_usd_budget", "0")).toBeNull();
+    expect(m.budgetFieldProblem("daily_usd_budget", "")).toBe("Enter a number.");
+    expect(m.budgetFieldProblem("daily_usd_budget", "abc")).toBe("Enter a number.");
+    expect(m.budgetFieldProblem("daily_usd_budget", "-1")).toBe("Must be 0 or more.");
+    expect(m.budgetFieldProblem("share_scout", "101")).toBe("Must be 100 or less.");
+    expect(m.budgetFieldProblem("share_scout", "100")).toBeNull();
+    expect(m.budgetFieldProblem("share_scout", "12.5")).toBe("Enter a whole number.");
+    expect(m.budgetFieldProblem("public_feedback_daily_limit", "2.5")).toBe("Enter a whole number.");
+    expect(m.budgetFieldProblem("public_feedback_daily_limit", "20")).toBeNull();
+    expect(m.budgetFieldProblem("daily_search_budget", "1.5")).toBe("Enter a whole number.");
   });
 });

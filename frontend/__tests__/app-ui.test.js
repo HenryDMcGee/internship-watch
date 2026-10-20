@@ -466,8 +466,8 @@ describe("Sources", () => {
 
 describe("Analytics", () => {
   const analytics = () => ({
-    budgets: { billing_mode: "api_key" },
-    forecast: { weekly_tokens: 1000, monthly_usd: 2 },
+    budgets: { daily_usd_budget: 2 },
+    forecast: { weekly_usd: 1.5, monthly_usd: 2 },
     usage_by_step: [{ step: "discovery", model: "sonnet", tokens: 10, searches: 1, usd: 0.1 }],
     coverage: [{ name: "Amazon", posting_count: 1, last_feed_status: "ok" }, { name: "Acme", posting_count: 2, last_feed_status: "no_source" }],
     sources: [{ name: "S", status: "ok", found_count: 1, dead_link_rate: 0.1 }],
@@ -501,7 +501,8 @@ describe("Analytics", () => {
     click("moreAnalytics");
     await flush();
     expect($("analyticsBody").hidden).toBe(false);
-    expect(text("usageSummary")).toContain("Billing: API key");
+    expect(text("usageSummary")).toBe("Forecast this week: $1.50. Forecast this month: $2.00.");
+    expect(text("usageSummary")).not.toMatch(/[Bb]illing|token/);
     expect(text("usageByStep")).toContain("discovery (sonnet)");
     expect(text("coverageList")).toContain("(no source yet)");
     expect(text("sourceQualityList")).toContain("10% dead links");
@@ -550,6 +551,7 @@ describe("Analytics", () => {
     click("moreAnalytics");
     await flush();
     expect(text("usageByStep")).toContain("No Claude calls recorded yet.");
+    expect(text("usageSummary")).toBe("Forecast this week: $0.00. Forecast this month: $0.00.");
     expect(text("careersPagesPerRunList")).toContain("No careers-page runs yet.");
     expect(text("discoverySearchesPerRunList")).toContain("No discovery runs yet.");
     expect(text("recentRunsList")).toContain("No runs yet.");

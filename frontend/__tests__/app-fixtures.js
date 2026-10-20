@@ -14,14 +14,16 @@ function posting(over) {
 function budgetsBody() {
   return {
     settings: {
-      billing_mode: "subscription", daily_token_budget: 1000, daily_search_budget: 5, weekly_token_budget: 5000,
-      daily_usd_budget: 2, monthly_usd_budget: 20, search_limit_per_run: 3, search_limit_per_company: 1,
-      browser_checks_per_run: 4, share_discovery: 25, share_scout: 25, share_classification: 25, share_improvement: 25,
+      daily_usd_budget: 2, monthly_usd_budget: 20, daily_search_budget: 5,
+      search_limit_per_run: 3, search_limit_per_company: 1, browser_checks_per_run: 4,
+      public_feedback_daily_limit: 20,
+      share_discovery: 0.6, share_scout: 0.2, share_classification: 0.15, share_improvement: 0.05,
       model_discovery: "sonnet", model_scout: "sonnet", model_classification: "haiku", model_improvement: "sonnet",
     },
-    usage: { daily: { tokens: 10, searches: 1, usd: 0.5 }, weekly: { tokens: 100 } },
+    usage: { daily: { searches: 1, usd: 0.5 }, weekly: { usd: 1 }, monthly: { usd: 3 } },
     resets: { daily: { reset_at: "2026-10-14T13:00:00Z" }, weekly: null },
-    forecast: { weekly_tokens: 1234, monthly_usd: 3.5 },
+    forecast: { weekly_usd: 1.25, monthly_usd: 3.5 },
+    public_site: { feedback_daily_limit: 20, feedback_today: 2, board_views_today: 7 },
     changes: [{ changed_at: "2026-10-13T10:00:00Z", field: "daily_search_budget", old_value: 4, new_value: 5 }],
     browser_run: {
       plan: "free",
@@ -29,7 +31,6 @@ function budgetsBody() {
       cloudflare_free: { daily_minutes: 10, minutes_used: 1, reset_at: "2026-10-15T05:00:00Z" },
       month: null,
       backup_today: { pages: 1, pages_cap: 5, reasons: ["blocked"] },
-      series_7d: [{ date: "2026-10-13", minutes: 2 }, { date: "2026-10-14", minutes: 1 }],
       last_runs: [{ at: "2026-10-14T13:00:00Z", browser_run_pages: 3, browser_run_minutes: 1, backup_pages: 1, failures: 0 }],
     },
   };

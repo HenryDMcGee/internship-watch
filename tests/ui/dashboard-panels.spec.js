@@ -13,7 +13,7 @@ test.describe("Budgets panel", () => {
     await page.goto("/");
     await page.click("#openBudgets");
     await expect(page.locator("#budgetsDialog")).toBeVisible();
-    await expect(page.locator("#bDailyTokens")).not.toHaveValue("");
+    await expect(page.locator("#bDailyUsd")).not.toHaveValue("");
     await expect(page.locator("#locPublic")).not.toBeChecked();
 
     // Off: the public page says it isn't available.
@@ -33,12 +33,13 @@ test.describe("Budgets panel", () => {
     await expect(visitor.locator("#board")).toBeVisible();
     await visitor.close();
 
-    // Close, reload the dashboard, and the switch is still on.
+    // Close, reload the dashboard, and the switch is still on. The visit counted as a board view.
     await page.click("#budgetsClose");
     await expect(page.locator("#budgetsDialog")).toBeHidden();
     await page.reload();
     await page.click("#openBudgets");
     await expect(page.locator("#locPublic")).toBeChecked();
+    await expect(page.locator("#publicSiteStatus")).toHaveText("Today: 2 of 20 used · 1 board views");
 
     await page.uncheck("#locPublic");
     await page.click("#budgetsSave");
@@ -46,46 +47,87 @@ test.describe("Budgets panel", () => {
     expect(await (await request.get(DASHBOARD + "/api/settings/public-site")).json()).toEqual({ enabled: false });
   });
 
-  test("budget numbers save and show in the history", async ({ page }) => {
+  test("the dialog has no billing mode or token inputs, shares are percents, and Advanced starts collapsed", async ({ page }) => {
+    await page.goto("/");
+    await page.click("#openBudgets");
+    await expect(page.locator("#bBillingMode")).toHaveCount(0);
+    await expect(page.locator("#bDailyTokens")).toHaveCount(0);
+    await expect(page.locator("#browserRunChart")).toHaveCount(0);
+    await expect(page.locator("#budgetsLimits input")).toHaveCount(3);
+    await expect(page.locator("#bShareDiscovery")).toHaveValue("60");
+    await expect(page.locator("#bShareImprovement")).toHaveValue("5");
+    await expect(page.locator("#sharesTotal")).toHaveText("Total: 100% ✓");
+    await expect(page.locator("#budgetsAdvanced")).not.toHaveAttribute("open", "");
+    await expect(page.locator("#bSearchPerRun")).toBeHidden();
+    await page.click("#budgetsAdvanced summary");
+    await expect(page.locator("#bSearchPerRun")).toBeVisible();
+    await expect(page.locator("#bSearchPerRun")).toHaveValue("35");
+  });
+
+  test("budget numbers and percent shares save, round-trip, and show in the history", async ({ page, request }) => {
     await page.goto("/");
     await page.click("#openBudgets");
     await expect(page.locator("#budgetsHistory")).toHaveText("No changes yet.");
     await page.fill("#bDailySearches", "7");
-    await page.fill("#bDailyTokens", "123456");
-    await page.selectOption("#bBillingMode", "api_key");
+    await page.fill("#bDailyUsd", "2.5");
+    await page.fill("#bFeedbackCap", "30");
+    await page.fill("#bShareDiscovery", "50");
+    await page.fill("#bShareScout", "30");
+    await expect(page.locator("#sharesTotal")).toHaveText("Total: 100% ✓");
     await page.click("#budgetsSave");
     await expect(page.locator("#budgetsMsg")).toContainText("Saved.");
     await expect(page.locator("#budgetsHistory")).toContainText("daily_search_budget");
-    await expect(page.locator("#budgetsUsage")).toContainText("of $");
+    await expect(page.locator("#budgetsHistory")).toContainText("share_discovery 0.6 → 0.5");
+    await expect(page.locator("#budgetsUsage")).toContainText("Today: $0.12 of $2.50");
+    await expect(page.locator("#publicSiteStatus")).toHaveText("Today: 2 of 30 used · 0 board views");
+    const saved = await (await request.get(DASHBOARD + "/api/budgets")).json();
+    expect(saved.settings.share_discovery).toBeCloseTo(0.5, 10);
+    expect(saved.settings.public_feedback_daily_limit).toBe(30);
+    expect(saved.settings.billing_mode).toBeUndefined();
     await page.reload();
     await page.click("#openBudgets");
     await expect(page.locator("#bDailySearches")).toHaveValue("7");
-    await expect(page.locator("#bDailyTokens")).toHaveValue("123456");
-    await expect(page.locator("#bBillingMode")).toHaveValue("api_key");
+    await expect(page.locator("#bDailyUsd")).toHaveValue("2.5");
+    await expect(page.locator("#bShareDiscovery")).toHaveValue("50");
+    await expect(page.locator("#bShareScout")).toHaveValue("30");
   });
 
-  test("a number the server refuses is reported", async ({ page }) => {
+  test("a bad value or an incomplete total is flagged before anything is sent", async ({ page }) => {
     await page.goto("/");
     await page.click("#openBudgets");
     await page.fill("#bDailySearches", "-5");
-    await page.click("#budgetsSave");
-    await expect(page.locator("#budgetsMsg")).toContainText("Couldn't save.");
+    await expect(page.locator('.field-error[data-for="bDailySearches"]')).toHaveText("Must be 0 or more.");
+    await expect(page.locator("#budgetsSave")).toBeDisabled();
+    await expect(page.locator("#budgetsMsg")).toHaveText("Fix the flagged fields to save.");
+    await page.fill("#bDailySearches", "5");
     await expect(page.locator("#budgetsSave")).toBeEnabled();
+
+    await page.fill("#bShareScout", "10");
+    await expect(page.locator("#sharesTotal")).toHaveText("Total: 90% — 10% left to assign");
+    await expect(page.locator("#budgetsSave")).toBeDisabled();
+    await page.click("#sharesEvenSplit");
+    await expect(page.locator("#bShareScout")).toHaveValue("25");
+    await expect(page.locator("#sharesTotal")).toHaveText("Total: 100% ✓");
+    await expect(page.locator("#budgetsSave")).toBeEnabled();
+    await expect(page.locator("#budgetsMsg")).toHaveText("");
   });
 
-  test("shows the forecast, usage and Browser Run numbers", async ({ page }) => {
+  test("shows the forecast, usage, public site and Browser Run numbers", async ({ page }) => {
     await page.goto("/");
     await page.click("#openBudgets");
-    await expect(page.locator("#budgetsForecast")).toContainText("Forecast this week:");
-    await expect(page.locator("#budgetsUsage")).toContainText("Today:");
+    await expect(page.locator("#budgetsForecast")).toContainText("This week: $");
+    await expect(page.locator("#budgetsForecast")).toContainText("This month: $");
+    await expect(page.locator("#budgetsUsage")).toContainText("Today: $0.12 of $1.50 · This month: $0.12 of $30.00 · 2 of 35 searches used.");
     await expect(page.locator("#budgetsLastReset")).toHaveText("Daily count never reset. Weekly count never reset.");
+    await expect(page.locator("#publicSiteStatus")).toHaveText("Today: 2 of 20 used · 0 board views");
     await expect(page.locator("#browserRunPlan")).toHaveText("Plan: Free.");
     await expect(page.locator("#browserRunToday")).toContainText("min of");
     await expect(page.locator("#browserRunCloudflareFree")).toContainText("Cloudflare free allowance");
     await expect(page.locator("#browserRunBackupToday")).toContainText("Backup today: 2 of");
-    await expect(page.locator("#browserRunChart .br-bar-col")).not.toHaveCount(0);
     await expect(page.locator("#browserRunRunsBody tr")).not.toHaveCount(0);
     await expect(page.locator("#browserRunRunsBody")).toContainText("4");
+    await expect(page.locator("#budgetsDialog")).not.toContainText("Billing");
+    await expect(page.locator("#budgetsDialog")).not.toContainText("tokens");
   });
 
   test("reset asks first, and only then zeroes the count", async ({ page }) => {
@@ -100,10 +142,11 @@ test.describe("Budgets panel", () => {
     await expect(page.locator("#budgetsMsg")).toHaveText("");
     await page.click("#resetDailyBudget");
     await expect(page.locator("#budgetsMsg")).toHaveText("Today's usage was reset.");
+    await expect(page.locator("#budgetsUsage")).toContainText("Today: $0.00 of $1.50");
     await page.click("#resetWeeklyBudget");
     await expect(page.locator("#budgetsMsg")).toHaveText("This week's usage was reset.");
     await expect(page.locator("#budgetsLastReset")).toContainText("Daily count reset");
-    expect(messages[0]).toContain("Reset the count to zero?");
+    expect(messages[0]).toContain("Today: $0.12 of $1.50 and 2 of 35 searches used. Reset the count to zero?");
   });
 });
 
