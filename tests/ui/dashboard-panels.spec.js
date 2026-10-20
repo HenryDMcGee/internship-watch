@@ -217,7 +217,9 @@ test.describe("Analytics", () => {
   test("shows each section from the seeded runs", async ({ page }) => {
     await openMore(page, "#moreAnalytics");
     await expect(page.locator("#analyticsBody")).toBeVisible();
-    await expect(page.locator("#usageSummary")).toContainText("Billing: subscription");
+    await expect(page.locator("#usageSummary")).toContainText("Forecast this week: $");
+    await expect(page.locator("#usageSummary")).toContainText("Forecast this month: $");
+    await expect(page.locator("#usageSummary")).not.toContainText("Billing");
     await expect(page.locator("#usageByStep")).toContainText("discovery (sonnet): 1,500 tokens, 2 searches, $0.12");
     await expect(page.locator("#coverageList")).toContainText("Apple: 0 postings");
     await expect(page.locator("#coverageList")).toContainText("Borderline: 0 postings (no source yet)");
