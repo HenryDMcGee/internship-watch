@@ -236,53 +236,55 @@
 <dialog id="budgetsDialog" aria-labelledby="budgetsTitle">
   <div class="sheet">
     <h2 id="budgetsTitle">Budgets</h2>
-    <p>Daily, weekly, and monthly limits for Claude calls, and how each day's budget splits across steps. Step shares must add up to 100%.</p>
+    <p>Dollar and search limits for Claude calls, and how each day's budget splits across steps. Step shares must add up to 100%.</p>
 
-    <h3>Billing</h3>
-    <div class="addform" style="grid-template-columns:1fr">
-      <label>Billing mode
-        <select id="bBillingMode">
-          <option value="subscription">Subscription (tokens and searches)</option>
-          <option value="api_key">API key (dollars)</option>
-        </select>
-      </label>
-    </div>
-
-    <h3>Daily, weekly, and monthly limits</h3>
-    <div class="addform">
-      <label>Daily tokens <input id="bDailyTokens" type="number" min="0"></label>
-      <label>Daily searches <input id="bDailySearches" type="number" min="0"></label>
-      <label>Weekly tokens <input id="bWeeklyTokens" type="number" min="0"></label>
-      <label>Daily $ <input id="bDailyUsd" type="number" min="0" step="0.01"></label>
-      <label>Monthly $ <input id="bMonthlyUsd" type="number" min="0" step="0.01"></label>
-    </div>
-
-    <h3>Search and browser limits</h3>
-    <div class="addform">
-      <label>Searches per run <input id="bSearchPerRun" type="number" min="0"></label>
-      <label>Searches per company <input id="bSearchPerCompany" type="number" min="0"></label>
-      <label>Browser checks per run <input id="bBrowserChecks" type="number" min="0"></label>
+    <h3>Limits</h3>
+    <div class="addform budget-limits" id="budgetsLimits">
+      <label>Daily $ <input id="bDailyUsd" type="number" min="0" step="0.01" inputmode="decimal"><span class="field-error" data-for="bDailyUsd"></span></label>
+      <label>Monthly $ <input id="bMonthlyUsd" type="number" min="0" step="0.01" inputmode="decimal"><span class="field-error" data-for="bMonthlyUsd"></span></label>
+      <label>Daily searches <input id="bDailySearches" type="number" min="0" step="1" inputmode="numeric"><span class="field-error" data-for="bDailySearches"></span></label>
     </div>
 
     <h3>Step shares and models</h3>
-    <div class="addform">
-      <label>Discovery share <input id="bShareDiscovery" type="number" min="0" max="1" step="0.01"></label>
-      <label>Discovery model
-        <select id="bModelDiscovery"><option value="sonnet">Sonnet</option><option value="haiku">Haiku</option></select>
-      </label>
-      <label>Scout share <input id="bShareScout" type="number" min="0" max="1" step="0.01"></label>
-      <label>Scout model
-        <select id="bModelScout"><option value="sonnet">Sonnet</option><option value="haiku">Haiku</option></select>
-      </label>
-      <label>Classification share <input id="bShareClassification" type="number" min="0" max="1" step="0.01"></label>
-      <label>Classification model
-        <select id="bModelClassification"><option value="sonnet">Sonnet</option><option value="haiku">Haiku</option></select>
-      </label>
-      <label>Improvement share <input id="bShareImprovement" type="number" min="0" max="1" step="0.01"></label>
-      <label>Improvement model
-        <select id="bModelImprovement"><option value="sonnet">Sonnet</option><option value="haiku">Haiku</option></select>
-      </label>
+    <div class="share-rows" id="shareRows">
+      <div class="share-row">
+        <span class="share-name">Discovery</span>
+        <label class="share-pct"><input id="bShareDiscovery" type="number" min="0" max="100" step="1" inputmode="numeric" aria-label="Discovery share, percent"><span>%</span></label>
+        <select id="bModelDiscovery" aria-label="Discovery model"><option value="sonnet">Sonnet</option><option value="haiku">Haiku</option></select>
+        <span class="field-error" data-for="bShareDiscovery"></span>
+      </div>
+      <div class="share-row">
+        <span class="share-name">Scout</span>
+        <label class="share-pct"><input id="bShareScout" type="number" min="0" max="100" step="1" inputmode="numeric" aria-label="Scout share, percent"><span>%</span></label>
+        <select id="bModelScout" aria-label="Scout model"><option value="sonnet">Sonnet</option><option value="haiku">Haiku</option></select>
+        <span class="field-error" data-for="bShareScout"></span>
+      </div>
+      <div class="share-row">
+        <span class="share-name">Classification</span>
+        <label class="share-pct"><input id="bShareClassification" type="number" min="0" max="100" step="1" inputmode="numeric" aria-label="Classification share, percent"><span>%</span></label>
+        <select id="bModelClassification" aria-label="Classification model"><option value="sonnet">Sonnet</option><option value="haiku">Haiku</option></select>
+        <span class="field-error" data-for="bShareClassification"></span>
+      </div>
+      <div class="share-row">
+        <span class="share-name">Improvement</span>
+        <label class="share-pct"><input id="bShareImprovement" type="number" min="0" max="100" step="1" inputmode="numeric" aria-label="Improvement share, percent"><span>%</span></label>
+        <select id="bModelImprovement" aria-label="Improvement model"><option value="sonnet">Sonnet</option><option value="haiku">Haiku</option></select>
+        <span class="field-error" data-for="bShareImprovement"></span>
+      </div>
     </div>
+    <div class="row share-total-row">
+      <span class="total-pill" id="sharesTotal" role="status"></span>
+      <button class="btn" id="sharesEvenSplit" type="button">Even split</button>
+    </div>
+
+    <details id="budgetsAdvanced">
+      <summary>Advanced limits</summary>
+      <div class="addform">
+        <label>Searches per run <input id="bSearchPerRun" type="number" min="0" step="1" inputmode="numeric"><span class="field-error" data-for="bSearchPerRun"></span></label>
+        <label>Searches per company <input id="bSearchPerCompany" type="number" min="0" step="1" inputmode="numeric"><span class="field-error" data-for="bSearchPerCompany"></span></label>
+        <label>Browser checks per run <input id="bBrowserChecks" type="number" min="0" step="1" inputmode="numeric"><span class="field-error" data-for="bBrowserChecks"></span></label>
+      </div>
+    </details>
 
     <h3>Forecast</h3>
     <p id="budgetsForecast" class="sub"></p>
@@ -298,13 +300,23 @@
     <h3>Change history</h3>
     <ul id="budgetsHistory"></ul>
 
+    <h3>Public site</h3>
+    <div class="checkrow">
+      <input type="checkbox" id="locPublic">
+      <label for="locPublic">Public site (jobs.mcgeehenry.com)</label>
+    </div>
+    <div class="addform" style="grid-template-columns:1fr">
+      <label>Feedback a day, all visitors <input id="bFeedbackCap" type="number" min="0" step="1" inputmode="numeric"><span class="field-error" data-for="bFeedbackCap"></span></label>
+    </div>
+    <p id="publicSiteStatus" class="sub"></p>
+    <p class="sub" style="margin-top:-4px">Off by default. Turn it on after the DNS record is in place. The public page updates within 5 minutes of a change.</p>
+
     <h3>Browser Run</h3>
     <p id="browserRunPlan" class="sub"></p>
     <p id="browserRunToday" class="sub"></p>
     <p id="browserRunCloudflareFree" class="sub" style="margin-top:-8px"></p>
     <p id="browserRunMonth" class="sub" hidden></p>
     <p id="browserRunBackupToday" class="sub"></p>
-    <div class="br-chart" id="browserRunChart" aria-label="Browser Run minutes used per day, last 7 days"></div>
     <div class="br-table-wrap">
       <table class="br-table" id="browserRunRunsTable">
         <thead>
@@ -314,13 +326,6 @@
       </table>
     </div>
     <p class="sub" style="font-size:12px">These figures are measured by the daily job and may differ slightly from Cloudflare's own dashboard. See <a href="https://dash.cloudflare.com/" target="_blank" rel="noopener noreferrer">Cloudflare's dashboard</a> (Workers &amp; Pages &gt; your account &gt; Browser Rendering) for its own usage page.</p>
-
-    <h3>Public site</h3>
-    <div class="checkrow">
-      <input type="checkbox" id="locPublic">
-      <label for="locPublic">Public site (jobs.mcgeehenry.com)</label>
-    </div>
-    <p class="sub" style="margin-top:-4px">Off by default. Turn it on after the DNS record is in place. The public page updates within 5 minutes of a change.</p>
 
     <div class="row">
       <button class="btn primary" id="budgetsSave" type="button">Save</button>

@@ -4,7 +4,7 @@ import json
 import pytest
 from fastapi.testclient import TestClient
 
-from src.main import app
+from src.main import app, central_today
 
 
 def run(coro):
@@ -22,10 +22,9 @@ def client(empty_db):
 
 def _valid_budget_doc(**overrides):
     doc = {
-        "billing_mode": "subscription",
-        "daily_token_budget": 4_000_000, "daily_search_budget": 35, "weekly_token_budget": 25_000_000,
-        "daily_usd_budget": 1.50, "monthly_usd_budget": 30.00,
+        "daily_usd_budget": 1.50, "monthly_usd_budget": 30.00, "daily_search_budget": 35,
         "search_limit_per_run": 35, "search_limit_per_company": 5, "browser_checks_per_run": 50,
+        "public_feedback_daily_limit": 20,
         "share_discovery": 0.60, "share_scout": 0.20, "share_classification": 0.15, "share_improvement": 0.05,
         "model_discovery": "sonnet", "model_scout": "sonnet", "model_classification": "haiku",
         "model_improvement": "sonnet",
@@ -36,23 +35,97 @@ def _valid_budget_doc(**overrides):
 
 # -- budgets ------------------------------------------------------------
 
-def test_get_budgets_returns_settings_and_forecast(client):
+def _keys_in(value, found=None):
+    found = set() if found is None else found
+    if isinstance(value, dict):
+        for k, v in value.items():
+            found.add(k)
+            _keys_in(v, found)
+    elif isinstance(value, list):
+        for v in value:
+            _keys_in(v, found)
+    return found
+
+
+def test_get_budgets_returns_settings_and_a_dollars_forecast(client):
     tc, db = client
     resp = tc.get("/api/budgets")
     assert resp.status_code == 200
     body = resp.json()
-    assert body["settings"]["billing_mode"] == "subscription"
-    assert "weekly_tokens" in body["forecast"]
-    assert body["changes"] == []
+    assert "billing_mode" not in body["settings"]
+    assert body["settings"]["daily_usd_budget"] == 1.50
+    assert body["settings"]["public_feedback_daily_limit"] == 20
+    assert set(body["forecast"]) == {"weekly_usd", "monthly_usd"}
+    # A migrated database starts with the phase 9 migration's own history rows and nothing else.
+    assert {c["field"] for c in body["changes"]} == {"billing_mode", "daily_token_budget", "weekly_token_budget"}
+
+
+def test_budgets_payload_has_month_dollars_the_public_site_block_and_no_token_fields(client):
+    tc, db = client
+    today = central_today()
+    run(db.run(
+        """INSERT INTO usage (run_id, step, model, input_tokens, output_tokens, cache_read_tokens,
+           cache_write_tokens, web_searches, est_cost_usd, at)
+           VALUES (1, 'discovery', 'sonnet', 100, 50, 0, 0, 2, 0.25, ?)""", f"{today}T08:00:00-05:00",
+    ))
+    for i in range(2):
+        run(db.run(
+            "INSERT INTO feedback (source, kind, message, visitor_hash, created_at) VALUES ('public', 'other', 'x', ?, ?)",
+            f"v{i}", f"{today}T08:00:00-05:00",
+        ))
+    run(db.run("INSERT INTO feedback (source, kind, message, created_at) VALUES ('owner', 'bug', 'mine', ?)", f"{today}T08:00:00-05:00"))
+    run(db.run("INSERT INTO public_board_views (day, views) VALUES (?, 3)", today))
+
+    body = tc.get("/api/budgets").json()
+
+    assert body["usage"]["daily"] == {"searches": 2, "usd": 0.25}
+    assert body["usage"]["monthly"]["usd"] == pytest.approx(0.25)
+    assert body["forecast"]["monthly_usd"] >= 0.25
+    assert body["forecast"]["weekly_usd"] >= 0.25
+    # Only visitors count toward the cap; Henry's own feedback never does.
+    assert body["public_site"] == {"feedback_daily_limit": 20, "feedback_today": 2, "board_views_today": 3}
+    for key in _keys_in(body):
+        assert "token" not in key, key
+        assert "billing" not in key, key
+
+
+def test_public_site_block_is_zero_when_nothing_happened_today(client):
+    tc, db = client
+    body = tc.get("/api/budgets").json()
+    assert body["public_site"] == {"feedback_daily_limit": 20, "feedback_today": 0, "board_views_today": 0}
 
 
 def test_put_budgets_updates_settings_and_records_change(client):
     tc, db = client
-    resp = tc.put("/api/budgets", json={"doc": _valid_budget_doc(daily_token_budget=2_000_000)})
+    resp = tc.put("/api/budgets", json={"doc": _valid_budget_doc(daily_usd_budget=2.0)})
     assert resp.status_code == 200
     body = resp.json()
-    assert body["settings"]["daily_token_budget"] == 2_000_000
-    assert any(c["field"] == "daily_token_budget" for c in body["changes"])
+    assert body["settings"]["daily_usd_budget"] == 2.0
+    assert any(c["field"] == "daily_usd_budget" for c in body["changes"])
+
+
+def test_put_budgets_stores_the_feedback_cap_and_rejects_a_negative_one(client):
+    tc, db = client
+    resp = tc.put("/api/budgets", json={"doc": _valid_budget_doc(public_feedback_daily_limit=-1)})
+    assert resp.status_code == 422
+    assert any("public_feedback_daily_limit" in p for p in resp.json()["detail"]["problems"])
+
+    resp = tc.put("/api/budgets", json={"doc": _valid_budget_doc(public_feedback_daily_limit=5)})
+    assert resp.status_code == 200
+    assert resp.json()["settings"]["public_feedback_daily_limit"] == 5
+    assert resp.json()["public_site"]["feedback_daily_limit"] == 5
+
+
+def test_put_budgets_ignores_the_removed_fields_from_a_stale_dashboard(client):
+    tc, db = client
+    doc = _valid_budget_doc(billing_mode="api_key", daily_token_budget=5, weekly_token_budget=6)
+    resp = tc.put("/api/budgets", json={"doc": doc})
+    assert resp.status_code == 200
+    for key in ("billing_mode", "daily_token_budget", "weekly_token_budget"):
+        assert key not in resp.json()["settings"]
+    # Nothing new in the history for them either: only the migration's own rows mention them.
+    stale = [c for c in resp.json()["changes"] if c["field"] in ("billing_mode", "daily_token_budget", "weekly_token_budget")]
+    assert all(c["new_value"].startswith("removed") for c in stale) and len(stale) == 3
 
 
 def test_put_budgets_rejects_shares_not_summing_to_100_percent(client):
@@ -139,6 +212,8 @@ def test_get_analytics_shape(client):
         "postings_per_source", "careers_pages_per_run", "discovery_searches_per_run",
     ):
         assert key in body
+    assert set(body["forecast"]) == {"weekly_usd", "monthly_usd"}
+    assert "billing_mode" not in body["budgets"]
     assert body["coverage"][0]["name"] == "Acme"
     assert body["coverage"][0]["posting_count"] == 1
     assert body["pruned"][0]["archive_reason"] == "No longer open."

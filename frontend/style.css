@@ -230,11 +230,25 @@ dialog::backdrop{background:color-mix(in srgb, var(--bg) 70%, transparent)}
 .cp-status.failed, .cp-status.blocked, .cp-status.disallowed{background:transparent; border:1px dashed var(--danger); color:var(--danger)}
 .cp-flag{display:inline-block; font-size:12px; font-weight:700; border-radius:999px; padding:1px 8px; background:var(--danger); color:var(--on-danger); margin-left:6px}
 
-.br-chart{display:flex; align-items:flex-end; gap:6px; height:100px; margin:10px 0; position:relative; padding-top:4px}
-.br-bar-col{flex:1; display:flex; flex-direction:column; align-items:center; justify-content:flex-end; height:100%; gap:4px}
-.br-bar{width:100%; max-width:28px; background:var(--accent); border-radius:4px 4px 0 0; min-height:2px}
-.br-bar-col .d{font-size:11px; color:var(--muted)}
-.br-chart .br-limit-line{position:absolute; left:0; right:0; border-top:1px dashed var(--danger)}
+/* Budgets dialog (phase 9): three limits, one row per step, a live total, inline errors. */
+.budget-limits{grid-template-columns:1fr 1fr 1fr}
+@media (max-width:520px){ .budget-limits{grid-template-columns:1fr} }
+.share-rows{display:flex; flex-direction:column}
+.share-row{display:grid; grid-template-columns:1fr auto auto; align-items:center; gap:10px; padding:8px 0; border-bottom:1px solid var(--line)}
+.share-row .share-name{font-weight:700}
+.share-row .share-pct{display:inline-flex; align-items:center; gap:4px; color:var(--muted); font-size:14px}
+.share-row .share-pct input{width:72px; border:1px solid var(--line); background:var(--bg); border-radius:8px; padding:8px 10px; color:var(--ink); text-align:right}
+.share-row .field-error{grid-column:1 / -1}
+.share-row .field-error:empty{display:none}
+.share-total-row{margin-top:10px}
+.total-pill{display:inline-flex; align-items:center; gap:6px; border-radius:999px; padding:4px 12px; font-size:14px; font-weight:700; border:1px solid var(--line); color:var(--muted)}
+.total-pill.complete{background:var(--ok-soft); border-color:var(--ok); color:var(--ok)}
+.total-pill.incomplete{background:transparent; border:1px dashed var(--danger); color:var(--danger)}
+.field-error{display:block; min-height:0; font-size:12px; color:var(--danger)}
+.field-error:empty{display:none}
+input[aria-invalid="true"], .addform label input[aria-invalid="true"], .share-row .share-pct input[aria-invalid="true"]{border-color:var(--danger); outline:1px solid var(--danger); outline-offset:0}
+.sheet details#budgetsAdvanced{margin-top:16px}
+.sheet details#budgetsAdvanced summary{margin:0 0 8px}
 
 .br-table-wrap{overflow-x:auto; margin-top:6px}
 .br-table{width:100%; border-collapse:collapse; font-size:13px}

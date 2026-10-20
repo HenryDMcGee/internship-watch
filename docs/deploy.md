@@ -50,7 +50,7 @@ Paste the token when prompted. If you skip this step, the dashboard still works,
 The daily job's Claude agent steps (`job/agent/`) run in GitHub Actions, not in the Worker, so these are repository secrets (**Settings**, **Secrets and variables**, **Actions**, **New repository secret**), not `wrangler secret put`:
 
 - **`CLAUDE_CODE_OAUTH_TOKEN`**: from `claude setup-token`, using your Claude subscription. This is the default; set only this one to start.
-- **`ANTHROPIC_API_KEY`**: set this instead (leave `CLAUDE_CODE_OAUTH_TOKEN` unset) to bill Claude calls to an API key instead of your subscription -- switching is just which of the two secrets is set, no code change. Also set the Budgets panel's billing mode to match.
+- **`ANTHROPIC_API_KEY`**: set this instead (leave `CLAUDE_CODE_OAUTH_TOKEN` unset) to bill Claude calls to an API key instead of your subscription -- switching is just which of the two secrets is set, no code change. The Budgets dialog is in dollars either way (phase 9); there is no billing mode to set.
 - **`CLAUDE_ROUTINE_URL`** and **`CLAUDE_ROUTINE_TOKEN`**: the Claude routine (research preview) that receives the daily summary and alerts after every run. Leave both unset to skip sending it; the job still runs and records usage either way.
 
 `GITHUB_TOKEN` for the daily improvement step's title-suggestion pull requests doesn't need setting up -- it's the default Actions token, already scoped by `contents: write` and `pull-requests: write` in `daily-search.yml`.
@@ -261,3 +261,9 @@ Creating GitHub issues from visitor feedback is opt-in. `create_issue_for_feedba
 ### Migration `0016_run_source.sql` and the cron trigger
 
 Migration `0016` adds the nullable `runs.source` column (`cloudflare`, `manual` or `schedule`; older runs stay NULL), which the Recent runs list shows. The automatic deploy applies it (step 5). The same deploy registers the two cron triggers from `api/wrangler.toml`; the dispatch token is step 3d. To roll the trigger back, remove the `[triggers]` block and redeploy; the GitHub Actions crons are untouched and keep running the job.
+
+### Migration `0017_dollars_only_budgets.sql` and the Budgets dialog
+
+Phase 9 makes dollars the only billing model. Migration `0017` adds `budget_settings.public_feedback_daily_limit` (default 20, the cap on public feedback submissions a day across all visitors), writes the old `billing_mode`, `daily_token_budget` and `weekly_token_budget` values to the budgets change history, drops those three columns, and creates the `public_board_views` table that counts loads of the public job board per day. Every other stored value (the dollar budgets, the search limits, the shares and models) is kept. The automatic deploy applies it (step 5); no new routes, Worker variables or secrets are needed.
+
+The migration uses `ALTER TABLE ... DROP COLUMN`, which D1's SQLite supports. If applying it by hand fails with "no such column" the migration has already run, and `npx wrangler d1 migrations list internship-watch-db --remote` shows it as applied.

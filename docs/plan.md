@@ -29,7 +29,7 @@ Every morning, find open Summer 2027 MBA internships that match Henry's titles a
 | Database | Cloudflare D1 | The daily job writes through Cloudflare's D1 HTTP API. The Worker uses its D1 binding. |
 | Backups | Cloudflare R2 | Nightly SQL export from the daily job. |
 | Login | Cloudflare Access | Self-hosted application for exactly `internship-watch.mcgeehenry.com`, one-time PIN, Henry's email only. Never on the root `mcgeehenry.com`, which hosts his website. |
-| Claude | Claude Code in GitHub Actions (Henry's subscription, `CLAUDE_CODE_OAUTH_TOKEN`, the same token used for building) | Default models: Sonnet for discovery, the source scout, and daily improvement; Haiku for classification and unclear-page checks. Switching to `ANTHROPIC_API_KEY` must be a single setting. |
+| Claude | Claude Code in GitHub Actions (`CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY`, the same token used for building) | Default models: Sonnet for discovery, the source scout, and daily improvement; Haiku for classification and unclear-page checks. Which secret is set decides who is billed; the budgets are always in dollars (phase 9). |
 | Alerts and summary | Claude Code remote routine, triggered by API call | One message a day after the run. Alerts are included in it. |
 
 ## Daily run, in order
@@ -60,14 +60,15 @@ Every morning, find open Summer 2027 MBA internships that match Henry's titles a
 - **Sources:** list grouped by kind with status, postings found, dead-link rate, and last checked. Add a site or remove one.
 - **Locations:** the US always, plus chosen countries (starts with Japan), and a remote switch. Out-of-location postings are saved but hidden.
 - **Analytics:** coverage per company, source quality, first to find, postings per title, verification methods and unconfirmed count, pruned postings with reasons, and usage against budgets with alert history.
-- **Budgets:**
-  - billing mode (subscription or API key)
-  - daily, weekly, and monthly budgets. Subscription defaults: 4 million tokens a day, 35 searches a day, 25 million tokens a week. API key defaults: $1.50 a day and $30 a month.
-  - share per step, defaulting to discovery 60%, scout 20%, classification 15%, improvement 5%
+- **Budgets** (one billing model since phase 9: API-key dollars):
+  - daily and monthly dollar budgets and a daily search budget. Defaults: $1.50 a day, $30 a month, 35 searches a day. The daily job enforces today's dollars and searches; this week's dollars are forecast but not enforced.
+  - share per step, defaulting to discovery 60%, scout 20%, classification 15%, improvement 5%. Shown as whole percents with a live total; stored as 0 to 1 decimals summing to 1.0. Shares cannot be saved unless they total 100%.
   - model per step (Haiku or Sonnet), defaulting to Sonnet for discovery, the source scout, and daily improvement, and Haiku for classification and unclear-page checks
-  - search limits per run and per company, and browser checks per run
+  - advanced limits, collapsed: searches per run and per company, and browser checks per run
   - order for cutting steps when the budget runs low: scout, then low-yield discovery, then the rest. Classification and pruning always run.
-  - forecast and change history
+  - forecast (this week and this month in dollars), usage (today and this month in dollars, searches used) with daily and weekly resets, and change history
+  - the Public site block: the on/off switch, the `public_feedback_daily_limit` cap (default 20 submissions a day across all visitors), today's feedback count against it, and today's board views
+  - the Browser Run status: summary lines and the last runs table
 - **Alerts:** at 80% and 100% of budget, a spike above twice the 7-day average, a run stopped by a Claude limit, and a failed run. One alert per type per day, delivered inside the daily Claude app message.
 - **Proposals:** list of pending company and source changes with approve and reject.
 
@@ -75,8 +76,9 @@ Every morning, find open Summer 2027 MBA internships that match Henry's titles a
 
 Starting point for `0001_init.sql`. Adjust names if needed, but keep every concept.
 
-- `settings(key TEXT PRIMARY KEY, value TEXT JSON)`: locations, include_remote, watchlist, last_run, billing_mode, and similar.
-- `budget_settings` (single row) and `budget_changes(id, changed_at, field, old_value, new_value)`.
+- `settings(key TEXT PRIMARY KEY, value TEXT JSON)`: locations, include_remote, watchlist, last_run, and similar.
+- `budget_settings` (single row: `daily_usd_budget`, `monthly_usd_budget`, `daily_search_budget`, the four `share_*` and `model_*` fields, `search_limit_per_run`, `search_limit_per_company`, `browser_checks_per_run`, `public_feedback_daily_limit`, and the Browser Run settings; `billing_mode` and the token budgets were removed in phase 9) and `budget_changes(id, changed_at, field, old_value, new_value)`.
+- `public_board_views(day, views)`: loads of the public job board per Central day (phase 9).
 - `companies(id, name, aliases JSON, status, rank, market_cap_usd, ranking_date, ranking_source, hq_country, careers_url, feed_type, feed_id, added_by, added_at, check_cadence, last_result_at)`.
 - `ranking_snapshots(snapshot_date, source, company_name, rank, market_cap_usd)`.
 - `sources(id, name, url, kind, covers, status, discovered_by, discovered_at, found_count, dead_link_rate, last_checked, last_success_at, notes)`.
@@ -140,6 +142,12 @@ Map the old field names (`firstSeen`, `statusNote`, and so on) to the new schema
    - a feedback form on the public board (honeypot, 10 a day per visitor, 200 a day in total), the owner's own Feedback button, and a Feedback view with Mark read, Dismiss, and Open as GitHub issue
    - a counts-only feedback line in the daily summary
    - guardrail (Henry, October 19, 2026, issue #129): feedback-to-issue creation is opt-in via `FEEDBACK_ISSUES_ENABLED = "true"`, set only on the deployed Worker and the real daily job, never in tests, CI, or local development; and a row whose `Feedback row: N` marker is already in an open `visitor-feedback` issue is linked to it, not posted again
+8. **City background:** the three.js night-city background behind the dashboard and the public board, with a still image under reduced motion, and the cyberpunk palette
+9. **Budgets dialog redesign, dollars-only billing** (approved October 19, 2026, `issues/phase-9.md`):
+   - one billing model, API-key dollars: `billing_mode`, `daily_token_budget` and `weekly_token_budget` are removed everywhere, with a one-time migration (`0017`) that keeps every other stored value and records the removal in the change history
+   - the daily job enforces today's dollars and searches only; weekly dollars are forecast, not enforced; the Search now 80% confirmation uses the dollar fraction
+   - the dialog: exactly three limits (Daily $, Monthly $, Daily searches), one row per step with a whole-percent share and a model, a live total pill and an Even split button, inline validation that disables Save until every field is valid and the total is 100%, the rarely changed limits collapsed under Advanced, the forecast and usage in dollars, the Public site block, and Browser Run without the 7-day chart
+   - `public_feedback_daily_limit` (default 20) caps public feedback submissions a day across all visitors, enforced by `/api/public/feedback` alongside the honeypot and the per-visitor limit; `public_board_views` counts board loads for the Public site status line
 
 ## Secrets (never in git)
 

@@ -35,75 +35,160 @@ describe("Locations", () => {
 });
 
 describe("Budgets", () => {
-  test("loads the numbers, history, and the Browser Run panel", async () => {
-    const data = freshData();
-    data.publicSite = { enabled: true };
-    await bootApp(data);
+  const shareIds = ["bShareDiscovery", "bShareScout", "bShareClassification", "bShareImprovement"];
+  const fieldError = (id) => document.querySelector('.field-error[data-for="' + id + '"]').textContent;
+  const openBudgets = async (data, extra) => {
+    const booted = await bootApp(data || freshData(), extra);
     click("openBudgets");
     await flush();
-    expect($("bDailyTokens").value).toBe("1000");
-    expect(text("budgetsForecast")).toBe("Forecast this week: 1,234 tokens. Forecast this month: $3.50.");
-    expect(text("budgetsUsage")).toContain("Today: 10 of 1,000 tokens, 1 of 5 searches used.");
+    return booted;
+  };
+
+  test("loads dollars, searches, percent shares, forecast, usage, history and the Browser Run table", async () => {
+    const data = freshData();
+    data.publicSite = { enabled: true };
+    await openBudgets(data);
+    expect($("bDailyUsd").value).toBe("2");
+    expect($("bMonthlyUsd").value).toBe("20");
+    expect($("bDailySearches").value).toBe("5");
+    expect(shareIds.map((id) => $(id).value)).toEqual(["60", "20", "15", "5"]);
+    expect($("bModelClassification").value).toBe("haiku");
+    expect($("bSearchPerRun").value).toBe("3");
+    expect($("bSearchPerCompany").value).toBe("1");
+    expect($("bBrowserChecks").value).toBe("4");
+    expect($("bFeedbackCap").value).toBe("20");
+    expect(text("budgetsForecast")).toBe("This week: $1.25 · This month: $3.50");
+    expect(text("budgetsUsage")).toBe("Today: $0.50 of $2.00 · This month: $3.00 of $20.00 · 1 of 5 searches used.");
     expect(text("budgetsLastReset")).toContain("Weekly count never reset.");
     expect(text("budgetsHistory")).toContain("daily_search_budget 4 → 5");
+    expect(text("publicSiteStatus")).toBe("Today: 2 of 20 used · 7 board views");
     expect(text("browserRunPlan")).toBe("Plan: Free.");
     expect(text("browserRunToday")).toContain("1.0 min of 10.0 min used");
     expect(text("browserRunBackupToday")).toBe("Backup today: 1 of 5 pages used (blocked).");
     expect($("browserRunMonth").hidden).toBe(true);
-    expect(document.querySelectorAll("#browserRunChart .br-bar-col")).toHaveLength(2);
     expect(document.querySelector("#browserRunRunsBody tr").children).toHaveLength(5);
     expect($("locPublic").checked).toBe(true);
+    expect(text("sharesTotal")).toBe("Total: 100% ✓");
+    expect($("sharesTotal").classList.contains("complete")).toBe(true);
+    expect($("budgetsSave").disabled).toBe(false);
+    expect(text("budgetsMsg")).toBe("");
   });
 
-  test("api-key billing, a paid month, and empty history and runs", async () => {
-    const data = freshData();
-    const b = budgetsBody();
-    b.settings.billing_mode = "api_key";
-    b.resets = { daily: null, weekly: { reset_at: "2026-10-13T13:00:00Z" } };
-    b.changes = [];
-    b.browser_run.plan = "paid";
-    b.browser_run.month = { hours_used: 1, hours_included: 10, hours_left: 9, overage_usd: 2 };
-    b.browser_run.backup_today = null;
-    b.browser_run.series_7d = [];
-    b.browser_run.today.minutes_budget = 0;
-    b.browser_run.last_runs = [];
-    data.budgets = b;
-    await bootApp(data);
-    click("openBudgets");
-    await flush();
-    expect(text("budgetsUsage")).toContain("$0.50 of $2.00");
-    expect(text("budgetsLastReset")).toContain("Daily count never reset.");
-    expect(text("budgetsHistory")).toBe("No changes yet.");
-    expect(text("browserRunPlan")).toBe("Plan: Paid.");
-    expect($("browserRunMonth").hidden).toBe(false);
-    expect(text("browserRunMonth")).toContain("Estimated overage: $2.00.");
-    expect(text("browserRunBackupToday")).toBe("Backup today: 0 of 0 pages used.");
-    expect(text("browserRunRunsBody")).toBe("No runs recorded yet.");
-    expect(document.querySelector(".br-limit-line")).toBeNull();
+  test("the Billing section, the token inputs and the Browser Run chart are gone", async () => {
+    await openBudgets();
+    for (const id of ["bBillingMode", "bDailyTokens", "bWeeklyTokens", "browserRunChart"]) expect($(id)).toBeNull();
+    expect(document.querySelectorAll("#budgetsDialog .br-chart, #budgetsDialog .br-bar-col, #budgetsDialog .br-limit-line")).toHaveLength(0);
+    const dialogText = $("budgetsDialog").textContent;
+    expect(dialogText).not.toMatch(/[Bb]illing|[Tt]oken/);
+    expect(dialogText).not.toContain("Weekly tokens"); // the weekly reset button stays; the weekly limit is gone
+    // Exactly three inputs under Limits: Daily $, Monthly $, Daily searches.
+    const limits = Array.from($("budgetsLimits").querySelectorAll("input")).map((i) => i.id);
+    expect(limits).toEqual(["bDailyUsd", "bMonthlyUsd", "bDailySearches"]);
+    // Rarely changed limits sit in a collapsed Advanced section.
+    const advanced = $("budgetsAdvanced");
+    expect(advanced.tagName).toBe("DETAILS");
+    expect(advanced.open).toBe(false);
+    expect(Array.from(advanced.querySelectorAll("input")).map((i) => i.id)).toEqual(["bSearchPerRun", "bSearchPerCompany", "bBrowserChecks"]);
+    // One row per step: name, percent input, model select.
+    const rows = document.querySelectorAll("#budgetsDialog .share-row");
+    expect(rows).toHaveLength(4);
+    expect(rows[0].textContent).toContain("Discovery");
+    expect(rows[0].querySelector("input").id).toBe("bShareDiscovery");
+    expect(rows[0].querySelector("select").id).toBe("bModelDiscovery");
+    expect($("sharesEvenSplit").textContent).toBe("Even split");
+    // The Browser Run table and footnote stay.
+    expect($("browserRunRunsTable")).not.toBeNull();
+    expect(dialogText).toContain("Cloudflare's own dashboard");
   });
 
-  test("a response without a Browser Run section is fine", async () => {
-    const data = freshData();
-    data.budgets = Object.assign(budgetsBody(), { browser_run: undefined, usage: undefined, changes: undefined, resets: undefined });
-    await bootApp(data);
-    click("openBudgets");
-    await flush();
-    expect(text("budgetsUsage")).toContain("Today: 0 of 1,000 tokens");
+  test("the total pill at 90%, 100% and over 100%, and Even split", async () => {
+    await openBudgets();
+    type("bShareClassification", "5");
+    expect(text("sharesTotal")).toBe("Total: 90% — 10% left to assign");
+    expect($("sharesTotal").classList.contains("complete")).toBe(false);
+    expect($("sharesTotal").classList.contains("incomplete")).toBe(true);
+    expect($("budgetsSave").disabled).toBe(true);
+    expect(text("budgetsMsg")).toBe("Fix the flagged fields to save.");
+
+    type("bShareClassification", "25");
+    expect(text("sharesTotal")).toBe("Total: 110% — 10% over");
+    expect($("sharesTotal").classList.contains("incomplete")).toBe(true);
+    expect($("budgetsSave").disabled).toBe(true);
+
+    type("bShareClassification", "15");
+    expect(text("sharesTotal")).toBe("Total: 100% ✓");
+    expect($("sharesTotal").classList.contains("complete")).toBe(true);
+    expect($("budgetsSave").disabled).toBe(false);
+    expect(text("budgetsMsg")).toBe("");
+
+    type("bShareDiscovery", "10");
+    expect($("budgetsSave").disabled).toBe(true);
+    click("sharesEvenSplit");
+    expect(shareIds.map((id) => $(id).value)).toEqual(["25", "25", "25", "25"]);
+    expect(text("sharesTotal")).toBe("Total: 100% ✓");
+    expect($("budgetsSave").disabled).toBe(false);
   });
 
-  test("the Public site switch loads, saves and round-trips", async () => {
-    const data = freshData();
-    const { fetchMock } = await bootApp(data);
-    click("openBudgets");
+  test("invalid values are flagged next to the field as you type, and Save waits for them", async () => {
+    const { fetchMock } = await openBudgets();
+    type("bDailyUsd", "-1");
+    expect(fieldError("bDailyUsd")).toBe("Must be 0 or more.");
+    expect($("bDailyUsd").getAttribute("aria-invalid")).toBe("true");
+    expect($("budgetsSave").disabled).toBe(true);
+    expect(text("budgetsMsg")).toBe("Fix the flagged fields to save.");
+    click("budgetsSave");
     await flush();
+    expect(fetchMock.calls.some((c) => c.method === "PUT" && c.url === "/api/budgets")).toBe(false);
+
+    type("bDailyUsd", "abc");
+    expect(fieldError("bDailyUsd")).toBe("Enter a number.");
+    type("bDailyUsd", "");
+    expect(fieldError("bDailyUsd")).toBe("Enter a number.");
+    type("bDailyUsd", "3");
+    expect(fieldError("bDailyUsd")).toBe("");
+    expect($("bDailyUsd").hasAttribute("aria-invalid")).toBe(false);
+    expect($("budgetsSave").disabled).toBe(false);
+    expect(text("budgetsMsg")).toBe("");
+
+    type("bFeedbackCap", "2.5");
+    expect(fieldError("bFeedbackCap")).toBe("Enter a whole number.");
+    expect($("budgetsSave").disabled).toBe(true);
+    type("bFeedbackCap", "30");
+    expect($("budgetsSave").disabled).toBe(false);
+
+    type("bShareScout", "120");
+    expect(fieldError("bShareScout")).toBe("Must be 100 or less.");
+    expect($("budgetsSave").disabled).toBe(true);
+    type("bShareScout", "20");
+    expect($("budgetsSave").disabled).toBe(false);
+
+    type("bSearchPerRun", "-2");
+    expect(fieldError("bSearchPerRun")).toBe("Must be 0 or more.");
+    expect($("budgetsSave").disabled).toBe(true);
+    type("bSearchPerRun", "9");
+    expect($("budgetsSave").disabled).toBe(false);
+  });
+
+  test("Save sends decimals for the shares, the feedback cap, and none of the removed fields", async () => {
+    const data = freshData();
+    const { fetchMock } = await openBudgets(data);
     expect($("locPublic").checked).toBe(false);
     $("locPublic").checked = true;
-    type("bDailyTokens", "2500");
+    type("bDailyUsd", "2.5");
+    type("bShareDiscovery", "50");
+    type("bShareScout", "30");
+    type("bFeedbackCap", "40");
     click("budgetsSave");
     await flush();
     const put = fetchMock.calls.find((c) => c.method === "PUT" && c.url === "/api/budgets");
-    expect(put.body.doc.daily_token_budget).toBe(2500);
-    expect(put.body.doc.billing_mode).toBe("subscription");
+    expect(put.body.doc).toEqual({
+      daily_usd_budget: 2.5, monthly_usd_budget: 20, daily_search_budget: 5,
+      search_limit_per_run: 3, search_limit_per_company: 1, browser_checks_per_run: 4,
+      public_feedback_daily_limit: 40,
+      share_discovery: 0.5, share_scout: 0.3, share_classification: 0.15, share_improvement: 0.05,
+      model_discovery: "sonnet", model_scout: "sonnet", model_classification: "haiku", model_improvement: "sonnet",
+    });
+    expect(Object.keys(put.body.doc).join(" ")).not.toMatch(/billing|token/);
     expect(fetchMock.calls.find((c) => c.url === "/api/settings/public-site" && c.method === "PUT").body).toEqual({ enabled: true });
     expect(text("budgetsMsg")).toBe("Saved. The public page updates within 5 minutes.");
     click("budgetsClose");
@@ -112,14 +197,51 @@ describe("Budgets", () => {
     expect($("locPublic").checked).toBe(true);
   });
 
-  test("load and save errors are reported", async () => {
-    await bootApp(freshData(), {
-      "GET /api/budgets": () => jsonResponse({ detail: "a" }, 500),
-      "PUT /api/budgets": () => jsonResponse({ detail: "b" }, 400),
-    });
-    click("openBudgets");
-    await flush();
+  test("a paid month, and empty history, runs and public site block", async () => {
+    const data = freshData();
+    const b = budgetsBody();
+    b.resets = { daily: null, weekly: { reset_at: "2026-10-13T13:00:00Z" } };
+    b.changes = [];
+    b.public_site = undefined;
+    b.browser_run.plan = "paid";
+    b.browser_run.month = { hours_used: 1, hours_included: 10, hours_left: 9, overage_usd: 2 };
+    b.browser_run.backup_today = null;
+    b.browser_run.today.minutes_budget = 0;
+    b.browser_run.last_runs = [];
+    data.budgets = b;
+    await openBudgets(data);
+    expect(text("budgetsUsage")).toContain("$0.50 of $2.00");
+    expect(text("budgetsLastReset")).toContain("Daily count never reset.");
+    expect(text("budgetsHistory")).toBe("No changes yet.");
+    expect(text("publicSiteStatus")).toBe("Today: 0 of 20 used · 0 board views");
+    expect(text("browserRunPlan")).toBe("Plan: Paid.");
+    expect($("browserRunMonth").hidden).toBe(false);
+    expect(text("browserRunMonth")).toContain("Estimated overage: $2.00.");
+    expect(text("browserRunBackupToday")).toBe("Backup today: 0 of 0 pages used.");
+    expect(text("browserRunRunsBody")).toBe("No runs recorded yet.");
+  });
+
+  test("a response without usage, forecast or Browser Run sections is fine", async () => {
+    const data = freshData();
+    data.budgets = Object.assign(budgetsBody(), { browser_run: undefined, usage: undefined, forecast: undefined, changes: undefined, resets: undefined, public_site: undefined });
+    await openBudgets(data);
+    expect(text("budgetsUsage")).toBe("Today: $0.00 of $2.00 · This month: $0.00 of $20.00 · 0 of 5 searches used.");
+    expect(text("budgetsForecast")).toBe("This week: $0.00 · This month: $0.00");
+  });
+
+  test("a load error is reported, and Save on an empty form asks for the fields first", async () => {
+    const { fetchMock } = await openBudgets(freshData(), { "GET /api/budgets": () => jsonResponse({ detail: "a" }, 500) });
     expect(text("budgetsMsg")).toBe("Couldn't load budgets. a");
+    click("budgetsSave");
+    await flush();
+    expect(text("budgetsMsg")).toBe("Fix the flagged fields to save.");
+    expect($("budgetsSave").disabled).toBe(true);
+    expect(fieldError("bDailyUsd")).toBe("Enter a number.");
+    expect(fetchMock.calls.some((c) => c.method === "PUT")).toBe(false);
+  });
+
+  test("a save the server refuses is reported, and Save stays usable", async () => {
+    await openBudgets(freshData(), { "PUT /api/budgets": () => jsonResponse({ detail: "b" }, 400) });
     click("budgetsSave");
     await flush();
     expect(text("budgetsMsg")).toBe("Couldn't save. b");
@@ -127,12 +249,10 @@ describe("Budgets", () => {
   });
 
   test("reset asks first, then resets the daily or weekly count", async () => {
-    const { fetchMock } = await bootApp(freshData());
-    click("openBudgets");
-    await flush();
+    const { fetchMock } = await openBudgets();
     window.confirm = jest.fn(() => false);
     click("resetDailyBudget");
-    expect(window.confirm.mock.calls[0][0]).toContain("Today: 10 of 1,000 tokens and 1 of 5 searches used.");
+    expect(window.confirm.mock.calls[0][0]).toContain("Today: $0.50 of $2.00 and 1 of 5 searches used.");
     expect(fetchMock.calls.some((c) => c.url.endsWith("/resets"))).toBe(false);
 
     window.confirm = jest.fn(() => true);
@@ -141,7 +261,7 @@ describe("Budgets", () => {
     expect(text("budgetsMsg")).toBe("Today's usage was reset.");
     click("resetWeeklyBudget");
     await flush();
-    expect(window.confirm.mock.calls[1][0]).toContain("This week: 100 of 5,000 tokens used.");
+    expect(window.confirm.mock.calls[1][0]).toContain("This week: $1.00 used.");
     expect(text("budgetsMsg")).toBe("This week's usage was reset.");
     expect(fetchMock.calls.filter((c) => c.url.endsWith("/resets")).map((c) => c.body.scope)).toEqual(["daily", "weekly"]);
   });
@@ -151,11 +271,11 @@ describe("Budgets", () => {
     window.confirm = jest.fn(() => true);
     click("resetWeeklyBudget");
     await flush();
-    expect(window.confirm.mock.calls[0][0]).toContain("This week: 0 of 0 tokens used.");
+    expect(window.confirm.mock.calls[0][0]).toContain("This week: $0.00 used.");
     expect(text("budgetsMsg")).toBe("Couldn't reset. no");
     click("resetDailyBudget");
     await flush();
-    expect(window.confirm.mock.calls[1][0]).toContain("Today: 0 of 0 tokens and 0 of 0 searches used.");
+    expect(window.confirm.mock.calls[1][0]).toContain("Today: $0.00 of $0.00 and 0 of 0 searches used.");
   });
 });
 
