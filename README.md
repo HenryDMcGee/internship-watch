@@ -33,6 +33,7 @@ Everything it finds is matched against your title list, then classified: is it M
 | eggfruit | 2026-10-05 | Phase 6: Cloudflare Browser Run reads pages before Playwright renders them, cutting cost and getting past sites that block GitHub's IP addresses. Search and processing split into async tasks |
 | fig | 2026-10-14 | Phase 7: public job board for other students. Switched to test-driven development, with Jest and Playwright suites behind an 80% hard gate |
 | guava | 2026-10-15 | Phase 8: three.js moving city background and a cyberpunk palette |
+| hazelnut | 2026-10-20 | Phase 9: Budgets dialog redesign, dollars-only billing, a public feedback cap and board views |
 
 ## How it was built
 
