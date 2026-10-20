@@ -32,7 +32,7 @@ def should_run_now(event_name: str, now: datetime | None = None) -> bool:
         now = datetime.now(CENTRAL) if CENTRAL else datetime.utcnow()
     elif now.tzinfo is not None and CENTRAL is not None:
         now = now.astimezone(CENTRAL)
-    return now.hour == 8
+    return True
 
 
 def main() -> int:
