@@ -56,3 +56,6 @@ ACCESS_AUD = "0162b88431b5d036e4cbe75aa8999c7e8c48153f72abf818c8002c0440ad367d"
 # The public job board's hostname. Requests to it can only reach the public page and /api/public/*.
 # FEEDBACK_SALT (hashes visitor addresses) is a Worker secret, never in this file. See docs/deploy.md.
 PUBLIC_HOSTNAME = "jobs.mcgeehenry.com"
+# Visitor feedback becomes a GitHub issue only where this is exactly "true" (issue #129).
+# Only the deployed Worker and the real daily job set it. Keep it out of .dev.vars.
+FEEDBACK_ISSUES_ENABLED = "true"

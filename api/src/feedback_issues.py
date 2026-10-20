@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import html
 import logging
+import os
 import re
 import unicodedata
 from datetime import datetime
@@ -24,6 +25,7 @@ from github_client import GitHubApiError
 logger = logging.getLogger("internship_watch")
 
 ISSUE_LABEL = "visitor-feedback"
+ENABLE_VAR = "FEEDBACK_ISSUES_ENABLED"
 DEFAULT_ISSUES_PER_DAY = 20
 MESSAGE_MAX_CHARS = 1000
 PAGE_URL_MAX_CHARS = 300
@@ -96,11 +98,30 @@ async def issues_created_today(db, today: str) -> int:
     return (row or {}).get("n") or 0
 
 
+def issues_enabled() -> bool:
+    """Issue creation is opt-in (issue #129): only the deployed Worker and the real daily job
+    set FEEDBACK_ISSUES_ENABLED to exactly "true". Tests, CI and local dev never do."""
+    return os.environ.get(ENABLE_VAR) == "true"
+
+
+def _log_disabled() -> None:
+    logger.info("feedback issues are off: %s is not \"true\" here, so nothing is sent to GitHub", ENABLE_VAR)
+
+
+def _marker_pattern(feedback_id: int) -> re.Pattern:
+    return re.compile(rf"^Feedback row: {int(feedback_id)}\s*$", re.MULTILINE)
+
+
 async def create_issue_for_feedback(db, github: Any, feedback_id: int) -> str | None:
     """Creates the issue for one saved feedback row and stores its URL. Returns the URL,
-    or None when nothing was created (no GitHub, row already has an issue, the daily cap
-    is reached, or GitHub failed). Never raises: the feedback is already saved, and a
-    failure here is logged and left for the daily run to retry."""
+    or None when nothing was created (switch off, no GitHub, row already has an issue, the
+    daily cap is reached, or GitHub failed). If an open issue already carries the row's
+    "Feedback row: N" marker, its URL is stored instead of posting a duplicate. Never
+    raises: the feedback is already saved, and a failure here is logged and left for the
+    daily run to retry."""
+    if not issues_enabled():
+        _log_disabled()
+        return None
     try:
         row = await db.first(
             "SELECT id, kind, message, page_url, status, issue_url FROM feedback WHERE id = ?", feedback_id
@@ -108,6 +129,22 @@ async def create_issue_for_feedback(db, github: Any, feedback_id: int) -> str | 
         if github is None or not row or row["issue_url"]:
             return None
         now = central_now()
+        # Listing failures raise GitHubApiError: without the check we must not post.
+        marker = _marker_pattern(feedback_id)
+        try:
+            open_issues = await github.list_open_issues(ISSUE_LABEL)
+        except GitHubApiError as exc:
+            logger.error("feedback %s: could not list open issues, so nothing was posted (GitHubApiError: %s)", feedback_id, exc)
+            return None
+        existing = next((i for i in open_issues if marker.search(i.get("body") or "") and i.get("html_url")), None)
+        if existing:
+            logger.info("feedback %s already has an open issue (%s); not posting another", feedback_id, existing["html_url"])
+            await db.run(
+                "UPDATE feedback SET issue_url = ?, issue_created_at = ?, "
+                "status = CASE WHEN status = 'new' THEN 'issue_opened' ELSE status END WHERE id = ?",
+                existing["html_url"], now.isoformat(), feedback_id,
+            )
+            return existing["html_url"]
         if await issues_created_today(db, now.date().isoformat()) >= await issue_cap(db):
             logger.info("feedback %s waits: the daily limit for feedback issues is reached", feedback_id)
             return None
@@ -135,6 +172,9 @@ async def create_issue_for_feedback(db, github: Any, feedback_id: int) -> str | 
 async def retry_pending_issues(db, github: Any) -> int:
     """Creates issues for public feedback that has none yet, oldest first, until the daily
     cap is reached or GitHub fails. Returns how many were created."""
+    if not issues_enabled():
+        _log_disabled()
+        return 0
     if github is None:
         return 0
     pending = await db.all(

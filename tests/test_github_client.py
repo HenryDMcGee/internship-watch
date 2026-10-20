@@ -96,3 +96,26 @@ def test_create_pr_returns_body():
     client, _ = make_client([(201, {"number": 6, "html_url": "https://github.com/x/y/pull/6"})])
     pr = run(client.create_pr("branch", "main", "title", "body"))
     assert pr["number"] == 6
+
+
+def test_list_open_issues_asks_for_open_labeled_issues_and_skips_pull_requests():
+    client, transport = make_client([(200, [
+        {"number": 1, "html_url": "https://github.com/x/y/issues/1", "body": "Feedback row: 1"},
+        {"number": 2, "html_url": "https://github.com/x/y/pull/2", "body": "", "pull_request": {}},
+    ])])
+    issues = run(client.list_open_issues("visitor-feedback"))
+    assert [i["number"] for i in issues] == [1]
+    method, url, _ = transport.calls[0]
+    assert method == "GET"
+    assert "/repos/HenryDMcGee/internship-watch/issues" in url
+    assert "state=open" in url and "labels=visitor-feedback" in url
+
+
+def test_list_open_issues_follows_pages_and_raises_on_failure():
+    full_page = [{"number": n, "html_url": f"u{n}", "body": ""} for n in range(100)]
+    client, transport = make_client([(200, full_page), (200, [{"number": 100, "html_url": "u100", "body": ""}])])
+    assert len(run(client.list_open_issues("visitor-feedback"))) == 101
+    assert "page=2" in transport.calls[1][1]
+    client, _ = make_client([(500, {"message": "boom"})])
+    with pytest.raises(GitHubApiError):
+        run(client.list_open_issues("visitor-feedback"))
