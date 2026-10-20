@@ -10,7 +10,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import job.run as run_module
-from feedback_issues import build_issue, sanitize_text
+from feedback_issues import build_issue, create_issue_for_feedback, retry_pending_issues, sanitize_text
 from github_client import GitHubApiError
 from src.main import app
 
@@ -24,10 +24,22 @@ def run(coro):
     return asyncio.run(coro)
 
 
+@pytest.fixture(autouse=True)
+def feedback_issues_on(monkeypatch):
+    """The suite's default is the deployed behavior; the guardrail tests turn it off."""
+    monkeypatch.setenv("FEEDBACK_ISSUES_ENABLED", "true")
+
+
 class FakeGitHub:
-    def __init__(self, fail=False):
+    def __init__(self, fail=False, open_issues=None):
         self.calls = []
         self.fail = fail
+        self.open_issues = open_issues or []
+        self.list_calls = []
+
+    async def list_open_issues(self, label):
+        self.list_calls.append(label)
+        return self.open_issues
 
     async def create_issue(self, title, body_text, labels):
         if self.fail:
@@ -243,3 +255,125 @@ def test_retry_without_a_token_does_nothing(empty_db, monkeypatch):
     monkeypatch.setattr(run_module, "github_client_from_env", lambda: None)
     insert_pending(empty_db)
     assert run(run_module.retry_feedback_issues(empty_db)) == 0
+
+
+# -- the opt-in switch (issue #129) ------------------------------------------------------
+
+@pytest.mark.parametrize("value", [None, "", "false", "True", "TRUE", "1", "yes", " true"])
+def test_create_does_nothing_unless_the_flag_is_exactly_true(empty_db, monkeypatch, caplog, value):
+    if value is None:
+        monkeypatch.delenv("FEEDBACK_ISSUES_ENABLED", raising=False)
+    else:
+        monkeypatch.setenv("FEEDBACK_ISSUES_ENABLED", value)
+    github = FakeGitHub()
+    fid = insert_pending(empty_db)
+    with caplog.at_level(logging.INFO, logger="internship_watch"):
+        assert run(create_issue_for_feedback(empty_db, github, fid)) is None
+    assert github.calls == [] and github.list_calls == []
+    row = rows(empty_db)[0]
+    assert row["issue_url"] is None and row["status"] == "new"
+    assert caplog.text.count("FEEDBACK_ISSUES_ENABLED") == 1
+
+
+def test_retry_does_nothing_unless_the_flag_is_true(empty_db, monkeypatch, caplog):
+    monkeypatch.delenv("FEEDBACK_ISSUES_ENABLED", raising=False)
+    github = FakeGitHub()
+    insert_pending(empty_db)
+    insert_pending(empty_db)
+    with caplog.at_level(logging.INFO, logger="internship_watch"):
+        assert run(retry_pending_issues(empty_db, github)) == 0
+    assert github.calls == [] and github.list_calls == []
+    assert all(r["issue_url"] is None and r["status"] == "new" for r in rows(empty_db))
+    assert caplog.text.count("FEEDBACK_ISSUES_ENABLED") == 1
+
+
+def test_public_submission_without_the_flag_is_saved_and_waits(client, monkeypatch):
+    tc, db = client
+    monkeypatch.delenv("FEEDBACK_ISSUES_ENABLED", raising=False)
+    assert post_feedback(tc).status_code == 204
+    assert app.state.github.calls == []
+    assert rows(db)[0]["issue_url"] is None
+
+
+def test_the_daily_job_without_the_flag_never_reaches_github(empty_db, monkeypatch):
+    monkeypatch.delenv("FEEDBACK_ISSUES_ENABLED", raising=False)
+    github = FakeGitHub()
+    monkeypatch.setattr(run_module, "github_client_from_env", lambda: github)
+    insert_pending(empty_db)
+    assert run(run_module.retry_feedback_issues(empty_db)) == 0
+    assert github.calls == [] and github.list_calls == []
+
+
+def test_with_the_flag_set_behavior_is_unchanged(empty_db):
+    github = FakeGitHub()
+    fid = insert_pending(empty_db)
+    assert run(create_issue_for_feedback(empty_db, github, fid)) == ISSUE_URL.format(n=1)
+    assert github.list_calls == ["visitor-feedback"]
+    assert rows(empty_db)[0]["status"] == "issue_opened"
+
+
+# -- the duplicate guard (issue #129) ----------------------------------------------------
+
+EXISTING = "https://github.com/HenryDMcGee/internship-watch/issues/55"
+
+
+def open_issue(row_number, url=EXISTING):
+    return {"html_url": url, "body": f"Feedback row: {row_number}\nType: Other\n"}
+
+
+def test_a_row_with_an_open_issue_is_not_reposted_and_gets_the_existing_url(empty_db, caplog):
+    fid = insert_pending(empty_db)
+    github = FakeGitHub(open_issues=[open_issue(fid)])
+    with caplog.at_level(logging.INFO, logger="internship_watch"):
+        assert run(create_issue_for_feedback(empty_db, github, fid)) == EXISTING
+    assert github.calls == []
+    row = rows(empty_db)[0]
+    assert row["issue_url"] == EXISTING and row["issue_created_at"]
+    assert "already has an open issue" in caplog.text
+
+
+def test_marker_match_is_exact_not_a_prefix(empty_db):
+    fid = insert_pending(empty_db)  # id 1; open issues for rows 11 and 12 must not match
+    github = FakeGitHub(open_issues=[open_issue(fid * 10 + 2), open_issue(fid * 10 + 1)])
+    assert run(create_issue_for_feedback(empty_db, github, fid)) == ISSUE_URL.format(n=1)
+    assert len(github.calls) == 1
+
+
+def test_issues_with_no_body_are_ignored_by_the_guard(empty_db):
+    fid = insert_pending(empty_db)
+    github = FakeGitHub(open_issues=[{"html_url": EXISTING, "body": None}])
+    assert run(create_issue_for_feedback(empty_db, github, fid)) == ISSUE_URL.format(n=1)
+
+
+def test_retry_backfills_matched_rows_and_posts_only_the_rest(empty_db):
+    first = insert_pending(empty_db, "one")
+    second = insert_pending(empty_db, "two")
+    github = FakeGitHub(open_issues=[open_issue(first)])
+    assert run(retry_pending_issues(empty_db, github)) == 2
+    by_id = {r["id"]: r for r in rows(empty_db)}
+    assert by_id[first]["issue_url"] == EXISTING
+    assert by_id[second]["issue_url"] == ISSUE_URL.format(n=1)
+    assert len(github.calls) == 1
+
+
+def test_if_listing_open_issues_fails_nothing_is_posted(empty_db, caplog):
+    class ListFails(FakeGitHub):
+        async def list_open_issues(self, label):
+            raise GitHubApiError("listing issues failed (500): boom")
+
+    github = ListFails()
+    fid = insert_pending(empty_db)
+    with caplog.at_level(logging.WARNING):
+        assert run(create_issue_for_feedback(empty_db, github, fid)) is None
+    assert github.calls == []
+    assert rows(empty_db)[0]["issue_url"] is None
+    assert "listing issues failed" in caplog.text
+
+
+def test_retry_stops_at_the_cap_with_the_flag_on(empty_db):
+    github = FakeGitHub()
+    run(empty_db.run("UPDATE budget_settings SET feedback_issues_per_day = 2 WHERE id = 1"))
+    for n in range(4):
+        insert_pending(empty_db, f"r{n}")
+    assert run(retry_pending_issues(empty_db, github)) == 2
+    assert len(github.calls) == 2
