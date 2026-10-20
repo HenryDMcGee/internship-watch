@@ -7,10 +7,10 @@ def _payload(**overrides):
     kwargs = dict(
         date="2026-09-20", run_status="completed", run_reason=None,
         tokens_today=1000, searches_today=5,
-        budgets={"billing_mode": "subscription", "daily_fraction_used": 0.25},
+        budgets={"daily_fraction_used": 0.25, "monthly_fraction_used": 0.1},
         tokens_week_to_date=4000,
         usage_by_step=[{"step": "discovery", "tokens": 800, "searches": 5, "usd": 0.01}],
-        forecast={"weekly_tokens": 20000, "monthly_usd": 0.0},
+        forecast={"weekly_usd": 2.0, "monthly_usd": 0.0},
         alerts=[{"type": "budget_80", "severity": "warning"}],
     )
     kwargs.update(overrides)

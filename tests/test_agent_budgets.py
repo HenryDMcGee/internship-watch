@@ -1,4 +1,7 @@
+"""Phase 9: the daily job enforces dollar and search budgets only."""
 import asyncio
+
+import pytest
 
 from job.agent.budgets import (
     BudgetStatus,
@@ -10,12 +13,9 @@ from job.agent.budgets import (
 )
 
 SETTINGS = {
-    "billing_mode": "subscription",
-    "daily_token_budget": 1000,
+    "daily_usd_budget": 10.0,
+    "monthly_usd_budget": 100.0,
     "daily_search_budget": 10,
-    "weekly_token_budget": 5000,
-    "daily_usd_budget": 1.50,
-    "monthly_usd_budget": 30.00,
     "share_discovery": 0.60,
     "share_scout": 0.20,
     "share_classification": 0.15,
@@ -28,98 +28,138 @@ def run(coro):
 
 
 def _status(**overrides):
-    kwargs = dict(billing_mode="subscription", settings=SETTINGS)
+    kwargs = dict(settings=SETTINGS)
     kwargs.update(overrides)
     return BudgetStatus(**kwargs)
 
 
 # -- fractions and enforcement -------------------------------------------
 
-def test_daily_fraction_used_subscription_mode_uses_tokens():
-    status = _status(today=UsageTotals(tokens=500))
+def test_there_is_no_billing_mode_any_more():
+    with pytest.raises(TypeError):
+        BudgetStatus(billing_mode="api_key", settings=SETTINGS)
+
+
+def test_daily_fraction_used_uses_dollars():
+    status = _status(today=UsageTotals(usd=5.0))
     assert status.daily_fraction_used() == 0.5
 
 
-def test_daily_fraction_used_api_key_mode_uses_dollars():
-    status = _status(billing_mode="api_key", today=UsageTotals(usd=0.75))
-    assert status.daily_fraction_used() == 0.5
+def test_tokens_never_count_toward_the_budget():
+    status = _status(today=UsageTotals(tokens=10**9, usd=0.0))
+    assert status.daily_fraction_used() == 0.0
+    assert status.fraction_used() == 0.0
+    assert status.allow_step("discovery") == (True, None)
 
 
-def test_fraction_used_is_the_worse_of_tokens_and_searches():
-    status = _status(today=UsageTotals(tokens=100, searches=9))  # 10% tokens, 90% searches
+def test_fraction_used_is_the_worse_of_dollars_and_searches():
+    status = _status(today=UsageTotals(usd=1.0, searches=9))  # 10% dollars, 90% searches
     assert status.fraction_used() == 0.9
 
 
 def test_allow_step_true_when_under_budget():
-    status = _status(today=UsageTotals(tokens=100))
+    status = _status(today=UsageTotals(usd=1.0))
     allowed, reason = status.allow_step("discovery")
     assert allowed is True
     assert reason is None
 
 
-def test_allow_step_false_once_daily_budget_used_up():
-    status = _status(today=UsageTotals(tokens=1000))
+def test_allow_step_false_once_daily_dollars_used_up():
+    status = _status(today=UsageTotals(usd=10.0))
     allowed, reason = status.allow_step("discovery")
     assert allowed is False
     assert "budget" in reason
 
 
+def test_allow_step_false_once_daily_searches_used_up():
+    status = _status(today=UsageTotals(searches=10))
+    allowed, reason = status.allow_step("discovery")
+    assert allowed is False
+
+
 def test_allow_step_always_true_for_classification_and_pruning_even_over_budget():
-    status = _status(today=UsageTotals(tokens=999999))
+    status = _status(today=UsageTotals(usd=999.0))
     for step in ("classification", "pruning"):
         allowed, reason = status.allow_step(step)
         assert allowed is True
         assert reason is None
 
 
-def test_allow_step_respects_per_step_share():
-    # discovery's share is 60% of 1000 = 600 tokens; classification's usage
-    # doesn't count against it.
+def test_allow_step_respects_per_step_share_in_dollars():
+    # discovery's share is 60% of $10 = $6; classification's spend doesn't count against it.
     status = _status(
-        today=UsageTotals(tokens=650),
-        today_by_step={"discovery": UsageTotals(tokens=650)},
+        today=UsageTotals(usd=6.5),
+        today_by_step={"discovery": UsageTotals(usd=6.5)},
     )
     allowed, reason = status.allow_step("discovery")
     assert allowed is False
     assert "share" in reason
 
 
+def test_share_used_ignores_tokens():
+    status = _status(
+        today=UsageTotals(usd=1.0, tokens=10**9),
+        today_by_step={"discovery": UsageTotals(usd=1.0, tokens=10**9)},
+    )
+    assert status.share_used("discovery") == 1.0
+    assert status.allow_step("discovery") == (True, None)
+
+
 def test_allow_step_unclear_page_rides_classifications_share():
     status = _status(
-        today=UsageTotals(tokens=200),
-        today_by_step={"classification": UsageTotals(tokens=200)},
+        today=UsageTotals(usd=2.0),
+        today_by_step={"classification": UsageTotals(usd=2.0)},
     )
-    # classification's share is 15% of 1000 = 150 tokens; already over.
+    # classification's share is 15% of $10 = $1.50; already over.
     allowed, reason = status.allow_step("unclear_page")
     assert allowed is False
+
+
+# -- weekly and monthly ------------------------------------------------------
+
+def test_weekly_usage_is_never_enforced():
+    status = _status(week=UsageTotals(usd=10**6, tokens=10**9))
+    assert not hasattr(status, "weekly_fraction_used")
+    assert status.worst_fraction_used() == 0.0
+    assert status.allow_step("discovery") == (True, None)
+
+
+def test_monthly_fraction_used_uses_dollars():
+    status = _status(month=UsageTotals(usd=50.0))
+    assert status.monthly_fraction_used() == 0.5
+
+
+def test_worst_fraction_used_is_the_worse_of_today_and_this_month():
+    assert _status(today=UsageTotals(usd=3.0), month=UsageTotals(usd=90.0)).worst_fraction_used() == 0.9
+    assert _status(today=UsageTotals(usd=9.0), month=UsageTotals(usd=9.0)).worst_fraction_used() == 0.9
 
 
 # -- cut order ------------------------------------------------------------
 
 def test_cut_order_nothing_cut_below_80_percent():
-    status = _status(today=UsageTotals(tokens=700))  # 70%
+    status = _status(today=UsageTotals(usd=7.0))  # 70%
     assert status.steps_to_cut() == []
 
 
 def test_cut_order_cuts_scout_first_at_80_percent():
-    status = _status(today=UsageTotals(tokens=800))  # 80%
+    status = _status(today=UsageTotals(usd=8.0))  # 80%
     # careers_repair (issue #55) rides scout's own share and threshold, so
     # it's cut at the same point scout is.
     assert status.steps_to_cut() == ["scout", "careers_repair"]
 
 
 def test_cut_order_cuts_scout_and_low_yield_discovery_at_90_percent():
-    status = _status(today=UsageTotals(tokens=900))  # 90%
+    status = _status(today=UsageTotals(usd=9.0))  # 90%
     assert status.steps_to_cut() == ["scout", "careers_repair", "discovery_low_yield"]
 
 
 def test_cut_order_cuts_everything_non_mandatory_at_100_percent():
-    status = _status(today=UsageTotals(tokens=1000))  # 100%
+    status = _status(today=UsageTotals(usd=10.0))  # 100%
     assert status.steps_to_cut() == ["scout", "careers_repair", "discovery_low_yield", "unclear_page", "improvement"]
 
 
 def test_cut_order_never_includes_classification_or_pruning():
-    status = _status(today=UsageTotals(tokens=999999))
+    status = _status(today=UsageTotals(usd=999.0))
     cut = status.steps_to_cut()
     assert "classification" not in cut
     assert "pruning" not in cut
@@ -135,13 +175,13 @@ def test_forecast_handles_zero_elapsed_units():
     assert forecast(50, 0, 7) == 50
 
 
-def test_weekly_forecast_uses_day_of_week():
-    status = _status(week=UsageTotals(tokens=200), day_of_week=2)
-    assert weekly_forecast(status) == 700
+def test_weekly_forecast_is_in_dollars():
+    status = _status(week=UsageTotals(usd=2.0, tokens=200), day_of_week=2)
+    assert weekly_forecast(status) == 7.0
 
 
 def test_monthly_forecast_uses_day_of_month():
-    status = _status(billing_mode="api_key", month=UsageTotals(usd=30.0), day_of_month=10, days_in_month=30)
+    status = _status(month=UsageTotals(usd=30.0), day_of_month=10, days_in_month=30)
     assert monthly_forecast(status) == 90.0
 
 
@@ -149,7 +189,7 @@ def test_monthly_forecast_uses_day_of_month():
 
 def test_load_budget_status_sums_usage_rows(empty_db):
     run(empty_db.run(
-        "UPDATE budget_settings SET daily_token_budget = 1000, daily_search_budget = 10 WHERE id = 1"
+        "UPDATE budget_settings SET daily_usd_budget = 1.0, daily_search_budget = 10 WHERE id = 1"
     ))
     run(empty_db.run(
         """INSERT INTO usage (run_id, step, model, input_tokens, output_tokens, cache_read_tokens,
@@ -171,11 +211,15 @@ def test_load_budget_status_sums_usage_rows(empty_db):
     budget_settings = run(empty_db.first("SELECT * FROM budget_settings WHERE id = 1"))
     status = run(load_budget_status(empty_db, budget_settings, today="2026-09-20"))
 
-    assert status.today.tokens == 180  # 100+50+20+10
+    assert status.today.usd == pytest.approx(0.011)
+    assert status.today.tokens == 180  # 100+50+20+10, still recorded for Analytics and the spike alert
     assert status.today.searches == 3
-    assert status.today_by_step["discovery"].tokens == 150
-    assert status.today_by_step["classification"].tokens == 30
-    assert status.week.tokens == 180 + (999 + 999)  # same ISO week
+    assert status.today_by_step["discovery"].usd == pytest.approx(0.01)
+    assert status.today_by_step["classification"].usd == pytest.approx(0.001)
+    assert status.week.usd == pytest.approx(0.011 + 1.0)  # same ISO week
+    assert status.month.usd == pytest.approx(0.011 + 1.0)
+    assert status.daily_fraction_used() == pytest.approx(0.011)
+    assert status.settings["daily_usd_budget"] == 1.0
 
 
 # -- resets (issue #38) ----------------------------------------------------

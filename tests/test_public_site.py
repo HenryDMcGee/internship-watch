@@ -255,16 +255,116 @@ def test_daily_limits_per_visitor_and_in_total(client, monkeypatch):
     assert post_feedback(tc, ip="9.9.9.9").status_code == 204
     monkeypatch.undo()
 
-    # 200 a day in total, across visitors.
+    # The total a day, across visitors, is the `public_feedback_daily_limit` setting (phase 9), default 20.
     run(db.run("DELETE FROM feedback"))
     today = central_today()
-    for i in range(199):
+    for i in range(19):
         run(db.run(
             "INSERT INTO feedback (source, kind, message, visitor_hash, created_at) VALUES ('public', 'other', 'x', ?, ?)",
             f"v{i}", today + "T08:00:00-05:00",
         ))
-    assert post_feedback(tc, ip="7.7.7.7").status_code == 204  # the 200th
-    assert post_feedback(tc, ip="6.6.6.6").status_code == 429  # the 201st
+    assert post_feedback(tc, ip="7.7.7.7").status_code == 204  # the 20th
+    assert post_feedback(tc, ip="6.6.6.6").status_code == 429  # the 21st
+
+
+def _seed_public_feedback(db, n, day=None):
+    day = day or central_today()
+    for i in range(n):
+        run(db.run(
+            "INSERT INTO feedback (source, kind, message, visitor_hash, created_at) VALUES ('public', 'other', 'x', ?, ?)",
+            f"seed{i}", day + "T08:00:00-05:00",
+        ))
+
+
+def test_the_feedback_cap_comes_from_the_budget_settings(client):
+    tc, db = client
+    run(db.run("UPDATE budget_settings SET public_feedback_daily_limit = 2 WHERE id = 1"))
+    assert post_feedback(tc, ip="1.1.1.1").status_code == 204
+    assert post_feedback(tc, ip="2.2.2.2").status_code == 204
+    resp = post_feedback(tc, ip="3.3.3.3")
+    assert resp.status_code == 429
+    assert resp.json()["detail"] == "Try again tomorrow."
+    assert len(feedback_rows(db)) == 2
+
+    run(db.run("UPDATE budget_settings SET public_feedback_daily_limit = 3 WHERE id = 1"))
+    assert post_feedback(tc, ip="3.3.3.3").status_code == 204
+
+
+def test_a_feedback_cap_of_zero_turns_public_feedback_off(client):
+    tc, db = client
+    run(db.run("UPDATE budget_settings SET public_feedback_daily_limit = 0 WHERE id = 1"))
+    assert post_feedback(tc).status_code == 429
+    assert feedback_rows(db) == []
+
+
+def test_only_todays_visitor_feedback_counts_toward_the_cap(client):
+    tc, db = client
+    run(db.run("UPDATE budget_settings SET public_feedback_daily_limit = 1 WHERE id = 1"))
+    _seed_public_feedback(db, 5, day="2026-01-01")  # another day
+    run(db.run("INSERT INTO feedback (source, kind, message, created_at) VALUES ('owner', 'bug', 'mine', ?)",
+               central_today() + "T08:00:00-05:00"))  # Henry's own feedback never counts
+    assert post_feedback(tc).status_code == 204
+    assert post_feedback(tc, ip="2.2.2.2").status_code == 429
+
+
+def test_the_honeypot_still_wins_before_the_cap_is_checked(client):
+    tc, db = client
+    run(db.run("UPDATE budget_settings SET public_feedback_daily_limit = 0 WHERE id = 1"))
+    assert post_feedback(tc, website="http://spam.example").status_code == 204
+    assert feedback_rows(db) == []
+
+
+def test_the_budgets_payload_reports_todays_feedback_against_the_cap(client):
+    tc, db = client
+    run(db.run("UPDATE budget_settings SET public_feedback_daily_limit = 5 WHERE id = 1"))
+    _seed_public_feedback(db, 3)
+    _seed_public_feedback(db, 4, day="2026-01-01")
+    body = tc.get("/api/budgets").json()["public_site"]
+    assert body["feedback_daily_limit"] == 5
+    assert body["feedback_today"] == 3
+
+
+# -- board views (phase 9) ------------------------------------------------------------
+
+def _views_today(db):
+    row = run(db.first("SELECT views FROM public_board_views WHERE day = ?", central_today()))
+    return row["views"] if row else 0
+
+
+def test_each_public_board_load_counts_a_view(client):
+    tc, db = client
+    enable_public(db)
+    assert tc.get("/api/public/postings").status_code == 200
+    assert tc.get("/api/public/postings").status_code == 200
+    assert _views_today(db) == 2
+    assert tc.get("/api/budgets").json()["public_site"]["board_views_today"] == 2
+
+
+def test_a_switched_off_board_counts_no_views(client):
+    tc, db = client
+    assert tc.get("/api/public/postings").json()["enabled"] is False
+    assert _views_today(db) == 0
+
+
+def test_a_failed_view_count_never_breaks_the_public_board(client, caplog):
+    tc, db = client
+    enable_public(db)
+    seed_posting(db)
+    run(db.run("DROP TABLE public_board_views"))
+    resp = tc.get("/api/public/postings")
+    assert resp.status_code == 200
+    assert len(resp.json()["postings"]) == 1
+
+
+def test_views_are_counted_per_central_day(client, monkeypatch):
+    tc, db = client
+    enable_public(db)
+    tc.get("/api/public/postings")
+    monkeypatch.setattr(main_module, "central_today", lambda: "2999-01-01")
+    tc.get("/api/public/postings")
+    monkeypatch.undo()
+    assert _views_today(db) == 1
+    assert run(db.first("SELECT views FROM public_board_views WHERE day = '2999-01-01'"))["views"] == 1
 
 
 @pytest.mark.parametrize("overrides", [

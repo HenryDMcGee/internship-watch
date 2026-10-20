@@ -119,9 +119,9 @@ def test_search_status_reports_busy(client):
 
 def _set_budget(db, **overrides):
     fields = {
-        "billing_mode": "subscription", "daily_token_budget": 4_000_000, "daily_search_budget": 35,
-        "weekly_token_budget": 25_000_000, "daily_usd_budget": 1.50, "monthly_usd_budget": 30.00,
+        "daily_usd_budget": 1.50, "monthly_usd_budget": 30.00, "daily_search_budget": 35,
         "search_limit_per_run": 35, "search_limit_per_company": 5, "browser_checks_per_run": 50,
+        "public_feedback_daily_limit": 20,
         "share_discovery": 0.60, "share_scout": 0.20, "share_classification": 0.15, "share_improvement": 0.05,
         "model_discovery": "sonnet", "model_scout": "sonnet", "model_classification": "haiku",
         "model_improvement": "sonnet",
@@ -133,12 +133,12 @@ def _set_budget(db, **overrides):
 
 def test_start_search_asks_for_confirmation_when_budget_is_over_80_percent(client):
     tc, db = client
-    _set_budget(db, daily_token_budget=1_000_000)
+    _set_budget(db, daily_usd_budget=1.0)
     today = central_today()
     run(db.run(
         "INSERT INTO usage (run_id, step, model, input_tokens, output_tokens, cache_read_tokens, "
         "cache_write_tokens, web_searches, est_cost_usd, at) "
-        "VALUES (NULL, 'discovery', 'sonnet', 900000, 0, 0, 0, 0, 0, ?)",
+        "VALUES (NULL, 'discovery', 'sonnet', 900000, 0, 0, 0, 0, 0.9, ?)",
         f"{today}T09:00:00",
     ))
 
@@ -153,12 +153,12 @@ def test_start_search_asks_for_confirmation_when_budget_is_over_80_percent(clien
 
 def test_start_search_proceeds_when_budget_confirmed(client):
     tc, db = client
-    _set_budget(db, daily_token_budget=1_000_000)
+    _set_budget(db, daily_usd_budget=1.0)
     today = central_today()
     run(db.run(
         "INSERT INTO usage (run_id, step, model, input_tokens, output_tokens, cache_read_tokens, "
         "cache_write_tokens, web_searches, est_cost_usd, at) "
-        "VALUES (NULL, 'discovery', 'sonnet', 900000, 0, 0, 0, 0, 0, ?)",
+        "VALUES (NULL, 'discovery', 'sonnet', 900000, 0, 0, 0, 0, 0.9, ?)",
         f"{today}T09:00:00",
     ))
 
@@ -169,12 +169,12 @@ def test_start_search_proceeds_when_budget_confirmed(client):
 
 def test_start_search_not_blocked_after_a_daily_budget_reset(client, monkeypatch):
     tc, db = client
-    _set_budget(db, daily_token_budget=1_000_000)
+    _set_budget(db, daily_usd_budget=1.0)
     today = central_today()
     run(db.run(
         "INSERT INTO usage (run_id, step, model, input_tokens, output_tokens, cache_read_tokens, "
         "cache_write_tokens, web_searches, est_cost_usd, at) "
-        "VALUES (NULL, 'discovery', 'sonnet', 900000, 0, 0, 0, 0, 0, ?)",
+        "VALUES (NULL, 'discovery', 'sonnet', 900000, 0, 0, 0, 0, 0.9, ?)",
         f"{today}T09:00:00-05:00",
     ))
     # `create_budget_reset` stamps `reset_at` with `now_iso()`; pinning it
@@ -190,14 +190,28 @@ def test_start_search_not_blocked_after_a_daily_budget_reset(client, monkeypatch
     assert resp.status_code == 201
 
 
-def test_start_search_does_not_ask_for_confirmation_under_80_percent(client):
+def test_start_search_confirmation_counts_dollars_not_tokens(client):
+    # A huge token count with a tiny cost must not trigger the warning: tokens no longer have a budget.
     tc, db = client
-    _set_budget(db, daily_token_budget=1_000_000)
+    _set_budget(db, daily_usd_budget=1.0)
     today = central_today()
     run(db.run(
         "INSERT INTO usage (run_id, step, model, input_tokens, output_tokens, cache_read_tokens, "
         "cache_write_tokens, web_searches, est_cost_usd, at) "
-        "VALUES (NULL, 'discovery', 'sonnet', 100000, 0, 0, 0, 0, 0, ?)",
+        "VALUES (NULL, 'discovery', 'sonnet', 90000000, 0, 0, 0, 0, 0.05, ?)",
+        f"{today}T09:00:00",
+    ))
+    assert tc.post("/api/search/runs", json={}).status_code == 201
+
+
+def test_start_search_does_not_ask_for_confirmation_under_80_percent(client):
+    tc, db = client
+    _set_budget(db, daily_usd_budget=1.0)
+    today = central_today()
+    run(db.run(
+        "INSERT INTO usage (run_id, step, model, input_tokens, output_tokens, cache_read_tokens, "
+        "cache_write_tokens, web_searches, est_cost_usd, at) "
+        "VALUES (NULL, 'discovery', 'sonnet', 100000, 0, 0, 0, 0, 0.1, ?)",
         f"{today}T09:00:00",
     ))
 

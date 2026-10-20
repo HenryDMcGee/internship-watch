@@ -29,30 +29,30 @@ from job.agent.alerts import (
 )
 from job.agent.budgets import BudgetStatus, UsageTotals
 
-SETTINGS = {"billing_mode": "subscription", "daily_token_budget": 1000, "daily_search_budget": 100}
+SETTINGS = {"daily_usd_budget": 10.0, "daily_search_budget": 100}
 
 
 def run(coro):
     return asyncio.run(coro)
 
 
-def _status(tokens):
-    return BudgetStatus(billing_mode="subscription", settings=SETTINGS, today=UsageTotals(tokens=tokens))
+def _status(usd):
+    return BudgetStatus(settings=SETTINGS, today=UsageTotals(usd=usd))
 
 
 # -- rules ------------------------------------------------------------------
 
 def test_no_budget_alert_below_80_percent():
-    assert evaluate_budget_alerts(_status(700)) == []
+    assert evaluate_budget_alerts(_status(7.0)) == []
 
 
 def test_budget_80_alert_at_80_percent():
-    alerts = evaluate_budget_alerts(_status(800))
+    alerts = evaluate_budget_alerts(_status(8.0))
     assert [a.type for a in alerts] == [BUDGET_80]
 
 
 def test_budget_100_alert_at_100_percent_not_also_80():
-    alerts = evaluate_budget_alerts(_status(1000))
+    alerts = evaluate_budget_alerts(_status(10.0))
     assert [a.type for a in alerts] == [BUDGET_100]
 
 
@@ -168,7 +168,7 @@ def test_claude_step_issue_alert_is_critical_when_nothing_ran():
 # -- one per type per day ----------------------------------------------------
 
 def test_record_alerts_inserts_new_alert(empty_db):
-    candidates = evaluate_budget_alerts(_status(800))
+    candidates = evaluate_budget_alerts(_status(8.0))
     recorded = run(record_alerts(empty_db, candidates, today="2026-09-20", now_iso="2026-09-20T08:00:00"))
     assert len(recorded) == 1
     rows = run(empty_db.all("SELECT * FROM alerts"))
@@ -177,7 +177,7 @@ def test_record_alerts_inserts_new_alert(empty_db):
 
 
 def test_record_alerts_skips_duplicate_type_same_day(empty_db):
-    candidates = evaluate_budget_alerts(_status(800))
+    candidates = evaluate_budget_alerts(_status(8.0))
     run(record_alerts(empty_db, candidates, today="2026-09-20", now_iso="2026-09-20T08:00:00"))
     second = run(record_alerts(empty_db, candidates, today="2026-09-20", now_iso="2026-09-20T09:00:00"))
     assert second == []
@@ -186,7 +186,7 @@ def test_record_alerts_skips_duplicate_type_same_day(empty_db):
 
 
 def test_record_alerts_allows_same_type_on_a_new_day(empty_db):
-    candidates = evaluate_budget_alerts(_status(800))
+    candidates = evaluate_budget_alerts(_status(8.0))
     run(record_alerts(empty_db, candidates, today="2026-09-20", now_iso="2026-09-20T08:00:00"))
     second = run(record_alerts(empty_db, candidates, today="2026-09-21", now_iso="2026-09-21T08:00:00"))
     assert len(second) == 1

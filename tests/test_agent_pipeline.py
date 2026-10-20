@@ -7,8 +7,8 @@ from job.agent.client import ClaudeStepResult
 from job.agent.pipeline import _store_scout_sources, build_unclear_reader, run_agent_steps
 
 SETTINGS = {
-    "billing_mode": "subscription", "daily_token_budget": 1_000_000, "daily_search_budget": 100,
-    "weekly_token_budget": 5_000_000, "share_discovery": 0.60, "share_scout": 0.20,
+    "daily_usd_budget": 10.0, "monthly_usd_budget": 100.0, "daily_search_budget": 100,
+    "share_discovery": 0.60, "share_scout": 0.20,
     "share_classification": 0.15, "share_improvement": 0.05,
     "model_discovery": "sonnet", "model_scout": "sonnet", "model_classification": "haiku",
     "model_improvement": "sonnet", "search_limit_per_run": 35, "search_limit_per_company": 5,
@@ -26,11 +26,11 @@ def run(coro):
 
 
 def _open_status():
-    return BudgetStatus(billing_mode="subscription", settings=SETTINGS)
+    return BudgetStatus(settings=SETTINGS)
 
 
 def _closed_status():
-    return BudgetStatus(billing_mode="subscription", settings=SETTINGS, today=UsageTotals(tokens=1_000_000))
+    return BudgetStatus(settings=SETTINGS, today=UsageTotals(usd=10.0))
 
 
 def _fake_run_claude(responses):
