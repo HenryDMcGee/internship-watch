@@ -91,6 +91,7 @@ jobs:
           # Empty on a schedule event (no inputs exist there), which the job
           # records as "schedule".
           RUN_SOURCE: ${{ inputs.run_source }}
+          FEEDBACK_ISSUES_ENABLED: "true"
         run: python -m job.run
 
       - name: Close the run if the job was stopped
