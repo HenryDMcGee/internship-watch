@@ -139,6 +139,7 @@ Map the old field names (`firstSeen`, `statusNote`, and so on) to the new schema
    - a switch in the Locations panel (starts off) and a Hide from public toggle per posting
    - a feedback form on the public board (honeypot, 10 a day per visitor, 200 a day in total), the owner's own Feedback button, and a Feedback view with Mark read, Dismiss, and Open as GitHub issue
    - a counts-only feedback line in the daily summary
+   - guardrail (Henry, October 19, 2026, issue #129): feedback-to-issue creation is opt-in via `FEEDBACK_ISSUES_ENABLED = "true"`, set only on the deployed Worker and the real daily job, never in tests, CI, or local development; and a row whose `Feedback row: N` marker is already in an open `visitor-feedback` issue is linked to it, not posted again
 
 ## Secrets (never in git)
 

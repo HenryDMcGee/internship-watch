@@ -122,6 +122,20 @@ class GitHubClient:
             raise GitHubApiError(f"creating the pull request failed ({status}): {body}")
         return body
 
+    async def list_open_issues(self, label: str) -> list[dict]:
+        """Open issues carrying `label` (pull requests excluded), across pages."""
+        issues: list[dict] = []
+        for page in range(1, 11):
+            status, body = await self._request(
+                "GET", f"/repos/{self.repo}/issues?state=open&labels={label}&per_page=100&page={page}"
+            )
+            if status != 200 or not isinstance(body, list):
+                raise GitHubApiError(f"listing issues failed ({status}): {body}")
+            issues += [i for i in body if "pull_request" not in i]
+            if len(body) < 100:
+                break
+        return issues
+
     async def create_issue(self, title: str, body_text: str, labels: list[str]) -> dict:
         status, body = await self._request(
             "POST", f"/repos/{self.repo}/issues", {"title": title, "body": body_text, "labels": labels}

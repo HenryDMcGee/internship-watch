@@ -249,6 +249,15 @@ Migration `0015` adds `budget_settings.feedback_issues_per_day` (default 20) and
 
 Public feedback now creates a GitHub issue labeled `visitor-feedback` (through the Worker's `GITHUB_TOKEN`, which already needs Issues: write). The daily run retries rows with no issue using the job's `GITHUB_TOKEN`, so the `permissions:` block in `.github/workflows/daily-search.yml` needs `issues: write`. Without it, retries fail quietly and the rows wait.
 
+### The `FEEDBACK_ISSUES_ENABLED` switch
+
+Creating GitHub issues from visitor feedback is opt-in. `create_issue_for_feedback` and `retry_pending_issues` do nothing, and log one info line, unless `FEEDBACK_ISSUES_ENABLED` is exactly `"true"`.
+
+* **Worker:** `FEEDBACK_ISSUES_ENABLED = "true"` is in the committed `[vars]` of `api/wrangler.toml`. Not a secret.
+* **Daily job:** the "Run the daily job" step in `.github/workflows/daily-search.yml` sets `FEEDBACK_ISSUES_ENABLED: "true"` in its `env:`. `check-now.yml`, `ci.yml` and `claude.yml` must not set it.
+* **Local development:** leave it unset in `.dev.vars`. A local `wrangler dev` reads `[vars]` from `wrangler.toml`, so `.dev.vars` should set `FEEDBACK_ISSUES_ENABLED = "false"` to override it. Setting it to `"true"` locally, with a `GITHUB_TOKEN`, posts real issues to the repository.
+* **Duplicates:** before posting, the code lists open `visitor-feedback` issues and, if one already contains the row's `Feedback row: N` line, stores that issue's URL on the row instead of posting another.
+
 ### Migration `0016_run_source.sql` and the cron trigger
 
 Migration `0016` adds the nullable `runs.source` column (`cloudflare`, `manual` or `schedule`; older runs stay NULL), which the Recent runs list shows. The automatic deploy applies it (step 5). The same deploy registers the two cron triggers from `api/wrangler.toml`; the dispatch token is step 3d. To roll the trigger back, remove the `[triggers]` block and redeploy; the GitHub Actions crons are untouched and keep running the job.
