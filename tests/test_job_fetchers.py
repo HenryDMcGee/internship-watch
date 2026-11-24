@@ -249,3 +249,55 @@ def test_fetcher_raises_on_blocked_request():
     session = FakeSession(FakeResponse(status_code=403))
     with pytest.raises(FetchError):
         greenhouse.fetch({"id": 1, "name": "Acme", "feed_type": "greenhouse", "feed_id": "acme"}, session=session)
+
+
+# -- BR-004: a refusal carries its details --------------------------------------
+
+class HeaderResponse(FakeResponse):
+    def __init__(self, status_code, headers):
+        super().__init__(status_code=status_code)
+        self.headers = headers
+
+
+def test_a_failed_request_carries_its_status_and_the_wait_the_site_asked_for():
+    from job.fetchers.base import FetchError, get_json, post_json
+
+    session = FakeSession(HeaderResponse(429, {"Retry-After": "12"}))
+    with pytest.raises(FetchError) as posted:
+        post_json("https://x.example/jobs", json_body={}, session=session)
+    with pytest.raises(FetchError) as got:
+        get_json("https://x.example/jobs", session=session)
+
+    assert (posted.value.status, posted.value.retry_after) == (429, 12.0)
+    assert (got.value.status, got.value.retry_after) == (429, 12.0)
+    assert "returned HTTP 429" in str(posted.value)
+
+
+def test_a_failed_request_with_no_headers_still_reports_its_status():
+    from job.fetchers.base import FetchError, post_json
+
+    with pytest.raises(FetchError) as caught:
+        post_json("https://x.example/jobs", json_body={}, session=FakeSession(FakeResponse(status_code=503)))
+
+    assert (caught.value.status, caught.value.retry_after) == (503, None)
+
+
+@pytest.mark.parametrize("error, rate_limited, temporary", [
+    ("https://x.example/jobs returned HTTP 429", True, True),
+    ('https://x.example/jobs returned HTTP 429 (search "intern", page 1, after 0 answered requests)', True, True),
+    ("https://x.example/jobs returned HTTP 503", False, True),
+    ("https://x.example/jobs returned HTTP 500", False, True),
+    ("request to https://x.example/jobs failed: Read timed out.", False, True),
+    ("https://x.example/jobs returned HTTP 404", False, False),
+    ("https://x.example/jobs returned HTTP 400", False, False),
+    ("https://x.example/jobs blocked the request (403); not retrying or working around it", False, False),
+    ("https://x.example/jobs did not return JSON", False, False),
+    ("Acme: feed address isn't a Workday site link", False, False),
+    ("", False, False),
+    (None, False, False),
+])
+def test_errors_are_sorted_into_refusals_temporary_trouble_and_real_answers(error, rate_limited, temporary):
+    from job.fetchers.base import is_rate_limit_error, is_temporary_error
+
+    assert is_rate_limit_error(error) is rate_limited
+    assert is_temporary_error(error) is temporary

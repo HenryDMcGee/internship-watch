@@ -18,6 +18,7 @@ import re
 
 from job import config  # noqa: F401 -- adds api/src to sys.path for the import below
 from job.fetchers import workday
+from job.fetchers.base import is_rate_limit_error
 from job.sources_lifecycle import FAILING_AFTER_RUNS, normalize_url
 
 from companies import detect_feed  # noqa: E402
@@ -73,6 +74,19 @@ async def failing_feed_names(db, threshold: int) -> list[str]:
         threshold,
     )
     return [r["name"] for r in rows]
+
+
+async def count_rate_limited_failing_feeds(db, threshold: int) -> int:
+    """How many of the feeds `failing_feed_names` returns were last refused
+    for asking too fast (BR-004.4). Those are not broken feeds, and the owner
+    should be able to tell them from the ones that are.
+    """
+    rows = await db.all(
+        "SELECT last_feed_error FROM companies WHERE status IN ('ranked', 'pinned') AND feed_type IS NOT NULL "
+        "AND feed_failures >= ?",
+        threshold,
+    )
+    return sum(1 for r in rows if is_rate_limit_error(r["last_feed_error"]))
 
 
 async def ensure_feed_url(db, company: dict) -> bool:

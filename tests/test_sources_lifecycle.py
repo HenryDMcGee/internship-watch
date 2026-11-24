@@ -508,3 +508,130 @@ def test_demoting_many_sources_is_one_statement_not_one_per_row(empty_db):
 
     assert count == 130
     assert len(statements) == 1
+
+
+# -- BR-004.2: a temporary refusal never costs us a source ----------------------
+
+def _fetch_with(error):
+    def fetch(company, session=None):
+        return FetchResult(company_id=company["id"], company_name=company["name"], postings=[], error=error)
+    return fetch
+
+
+def _status(db, source_id):
+    return run(db.first("SELECT status FROM sources WHERE id = ?", source_id))["status"]
+
+
+@pytest.mark.parametrize("error", [
+    'https://micron.wd1.myworkdayjobs.com/wday/cxs/micron/External/jobs returned HTTP 429 (search "intern", page 1, after 0 answered requests)',
+    "https://boards-api.greenhouse.io/v1/boards/acme/jobs returned HTTP 503",
+    "request to https://boards-api.greenhouse.io/v1/boards/acme/jobs failed: Read timed out.",
+])
+def test_a_try_that_gets_no_real_answer_leaves_the_address_on_trial(empty_db, error):
+    company_id = _insert_company(empty_db, name="Acme", feed_type=None)
+    source_id = _insert_source(empty_db)
+
+    outcome = run(sources_lifecycle.adopt_trial_feeds(
+        empty_db, _companies(empty_db), fetch=_fetch_with(error), now_iso="2026-11-25T08:00:00-06:00",
+    ))
+
+    assert _status(empty_db, source_id) == "trial"
+    assert outcome.adopted == []
+    assert outcome.failed == 0
+    assert outcome.undecided == 1
+    assert outcome.undecided_source_ids == {source_id}
+    assert run(empty_db.first("SELECT feed_type FROM companies WHERE id = ?", company_id))["feed_type"] is None
+
+
+@pytest.mark.parametrize("error", [
+    "https://boards-api.greenhouse.io/v1/boards/acme/jobs returned HTTP 404",
+    "https://boards-api.greenhouse.io/v1/boards/acme/jobs blocked the request (403); not retrying or working around it",
+    "https://boards-api.greenhouse.io/v1/boards/acme/jobs did not return JSON",
+    "https://boards-api.greenhouse.io/v1/boards/acme/jobs returned HTTP 400",
+])
+def test_a_try_that_gets_a_real_answer_saying_no_still_demotes_the_address(empty_db, error):
+    _insert_company(empty_db, name="Acme", feed_type=None)
+    source_id = _insert_source(empty_db)
+
+    outcome = run(sources_lifecycle.adopt_trial_feeds(
+        empty_db, _companies(empty_db), fetch=_fetch_with(error), now_iso="2026-11-25T08:00:00-06:00",
+    ))
+
+    assert _status(empty_db, source_id) == "demoted"
+    assert (outcome.failed, outcome.undecided) == (1, 0)
+
+
+def test_after_a_site_says_slow_down_no_more_of_its_addresses_are_tried_this_run(empty_db):
+    _insert_company(empty_db, name="Micron", feed_type=None, rank=1)
+    _insert_company(empty_db, name="Qualcomm", feed_type=None, rank=2)
+    _insert_company(empty_db, name="Acme", feed_type=None, rank=3)
+    micron = _insert_source(empty_db, name="Micron careers (Workday)", url="https://micron.wd1.myworkdayjobs.com/External")
+    qualcomm = _insert_source(
+        empty_db, name="Qualcomm careers (Workday)", url="https://qualcomm.wd5.myworkdayjobs.com/External",
+    )
+    acme = _insert_source(empty_db)
+    calls = []
+
+    def fetch(company, session=None):
+        calls.append(company["name"])
+        if company["feed_type"] == "workday":
+            return _fetch_with("https://micron.wd1.myworkdayjobs.com/wday/cxs/micron/External/jobs returned HTTP 429")(company)
+        return _fetch_ok(company)
+
+    outcome = run(sources_lifecycle.adopt_trial_feeds(
+        empty_db, _companies(empty_db), fetch=fetch, now_iso="2026-11-25T08:00:00-06:00",
+    ))
+
+    assert calls == ["Micron", "Acme"]  # Qualcomm's Workday address is not asked; Greenhouse still is
+    assert outcome.undecided_source_ids == {micron}
+    assert outcome.untried_source_ids == {qualcomm}
+    assert _status(empty_db, qualcomm) == "trial"
+    assert _status(empty_db, acme) == "active"
+
+
+def test_a_feed_that_keeps_being_told_to_slow_down_is_not_replaced(empty_db):
+    # Nine refused runs say nothing about whether NVIDIA's address is right.
+    company_id = _insert_company(
+        empty_db, name="NVIDIA", feed_type="workday", feed_id="nvidia", last_feed_status="error", feed_failures=9,
+        feed_url="https://nvidia.wd5.myworkdayjobs.com/NVIDIAExternalCareerSite",
+        last_feed_error="https://nvidia.wd5.myworkdayjobs.com/wday/cxs/nvidia/NVIDIAExternalCareerSite/jobs returned HTTP 429",
+    )
+    _insert_source(
+        empty_db, name="NVIDIA University Jobs (Workday)", url="https://nvidia.wd5.myworkdayjobs.com/en-US/UniversityJobs",
+    )
+    calls = []
+
+    def fetch(company, session=None):
+        calls.append(company["name"])
+        return _fetch_ok(company)
+
+    run(sources_lifecycle.adopt_trial_feeds(
+        empty_db, _companies(empty_db), fetch=fetch, now_iso="2026-11-25T08:00:00-06:00", failing_after=5,
+    ))
+
+    assert calls == []
+    assert run(empty_db.first("SELECT feed_url FROM companies WHERE id = ?", company_id))["feed_url"] == (
+        "https://nvidia.wd5.myworkdayjobs.com/NVIDIAExternalCareerSite"
+    )
+
+
+def test_an_undecided_address_is_spared_by_the_30_day_rule_for_two_more_weeks(empty_db):
+    today = date(2026, 11, 25)
+    waiting = _insert_source(empty_db, discovered_at="2026-10-20T08:00:00-05:00")       # 36 days old
+    too_long = _insert_source(
+        empty_db, url="https://boards.greenhouse.io/old", discovered_at="2026-10-05T08:00:00-05:00",  # 51 days old
+    )
+    ordinary = _insert_source(
+        empty_db, url="https://boards.greenhouse.io/other", discovered_at="2026-10-20T08:00:00-05:00",
+    )
+
+    demoted = run(sources_lifecycle.demote_stale_trials(empty_db, today=today, grace_ids={waiting, too_long}))
+
+    assert demoted == 2
+    assert _status(empty_db, waiting) == "trial"
+    assert _status(empty_db, too_long) == "demoted"
+    assert _status(empty_db, ordinary) == "demoted"
+
+
+def test_the_grace_for_undecided_addresses_is_fourteen_days():
+    assert sources_lifecycle.UNDECIDED_GRACE_DAYS == 14

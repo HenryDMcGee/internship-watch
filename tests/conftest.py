@@ -35,6 +35,21 @@ def fresh_schema_connection() -> sqlite3.Connection:
     return conn
 
 
+@pytest.fixture(autouse=True)
+def _workday_reader_never_really_waits(monkeypatch):
+    """The Workday reader paces itself with real pauses and remembers, for
+    the length of a run, how Workday has been answering (BR-004). In tests
+    each test is its own run, and no test should sit through a real pause.
+    `tests/test_workday_pacing.py` swaps in a clock it can read.
+    """
+    from job.fetchers import workday
+
+    workday.reset_pacing()
+    monkeypatch.setattr(workday, "_sleep", lambda _seconds: None)
+    yield
+    workday.reset_pacing()
+
+
 @pytest.fixture
 def empty_db() -> SqliteDatabase:
     return SqliteDatabase(fresh_schema_connection())

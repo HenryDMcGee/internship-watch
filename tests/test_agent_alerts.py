@@ -216,3 +216,20 @@ def test_feeds_failing_alert_shortens_a_long_list():
 
 def test_feeds_failing_alert_reads_naturally_for_one_feed():
     assert "1 job feed has failed 5 or more runs in a row: Etsy." in feeds_failing_alert(["Etsy"], runs=5).message
+
+
+# -- BR-004.4: the alert says how many feeds were told to slow down --------------
+
+def test_feeds_failing_alert_counts_the_feeds_told_to_slow_down():
+    alert = feeds_failing_alert(["NVIDIA", "PayPal", "Etsy"], runs=5, rate_limited=2)
+    assert alert.message.endswith(": NVIDIA, PayPal, Etsy. 2 were told to slow down (HTTP 429).")
+
+
+def test_feeds_failing_alert_reads_naturally_for_one_slowed_feed():
+    alert = feeds_failing_alert(["NVIDIA", "Etsy"], runs=5, rate_limited=1)
+    assert alert.message.endswith("1 was told to slow down (HTTP 429).")
+
+
+def test_feeds_failing_alert_says_nothing_extra_when_none_were_slowed():
+    assert feeds_failing_alert(["Etsy"], runs=5).message.endswith("in a row: Etsy.")
+    assert feeds_failing_alert(["Etsy"], runs=5, rate_limited=0).message.endswith("in a row: Etsy.")
