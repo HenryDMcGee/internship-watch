@@ -391,6 +391,31 @@ def test_a_feed_that_counts_as_failing_can_be_replaced(empty_db):
     assert [a["company_id"] for a in outcome.adopted] == [company_id]
 
 
+def test_addresses_on_a_held_platform_are_not_tried_and_wait_for_another_run(empty_db):
+    # The run holds Workday addresses until a Workday feed has read
+    # successfully: a failed try demotes for good, so the reader proves
+    # itself first.
+    _insert_company(empty_db, name="Micron", feed_type=None, rank=1)
+    acme = _insert_company(empty_db, name="Acme", feed_type=None, rank=2)
+    held = _insert_source(empty_db, name="Micron careers (Workday)", url="https://micron.wd1.myworkdayjobs.com/External")
+    _insert_source(empty_db, name="Acme careers", url="https://boards.greenhouse.io/acme")
+    calls = []
+
+    def fetch(company, session=None):
+        calls.append(company["name"])
+        return _fetch_ok(company)
+
+    outcome = run(sources_lifecycle.adopt_trial_feeds(
+        empty_db, _companies(empty_db), fetch=fetch, now_iso="2026-11-24T08:00:00-06:00",
+        hold_feed_types=frozenset({"workday"}),
+    ))
+
+    assert calls == ["Acme"]
+    assert [a["company_id"] for a in outcome.adopted] == [acme]
+    assert outcome.untried_source_ids == {held}
+    assert run(empty_db.first("SELECT status FROM sources WHERE id = ?", held))["status"] == "trial"
+
+
 def test_a_fetcher_that_raises_counts_as_a_failed_try_and_does_not_stop_the_rest(empty_db):
     _insert_company(empty_db, name="Alpha", feed_type=None, rank=1)
     beta = _insert_company(empty_db, name="Beta", feed_type=None, rank=2)

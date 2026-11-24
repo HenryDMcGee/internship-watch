@@ -185,6 +185,13 @@ already names; a company merely mentioned in a source's description is not enoug
 read is only replaced once it counts as failing under the feed-health rule, so the 19
 Group A addresses get read by the fixed reader before anything else is tried.
 
+**Changed:** Workday trial addresses wait until the Workday reader has proved itself. A
+failed try demotes the address for good, and the Workday reader could not be tried
+against live sites while this was built. So no Workday address is tried until at least
+one tracked company's Workday feed has read successfully. On the first run after this
+ships the 19 Group A feeds are read; from the second run the Group B addresses are tried.
+If the reader is wrong, nothing is demoted and the feed-health alert says so.
+
 **Retirement rule.** A `trial` row older than 30 days that was not adopted as a company's
 feed becomes `status='demoted'`, with the date and reason in `notes`. Demoted, not
 deleted. "Graduated" means adopted as a company's feed after a successful read. Do not

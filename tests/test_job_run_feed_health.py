@@ -232,6 +232,13 @@ def test_a_workday_company_with_only_a_careers_link_gets_its_feed_address_saved(
 # -- BR-001.5 -----------------------------------------------------------------
 
 def test_a_daily_run_adopts_a_trial_feed_and_reads_it_in_the_same_run(empty_db, monkeypatch):
+    # Zebra's Workday feed read last run, so the Workday reader has proved
+    # itself and Workday addresses may be tried (see the next test). Added
+    # with the spec change that introduced that rule.
+    _insert_company(
+        empty_db, name="Zebra", feed_type="workday", feed_id="zebra", last_feed_status="ok",
+        feed_url="https://zebra.wd1.myworkdayjobs.com/Zebra_Careers",
+    )
     company_id = _insert_company(
         empty_db, name="Micron", feed_type="workday", feed_id="micron", last_feed_status="error",
         careers_url="https://www.micron.com/careers/university-recruiting",
@@ -239,7 +246,9 @@ def test_a_daily_run_adopts_a_trial_feed_and_reads_it_in_the_same_run(empty_db, 
     _insert_source(empty_db, name="Micron careers (Workday)", url="https://micron.wd1.myworkdayjobs.com/External")
 
     def fake_run_fetcher(company, session=None):
-        if company.get("feed_url") == "https://micron.wd1.myworkdayjobs.com/External":
+        if company.get("feed_url") in (
+            "https://micron.wd1.myworkdayjobs.com/External", "https://zebra.wd1.myworkdayjobs.com/Zebra_Careers",
+        ):
             return FetchResult(company_id=company["id"], company_name=company["name"], postings=[])
         return FetchResult(company_id=company["id"], company_name=company["name"], postings=[],
                            error="Micron: feed address isn't a Workday site link")
@@ -252,6 +261,26 @@ def test_a_daily_run_adopts_a_trial_feed_and_reads_it_in_the_same_run(empty_db, 
     assert company["last_feed_status"] == "ok"
     assert result["feeds_adopted"] == 1
     assert "Adopted 1 feed from the trial sources (Micron)." in result["summary"]
+
+
+def test_workday_addresses_wait_until_a_workday_feed_has_read(empty_db, monkeypatch):
+    # No Workday feed has read yet (every one was failing before this change).
+    # The address is not tried, so it cannot be demoted by an unproven reader,
+    # and it is not demoted for age while it waits.
+    company_id = _insert_company(
+        empty_db, name="Micron", feed_type="workday", feed_id="micron", last_feed_status="error",
+        careers_url="https://www.micron.com/careers/university-recruiting",
+    )
+    source_id = _insert_source(
+        empty_db, name="Micron careers (Workday)", url="https://micron.wd1.myworkdayjobs.com/External",
+    )
+    monkeypatch.setattr(run_module, "run_fetcher", _failing("Micron: feed address isn't a Workday site link"))
+
+    result = run(run_module.run(empty_db, kind="daily"))
+
+    assert result["feeds_adopted"] == 0
+    assert _company(empty_db, company_id)["feed_url"] is None
+    assert run(empty_db.first("SELECT status FROM sources WHERE id = ?", source_id))["status"] == "trial"
 
 
 def test_a_daily_run_demotes_stale_trial_sources_and_reports_the_count(empty_db, monkeypatch):
