@@ -175,6 +175,24 @@ def test_clear_dead_feeds_leaves_feeds_that_are_under_the_threshold_or_failing_a
     assert _company(empty_db, outage)["feed_type"] == "greenhouse"
 
 
+def test_clear_dead_feeds_never_clears_a_workday_feed(empty_db):
+    # The Workday reader has not been tried against live sites, and a mistake
+    # in how it forms the address would look exactly like a dead address. A
+    # failing Workday feed is reported by the alert and left for Henry.
+    company_id = _insert_company(
+        empty_db, name="NVIDIA", feed_type="workday", feed_id="nvidia",
+        feed_url="https://nvidia.wd5.myworkdayjobs.com/NVIDIAExternalCareerSite",
+        last_feed_status="error", feed_failures=9,
+        last_feed_error="https://nvidia.wd5.myworkdayjobs.com/wday/cxs/nvidia/NVIDIAExternalCareerSite/jobs returned HTTP 404",
+    )
+
+    assert run(feed_health.clear_dead_feeds(empty_db, threshold=5, now_iso="2026-11-24T08:00:00")) == []
+    company = _company(empty_db, company_id)
+    assert company["feed_type"] == "workday"
+    assert company["feed_url"] == "https://nvidia.wd5.myworkdayjobs.com/NVIDIAExternalCareerSite"
+    assert run(empty_db.all("SELECT * FROM sources")) == []
+
+
 def test_clear_dead_feeds_remembers_the_dead_address_so_it_is_not_adopted_again(empty_db):
     _insert_company(
         empty_db, name="Etsy", feed_type="greenhouse", feed_id="etsy", careers_url="https://boards.greenhouse.io/etsy",

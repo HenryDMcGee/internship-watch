@@ -151,6 +151,13 @@ companies are marked `removed`, and the quarterly ranking no longer adds them.
 **Changed:** the draft said to correct the six board names by hand. A general rule
 replaces the one-off repair, because board names will go stale again.
 
+**Changed:** Workday feeds are not cleared automatically. The Workday reader could not be
+tried against live sites while this was built, and a mistake in how it forms the address
+would look exactly like a dead address. Clearing on that evidence would erase 37 feed
+addresses and block them from being adopted again. A Workday feed that keeps failing is
+reported by the feed-health alert like any other, and Henry decides. Lift the exemption
+once a run shows Workday feeds reading.
+
 **Partial listings.** The Workday reader asks for internship and MBA postings only, a few
 pages at most, so that reading 37 large companies does not add to run time. A posting
 missing from that partial list is not treated as closed; only a posting found in it is
