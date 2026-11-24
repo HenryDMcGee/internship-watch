@@ -331,7 +331,11 @@ RATE_LIMITED = "https://boards-api.greenhouse.io/v1/boards/acme/jobs returned HT
 
 
 def test_a_trial_address_that_is_refused_waits_for_the_next_run_and_the_summary_says_so(empty_db, monkeypatch):
-    company_id = _insert_company(empty_db, name="Acme", feed_type=None, feed_id=None)
+    # The careers page is on file so the one-time careers backfill, which runs
+    # on an empty test database, leaves this company for the adoption step.
+    company_id = _insert_company(
+        empty_db, name="Acme", feed_type=None, feed_id=None, careers_url="https://www.acme.example/careers",
+    )
     source_id = _insert_source(empty_db, discovered_at="2026-10-20T08:00:00-05:00")  # past the 30 days
     monkeypatch.setattr(run_module, "today_central", lambda: __import__("datetime").date(2026, 11, 25))
     monkeypatch.setattr(run_module, "run_fetcher", _failing(RATE_LIMITED))

@@ -138,6 +138,9 @@ seconds of retry waits.
 
 ## What the first run after merge will tell us
 
-The 429 errors will name the request. "After 0 requests" on every company, with the
-stop rule firing, means Workday is refusing GitHub's runners and pacing cannot help.
-"After 1 or more" means the limit is on speed and the pause can be tuned.
+- Every Workday error reads "after 0 answered requests" and the stop rule fires: Workday
+  is refusing GitHub's runners outright, and pacing cannot help. That is a decision for
+  Henry (BR-004, section 6).
+- Workday companies read, and the Actions log has lines beginning `workday:` that say a
+  later request was refused: the limit is on speed, and the pause can be tuned.
+- Workday companies read and there are no such lines: the pause was enough.

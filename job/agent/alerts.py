@@ -146,7 +146,7 @@ def evaluate_long_run_alert(run_minutes: float | None, *, limit_minutes: float =
 FEEDS_FAILING_NAMES_SHOWN = 10
 
 
-def feeds_failing_alert(company_names: list[str], *, runs: int) -> AlertCandidate:
+def feeds_failing_alert(company_names: list[str], *, runs: int, rate_limited: int = 0) -> AlertCandidate:
     """Feeds that have failed `runs` or more reads in a row (BR-001.2): 37
     Workday feeds failed on every run for weeks and nothing said so. Fires
     once a day for as long as any feed is in that state.
@@ -157,7 +157,11 @@ def feeds_failing_alert(company_names: list[str], *, runs: int) -> AlertCandidat
     if count > len(shown):
         names += f" and {count - len(shown)} more"
     lead = "1 job feed has" if count == 1 else f"{count} job feeds have"
-    return AlertCandidate(FEEDS_FAILING, "warning", f"{lead} failed {runs} or more runs in a row: {names}.")
+    message = f"{lead} failed {runs} or more runs in a row: {names}."
+    if rate_limited:
+        # Not broken feeds: the site told us we were asking too fast (BR-004.4).
+        message += f" {rate_limited} {'was' if rate_limited == 1 else 'were'} told to slow down (HTTP 429)."
+    return AlertCandidate(FEEDS_FAILING, "warning", message)
 
 
 def discovery_failed_alert(reason: str) -> AlertCandidate:

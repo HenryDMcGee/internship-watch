@@ -80,7 +80,7 @@ Phases 1 to 4 build the thing. Phases 5 to 8 make it cheaper, wider and more pre
 
 **What you do after it merges.** Open the **Actions** tab, choose **Daily search**, and click **Run workflow** to start one by hand. Manual runs skip the 08:00 guard. Read the run summary afterward, then merge.
 
-**What to watch.** Feeds break when a company changes platforms. A feed that fails five runs in a row raises a "job feeds have failed" alert on the Analytics tab and in the daily summary, naming the companies. A feed whose address no longer exists is cleared on its own, so the company goes back to the careers-page reader and the scout; the run summary says which. Workday is read as a partial listing (internship and MBA searches only), so a posting missing from it is never taken as closed.
+**What to watch.** Feeds break when a company changes platforms. A feed that fails five runs in a row raises a "job feeds have failed" alert on the Analytics tab and in the daily summary, naming the companies. A feed whose address no longer exists is cleared on its own, so the company goes back to the careers-page reader and the scout; the run summary says which. Workday is read as a partial listing (internship and MBA searches only), so a posting missing from it is never taken as closed. Workday also tells fast readers to slow down, so its requests are spaced a second apart, a "too many requests" answer is waited out and tried once more, and a trial address that gets no real answer stays on trial instead of being demoted.
 
 ## Phase 3: Claude agent
 

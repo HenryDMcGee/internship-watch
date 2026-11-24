@@ -609,6 +609,12 @@ def _source_upkeep_summary_lines(adoption, feeds_cleared: list[dict], sources_de
             "read and demoted "
             f"{'it' if adoption.failed == 1 else 'them'}."
         )
+    if adoption and adoption.undecided:
+        one = adoption.undecided == 1
+        lines.append(
+            f"{adoption.undecided} trial feed address{'' if one else 'es'} could not be judged this run and "
+            f"wait{'s' if one else ''} for the next."
+        )
     not_found = [c["name"] for c in feeds_cleared if c.get("reason") != feed_health.NO_ADDRESS]
     if not_found:
         one = len(not_found) == 1
@@ -910,6 +916,7 @@ async def _run_body(db, run_id: int, started_at: str, kind: str, company_ids: li
             try:
                 sources_demoted = await sources_lifecycle.demote_stale_trials(
                     db, today=today_central(), exclude_ids=adoption.untried_source_ids,
+                    grace_ids=adoption.undecided_source_ids,
                 )
             except Exception as exc:  # noqa: BLE001 - source upkeep must never stop the run
                 print(f"demote_stale_trials: {exc}")
@@ -1107,6 +1114,7 @@ async def _run_body(db, run_id: int, started_at: str, kind: str, company_ids: li
         "feeds_adopted": len(adoption.adopted) if adoption else 0,
         "feeds_cleared": len(feeds_cleared),
         "sources_demoted": sources_demoted,
+        "sources_undecided": adoption.undecided if adoption else 0,
         "ranking_refresh": ranking_summary,
         "summary": summary,
         "agent_outcome": agent_outcome,
@@ -1215,7 +1223,10 @@ async def _finish_daily_run(
             failing_after = await feed_health.load_failing_after_runs(db)
             failing_feeds = await feed_health.failing_feed_names(db, failing_after)
             if failing_feeds:
-                candidates.append(feeds_failing_alert(failing_feeds, runs=failing_after))
+                candidates.append(feeds_failing_alert(
+                    failing_feeds, runs=failing_after,
+                    rate_limited=await feed_health.count_rate_limited_failing_feeds(db, failing_after),
+                ))
         except Exception as exc:  # noqa: BLE001 - one alert must never cost the rest
             print(f"feeds-failing alert: {exc}", file=sys.stderr)
         spike = evaluate_spike_alert(status.today.tokens, await _seven_day_avg_tokens(db, today_str))
