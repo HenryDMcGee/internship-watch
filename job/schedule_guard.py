@@ -1,9 +1,14 @@
-"""Guard for `.github/workflows/daily-search.yml`.
+"""Guard step for `.github/workflows/daily-search.yml`.
 
-Only lets the scheduled run through at 08:00 America/Chicago; manual runs
-(`workflow_dispatch`) always go through, skipping the guard. Written as a
-plain Python function so daylight saving time transitions are covered by
-pytest instead of only being checked by eye in the Actions log.
+Every run goes through. The guard used to let a scheduled run through only
+during the 08:00 hour in America/Chicago, but GitHub delivers the schedule 4
+to 8.5 hours late, so that check turned every scheduled run away. The run
+that fires is now the day's run, whenever GitHub gets to it; the Worker's
+cron trigger (`api/src/cron.py`) is what starts the workflow on time.
+
+The step stays because every later step of the workflow reads its
+`should_run` output. If a time rule is ever wanted again, this is the place
+for it, with pytest covering both halves of the year.
 """
 from __future__ import annotations
 
@@ -11,27 +16,11 @@ import os
 import sys
 from datetime import datetime
 
-try:
-    from zoneinfo import ZoneInfo
-except ImportError:  # pragma: no cover - zoneinfo is stdlib on 3.9+
-    ZoneInfo = None  # type: ignore
-
-CENTRAL = ZoneInfo("America/Chicago") if ZoneInfo else None
-
 
 def should_run_now(event_name: str, now: datetime | None = None) -> bool:
-    """True if the daily job should run now.
-
-    `now`, if given, may be timezone-aware (any timezone) or naive (assumed
-    to already be America/Chicago local time, for tests that don't want to
-    depend on `zoneinfo`).
+    """True if the daily job should run now, which is always. `event_name`
+    and `now` are kept so a time rule can come back without changing callers.
     """
-    if event_name == "workflow_dispatch":
-        return True
-    if now is None:
-        now = datetime.now(CENTRAL) if CENTRAL else datetime.utcnow()
-    elif now.tzinfo is not None and CENTRAL is not None:
-        now = now.astimezone(CENTRAL)
     return True
 
 

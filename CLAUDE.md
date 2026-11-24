@@ -12,7 +12,7 @@ A private tool that finds Summer 2027 MBA product-type internships every morning
 ## Stack
 
 * Python 3.12 for the daily job, scripts, and tests. The API uses the Python version Cloudflare's Python Workers runtime requires (3.13 at the time of writing).
-* Daily job: `job/`, runs on GitHub Actions at 08:00 America/Chicago. The workflow is scheduled at 13:00 and 14:00 UTC, and the first step exits unless it is 08:00 in Chicago.
+* Daily job: `job/`, runs on GitHub Actions at 08:00 America/Chicago. The workflow is scheduled once, at 13:00 UTC, but GitHub delivers that schedule hours late, so the guard step no longer checks the hour and every run goes through. The Worker's cron trigger starts the workflow on time.
 * App: one Cloudflare Python Worker in `api/`, configured by `api/wrangler.toml` (keep its settings: `workers\_dev = false`, `preview\_urls = false`, the route, the `ASSETS` and `DB` bindings). FastAPI serves `/api/\*` and passes every other path to the `ASSETS` binding. Use `pywrangler`: `uv run pywrangler dev` and `uv run pywrangler deploy`. Python Workers only support packages that run on Pyodide. If something needed won't run there, propose a small TypeScript Worker instead of working around it.
 * Database: Cloudflare D1 (SQLite). Migrations in `db/migrations/`, numbered `0001\_\*.sql`. Local development uses `wrangler` with a local D1.
 * Dashboard: static HTML, CSS, and JavaScript in `frontend/`, served by the same Worker as static assets. It calls the API at `/api/\*` on the same domain. Keep the look of `docs/reference/current-dashboard.html`.
