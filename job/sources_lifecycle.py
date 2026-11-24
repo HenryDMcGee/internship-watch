@@ -33,6 +33,10 @@ SCOUT = "claude-scout"
 # add to a run that is already close to its 60-minute limit.
 ADOPTION_TRIES_PER_RUN = 25
 ADOPTION_SECONDS_PER_RUN = 120
+# Failed reads in a row before a feed that has an address may be replaced.
+# The run passes the feed-health setting (`job/feed_health.py`); this is its
+# default.
+FAILING_AFTER_RUNS = 5
 # amazon.jobs lists every Amazon company in one feed, so a page there says
 # nothing about which company it belongs to.
 ADOPTABLE_FEEDS = frozenset({"greenhouse", "lever", "ashby", "smartrecruiters", "workday"})
@@ -90,21 +94,47 @@ def _by_importance(company: dict) -> tuple:
     return (rank is None, rank or 0, company.get("id") or 0)
 
 
-def _wants_a_feed(company: dict) -> bool:
-    """No feed at all, or a feed whose last read failed. A feed that has
-    never been read has not failed yet and is left alone.
+def _wants_a_feed(company: dict, failing_after: int) -> bool:
+    """Whether a trial address may become this company's feed:
+      * it has no feed, or
+      * its Workday feed has no site address on file, so there is nothing to
+        read, or
+      * its feed counts as failing: `failing_after` failed reads in a row,
+        the same line the feed-health alert draws.
+    A feed that has an address and has failed less than that is left alone.
+    One bad morning is not a reason to swap a company's board for another.
     """
-    if not company.get("feed_type"):
+    feed_type = company.get("feed_type")
+    if not feed_type:
         return True
-    return company.get("last_feed_status") == "error"
+    if feed_type == "workday" and workday.parse_site_link(company.get("feed_url") or company.get("careers_url")) is None:
+        return True
+    return company.get("last_feed_status") == "error" and (company.get("feed_failures") or 0) >= failing_after
+
+
+def _source_is_for(company: dict, names: list[str], source: dict, feed_type: str, feed_id: str | None) -> bool:
+    """A source belongs to a company when its name starts with the company's
+    name, or its address is on the board the company's feed already names.
+    Being mentioned somewhere in the source's description is not enough:
+    every "(Workday)" source mentions the company named Workday.
+    """
+    if (
+        feed_id and company.get("feed_type") == feed_type
+        and (company.get("feed_id") or "").lower() == feed_id.lower()
+    ):
+        return True
+    source_name = f"{coverage.words(source.get('name') or '')} "
+    return any(source_name.startswith(f"{name} ") for name in names)
 
 
 async def adopt_trial_feeds(
     db, companies: list[dict], *, fetch, now_iso: str, limit: int = ADOPTION_TRIES_PER_RUN,
     seconds_budget: float = ADOPTION_SECONDS_PER_RUN, clock=time.monotonic,
+    failing_after: int = FAILING_AFTER_RUNS,
 ) -> AdoptionOutcome:
-    """Tries trial feed addresses for the companies in `companies` that have
-    no working feed, most important company first and newest address first,
+    """Tries trial feed addresses for the companies in `companies` that want
+    a feed (`_wants_a_feed`), most important company first and newest address
+    first,
     and adopts the first one that can be read. `fetch` is the feed reader
     (`job.fetchers.run_fetcher`); a read with no error is a success even when
     it lists nothing, since a correct feed can be empty out of season.
@@ -116,7 +146,7 @@ async def adopt_trial_feeds(
     over are reported as untried and wait for the next run.
     """
     outcome = AdoptionOutcome()
-    wanting = sorted((c for c in companies if _wants_a_feed(c)), key=_by_importance)
+    wanting = sorted((c for c in companies if _wants_a_feed(c, failing_after)), key=_by_importance)
     if not wanting:
         return outcome
     rows = await db.all("SELECT * FROM sources WHERE status = 'trial' ORDER BY discovered_at DESC, id DESC")
@@ -133,7 +163,7 @@ async def adopt_trial_feeds(
     for company in wanting:
         names = coverage.company_names(company)
         for source, (feed_type, feed_id, feed_url) in candidates:
-            if source["status"] != "trial" or not coverage.source_mentions(source, names):
+            if source["status"] != "trial" or not _source_is_for(company, names, source, feed_type, feed_id):
                 continue
             if tries >= limit or clock() - started >= seconds_budget:
                 outcome.untried_source_ids.add(source["id"])

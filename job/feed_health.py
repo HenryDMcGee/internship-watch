@@ -18,12 +18,12 @@ import re
 
 from job import config  # noqa: F401 -- adds api/src to sys.path for the import below
 from job.fetchers import workday
-from job.sources_lifecycle import normalize_url
+from job.sources_lifecycle import FAILING_AFTER_RUNS, normalize_url
 
 from companies import detect_feed  # noqa: E402
 
 FAILING_AFTER_RUNS_KEY = "feed_failing_after_runs"
-DEFAULT_FAILING_AFTER_RUNS = 5
+DEFAULT_FAILING_AFTER_RUNS = FAILING_AFTER_RUNS
 
 # Never cleared for returning "not found". The Workday reader has not been
 # tried against live sites, and a mistake in how it forms the address would

@@ -76,10 +76,10 @@ def _source_mentions(source: dict, company_names: list[str]) -> bool:
     return any(f" {name} " in text for name in company_names)
 
 
-# Public names for `job/sources_lifecycle.py`, which matches a trial source to
-# a company the same way the careers backfill does.
+# Public names for `job/sources_lifecycle.py`, which reads a company's names
+# the same way the careers backfill does.
 company_names = _names_for
-source_mentions = _source_mentions
+words = _words
 
 
 def _source_rank(source: dict) -> tuple:
