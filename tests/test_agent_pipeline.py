@@ -1175,3 +1175,30 @@ def test_scout_falls_back_to_its_other_find_when_the_best_one_is_demoted(empty_d
     company = run(empty_db.first("SELECT * FROM companies WHERE id = ?", company_id))
     assert company["feed_type"] is None
     assert company["careers_url"] == "https://www.acme.example/careers"
+
+
+# -- BR-001.4: an excluded company's pages are not stored ----------------------
+
+def test_scout_does_not_store_a_page_for_a_china_based_company_off_the_list(empty_db):
+    _insert_company(empty_db, name="JD.com", status="removed", hq_country="CN", feed_type=None)
+    acme_id = _insert_company(empty_db, feed_type=None)
+
+    stored = _store_scout(
+        empty_db,
+        [_scout_found("JD.com", "https://campus.jd.com/"), _scout_found("Acme", "https://www.acme.example/careers")],
+        [{"id": acme_id, "name": "Acme"}],
+    )
+
+    assert stored == 1
+    assert [r["url"] for r in run(empty_db.all("SELECT url FROM sources"))] == ["https://www.acme.example/careers"]
+
+
+def test_scout_still_stores_a_page_for_a_china_based_company_henry_pinned(empty_db):
+    # A pin is Henry's own choice and outranks the exclusion, here as everywhere.
+    company_id = _insert_company(empty_db, name="Xiaomi", status="pinned", hq_country="CN", feed_type=None)
+
+    stored = _store_scout(
+        empty_db, [_scout_found("Xiaomi", "https://hr.xiaomi.com/campus")], [{"id": company_id, "name": "Xiaomi"}],
+    )
+
+    assert stored == 1
