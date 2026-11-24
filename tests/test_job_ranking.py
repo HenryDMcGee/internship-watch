@@ -86,3 +86,52 @@ def test_refresh_ranking_detects_feed_for_newly_inserted_company(empty_db, tmp_p
     assert acme["careers_url"] == "https://boards.greenhouse.io/acme"
     assert acme["feed_type"] == "greenhouse"
     assert acme["feed_id"] == "acme"
+
+
+# -- BR-001.4: excluded countries never enter the tracked list -----------------
+
+def test_refresh_ranking_never_adds_a_company_from_an_excluded_country(empty_db, tmp_path):
+    csv_path = tmp_path / "ranking.csv"
+    csv_path.write_text(
+        "rank,name,market_cap_usd_billions,hq_country,as_of_date,source\n"
+        "1,Acme,100,US,2027-01-01,manual snapshot\n"
+        "2,Tencent,90,CN,2027-01-01,manual snapshot\n",
+        encoding="utf-8",
+    )
+
+    summary = run(refresh_ranking(empty_db, ranking_csv=csv_path, today="2027-01-01"))
+
+    assert summary["inserted"] == 1
+    names = [r["name"] for r in run(empty_db.all("SELECT name FROM companies"))]
+    assert names == ["Acme"]
+
+
+def test_refresh_ranking_removes_a_ranked_company_from_an_excluded_country(empty_db, tmp_path):
+    csv_path = tmp_path / "ranking.csv"
+    csv_path.write_text(
+        "rank,name,market_cap_usd_billions,hq_country,as_of_date,source\n"
+        "1,Acme,100,US,2027-01-01,manual snapshot\n"
+        "2,JD.com,40,CN,2027-01-01,manual snapshot\n",
+        encoding="utf-8",
+    )
+    run(empty_db.run("INSERT INTO companies (name, status, rank, hq_country) VALUES ('JD.com', 'ranked', 60, 'CN')"))
+
+    run(refresh_ranking(empty_db, ranking_csv=csv_path, today="2027-01-01"))
+
+    jd = run(empty_db.first("SELECT * FROM companies WHERE name = 'JD.com'"))
+    assert jd["status"] == "removed"
+
+
+def test_refresh_ranking_leaves_a_pinned_company_from_an_excluded_country_alone(empty_db, tmp_path):
+    # A pin is Henry's own decision and outranks the country rule.
+    csv_path = tmp_path / "ranking.csv"
+    csv_path.write_text(
+        "rank,name,market_cap_usd_billions,hq_country,as_of_date,source\n"
+        "1,Xiaomi,100,CN,2027-01-01,manual snapshot\n",
+        encoding="utf-8",
+    )
+    run(empty_db.run("INSERT INTO companies (name, status, hq_country) VALUES ('Xiaomi', 'pinned', 'CN')"))
+
+    run(refresh_ranking(empty_db, ranking_csv=csv_path, today="2027-01-01"))
+
+    assert run(empty_db.first("SELECT status FROM companies WHERE name = 'Xiaomi'"))["status"] == "pinned"
