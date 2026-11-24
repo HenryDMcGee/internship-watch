@@ -241,6 +241,51 @@ def test_attempts_are_capped_per_run_and_the_untried_sources_are_reported(empty_
     assert outcome.untried_source_ids == {ids[2], ids[3]}
 
 
+def test_adoption_stops_when_its_time_for_the_run_is_used_up(empty_db):
+    # The daily run has a 60-minute limit and is close to it. Slow sites must
+    # not let this step eat the run; what is left waits for the next one.
+    ids = []
+    for n in range(4):
+        _insert_company(empty_db, name=f"Company{n}", feed_type=None, rank=n + 1)
+        ids.append(_insert_source(
+            empty_db, name=f"Company{n} careers", url=f"https://boards.greenhouse.io/company{n}",
+        ))
+    now = [0.0]
+    calls = []
+
+    def slow_fetch(company, session=None):
+        calls.append(company["name"])
+        now[0] += 50.0
+        return _fetch_ok(company)
+
+    outcome = run(sources_lifecycle.adopt_trial_feeds(
+        empty_db, _companies(empty_db), fetch=slow_fetch, now_iso="2026-11-24T08:00:00-06:00",
+        seconds_budget=120, clock=lambda: now[0],
+    ))
+
+    assert calls == ["Company0", "Company1", "Company2"]  # 0s, 50s, 100s; at 150s the time is gone
+    assert outcome.untried_source_ids == {ids[3]}
+
+
+def test_a_feed_that_has_never_been_read_is_not_replaced(empty_db):
+    # Henry added the company with its board a moment ago. Until that feed
+    # has been read and has failed, a trial source has no business replacing it.
+    company_id = _insert_company(empty_db, name="Acme", feed_type="lever", feed_id="acme", last_feed_status=None)
+    _insert_source(empty_db)
+    calls = []
+
+    def fetch(company, session=None):
+        calls.append(company)
+        return _fetch_ok(company)
+
+    run(sources_lifecycle.adopt_trial_feeds(
+        empty_db, _companies(empty_db), fetch=fetch, now_iso="2026-11-24T08:00:00-06:00",
+    ))
+
+    assert calls == []
+    assert run(empty_db.first("SELECT * FROM companies WHERE id = ?", company_id))["feed_type"] == "lever"
+
+
 def test_a_fetcher_that_raises_counts_as_a_failed_try_and_does_not_stop_the_rest(empty_db):
     _insert_company(empty_db, name="Alpha", feed_type=None, rank=1)
     beta = _insert_company(empty_db, name="Beta", feed_type=None, rank=2)
