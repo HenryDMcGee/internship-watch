@@ -110,6 +110,22 @@ def test_a_feed_whose_address_404s_for_the_threshold_is_cleared_and_the_summary_
     assert run(empty_db.all("SELECT * FROM alerts WHERE type = 'feeds_failing'")) == []
 
 
+def test_a_workday_feed_with_no_address_on_file_is_cleared_and_the_summary_says_so(empty_db, monkeypatch):
+    company_id = _insert_company(
+        empty_db, name="Samsung Electronics", feed_type="workday", feed_id="samsung", feed_failures=4,
+        careers_url="https://www.samsung.com/us/careers/internships/",
+    )
+    monkeypatch.setattr(run_module, "run_fetcher", _failing(
+        "Samsung Electronics: feed address isn't a Workday site link"
+    ))
+
+    result = run(run_module.run(empty_db, kind="daily"))
+
+    assert _company(empty_db, company_id)["feed_type"] is None
+    assert result["feeds_cleared"] == 1
+    assert "Cleared 1 Workday feed that has no site address on file (Samsung Electronics)." in result["summary"]
+
+
 # -- BR-001.1: partial listings ----------------------------------------------
 
 def _capture_verify(monkeypatch):

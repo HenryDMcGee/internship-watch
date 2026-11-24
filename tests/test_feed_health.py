@@ -193,6 +193,38 @@ def test_clear_dead_feeds_never_clears_a_workday_feed(empty_db):
     assert run(empty_db.all("SELECT * FROM sources")) == []
 
 
+def test_clear_dead_feeds_clears_a_workday_feed_that_has_no_address_to_read(empty_db):
+    # Four Workday companies have only a marketing page on file and no site
+    # link anywhere. There is nothing to read, so after the threshold the
+    # company goes back to the careers-page reader instead of erroring forever.
+    company_id = _insert_company(
+        empty_db, name="Samsung Electronics", feed_type="workday", feed_id="samsung",
+        careers_url="https://www.samsung.com/us/careers/internships/", last_feed_status="error", feed_failures=5,
+        last_feed_error="Samsung Electronics: feed address isn't a Workday site link",
+    )
+
+    cleared = run(feed_health.clear_dead_feeds(empty_db, threshold=5, now_iso="2026-11-24T08:00:00"))
+
+    assert [(c["name"], c["reason"]) for c in cleared] == [("Samsung Electronics", "no_address")]
+    company = _company(empty_db, company_id)
+    assert company["feed_type"] is None
+    assert company["last_feed_status"] == "no_source"
+    # The page a person reads is not a feed address and stays.
+    assert company["careers_url"] == "https://www.samsung.com/us/careers/internships/"
+    assert run(empty_db.all("SELECT * FROM sources")) == []
+
+
+def test_clear_dead_feeds_says_why_a_feed_was_cleared(empty_db):
+    _insert_company(
+        empty_db, name="Etsy", feed_type="greenhouse", feed_id="etsy", last_feed_status="error", feed_failures=5,
+        last_feed_error="https://boards-api.greenhouse.io/v1/boards/etsy/jobs returned HTTP 404",
+    )
+
+    cleared = run(feed_health.clear_dead_feeds(empty_db, threshold=5, now_iso="2026-11-24T08:00:00"))
+
+    assert [(c["name"], c["reason"]) for c in cleared] == [("Etsy", "not_found")]
+
+
 def test_clear_dead_feeds_remembers_the_dead_address_so_it_is_not_adopted_again(empty_db):
     _insert_company(
         empty_db, name="Etsy", feed_type="greenhouse", feed_id="etsy", careers_url="https://boards.greenhouse.io/etsy",

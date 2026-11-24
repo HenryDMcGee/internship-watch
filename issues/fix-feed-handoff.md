@@ -158,6 +158,11 @@ addresses and block them from being adopted again. A Workday feed that keeps fai
 reported by the feed-health alert like any other, and Henry decides. Lift the exemption
 once a run shows Workday feeds reading.
 
+The one Workday case that is cleared is a feed with no site address on file at all (the
+four Group B companies with no address found). There is nothing to read and nothing to
+lose, so after the same number of failed runs the company falls back to the careers-page
+reader, as the Group B rule above says.
+
 **Partial listings.** The Workday reader asks for internship and MBA postings only, a few
 pages at most, so that reading 37 large companies does not add to run time. A posting
 missing from that partial list is not treated as closed; only a posting found in it is
