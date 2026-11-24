@@ -4,10 +4,7 @@ import pytest
 from job.agent.client import ClaudeStepResult
 from job.agent.schemas import ClaudeOutputError
 from job.agent.scout import (
-    DEMOTE_AFTER_EMPTY_CHECKS,
-    PROMOTE_AFTER_FOUND,
     new_source_row,
-    next_source_status,
     order_companies_for_scout,
     run_scout,
     split_companies_by_coverage,
@@ -89,21 +86,6 @@ def test_new_source_row_starts_as_trial():
     assert row["found_count"] == 0
     assert row["discovered_by"] == "claude-scout"
 
-
-def test_next_source_status_promotes_after_found_posting():
-    assert next_source_status("trial", found_count=PROMOTE_AFTER_FOUND, empty_checks_in_a_row=0) == "active"
-
-
-def test_next_source_status_demotes_after_repeated_empty_checks():
-    assert next_source_status("active", found_count=0, empty_checks_in_a_row=DEMOTE_AFTER_EMPTY_CHECKS) == "demoted"
-
-
-def test_next_source_status_stays_put_when_neither_threshold_met():
-    assert next_source_status("trial", found_count=0, empty_checks_in_a_row=1) == "trial"
-
-
-def test_next_source_status_never_touches_a_source_already_demoted():
-    assert next_source_status("demoted", found_count=0, empty_checks_in_a_row=5) == "demoted"
 
 
 def test_order_companies_for_scout_puts_never_scouted_before_already_tried():

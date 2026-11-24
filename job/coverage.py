@@ -76,6 +76,12 @@ def _source_mentions(source: dict, company_names: list[str]) -> bool:
     return any(f" {name} " in text for name in company_names)
 
 
+# Public names for `job/sources_lifecycle.py`, which matches a trial source to
+# a company the same way the careers backfill does.
+company_names = _names_for
+source_mentions = _source_mentions
+
+
 def _source_rank(source: dict) -> tuple:
     url = (source.get("url") or "").lower()
     return (

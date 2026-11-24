@@ -25,9 +25,10 @@ WORKERS_PAID_SUGGESTED = "workers_paid_suggested"
 DISCOVERY_FAILED = "discovery_failed"
 RUN_DEGRADED = "run_degraded"
 LONG_RUN = "long_run"
+FEEDS_FAILING = "feeds_failing"
 
 ALERT_TYPES = frozenset({
-    DISCOVERY_FAILED, RUN_DEGRADED, LONG_RUN,
+    DISCOVERY_FAILED, RUN_DEGRADED, LONG_RUN, FEEDS_FAILING,
     BUDGET_80, BUDGET_100, USAGE_SPIKE, CLAUDE_LIMIT, RUN_FAILED, CLAUDE_NOT_CONFIGURED, CLAUDE_STEP_ISSUE,
     BROWSER_RUN_80, BROWSER_RUN_100, BROWSER_RUN_MONTH_80, BROWSER_RUN_MONTH_100, WORKERS_PAID_SUGGESTED,
 })
@@ -140,6 +141,23 @@ def evaluate_long_run_alert(run_minutes: float | None, *, limit_minutes: float =
             "2,000 free Actions minutes a month.",
         )
     return None
+
+
+FEEDS_FAILING_NAMES_SHOWN = 10
+
+
+def feeds_failing_alert(company_names: list[str], *, runs: int) -> AlertCandidate:
+    """Feeds that have failed `runs` or more reads in a row (BR-001.2): 37
+    Workday feeds failed on every run for weeks and nothing said so. Fires
+    once a day for as long as any feed is in that state.
+    """
+    count = len(company_names)
+    shown = company_names[:FEEDS_FAILING_NAMES_SHOWN]
+    names = ", ".join(shown)
+    if count > len(shown):
+        names += f" and {count - len(shown)} more"
+    lead = "1 job feed has" if count == 1 else f"{count} job feeds have"
+    return AlertCandidate(FEEDS_FAILING, "warning", f"{lead} failed {runs} or more runs in a row: {names}.")
 
 
 def discovery_failed_alert(reason: str) -> AlertCandidate:

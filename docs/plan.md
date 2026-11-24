@@ -48,7 +48,7 @@ Every morning, find open Summer 2027 MBA internships that match Henry's titles a
    6. Henry's Mark open or Mark closed answer, which sticks unless the posting disappears from the company's own feed
 7. Archive postings that are gone, past their deadline, no longer accepting applications, or for the wrong cycle, such as "MBA class of 2027". Never delete.
 8. Save everything to D1 and record verification method and time.
-9. Source scout: find careers pages, feeds, and job boards for companies without a working source first. New sources start as `trial` and become `active` after finding a real open posting. Sources that keep finding nothing are `demoted`. Retiring needs Henry's approval.
+9. Source scout: find careers pages, feeds, and job boards for companies without a working source first. New sources start as `trial`. A trial source on a job-feed platform is tried for the company it names and becomes `active` when it is adopted as that company's feed. A trial source that can't be read, or isn't adopted within 30 days, is `demoted` (kept, never deleted) and is not proposed again (BR-001, `docs/requirements/BR-001-feed-coverage.md`). Removing a source needs Henry's approval.
 10. Daily improvement: write tomorrow's search plan. Small changes (query wording, source order) apply automatically. Company and source changes go to Proposals. Title suggestions are pull requests editing `config/titles.json`.
 11. Record usage per Claude call, evaluate alert rules, and trigger the Claude routine with the daily summary and any alerts.
 

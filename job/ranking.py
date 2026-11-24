@@ -24,6 +24,11 @@ from companies import detect_feed, normalize_company_name  # noqa: E402
 
 REFRESH_MONTHS = {1, 4, 7, 10}
 
+# Henry's exclusion rule (BR-001.4): companies headquartered here are never
+# added by the ranking, and a ranked one is removed at the next refresh. A
+# pinned company is his own choice and stays.
+EXCLUDED_HQ_COUNTRIES = frozenset({"CN"})
+
 
 def is_quarterly_refresh_day(day: date) -> bool:
     """True on the first weekday (Mon-Fri) of January, April, July, or October."""
@@ -71,7 +76,7 @@ def load_ranking_csv(path: Path = RANKING_CSV) -> list[RankingRow]:
 async def refresh_ranking(db, *, ranking_csv: Path = RANKING_CSV, today: str | None = None) -> dict:
     """Apply `seed/ranking.csv` to the `companies` table. Returns a summary dict."""
     today = today or date.today().isoformat()
-    rows = load_ranking_csv(ranking_csv)
+    rows = [r for r in load_ranking_csv(ranking_csv) if r.hq_country.upper() not in EXCLUDED_HQ_COUNTRIES]
     by_normalized = {normalize_company_name(r.name): r for r in rows}
 
     existing = await db.all("SELECT id, name, status FROM companies")

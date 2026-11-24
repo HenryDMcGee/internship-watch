@@ -29,6 +29,7 @@ def verify_posting(
     browser_budget: BrowserBudget,
     now_iso: str,
     found_on_careers_page: bool = False,
+    feed_listing_complete: bool = True,
     session=None,
     check_structured=check_structured_data,
     check_browser=check_via_browser,
@@ -37,7 +38,9 @@ def verify_posting(
 ) -> VerifyOutcome:
     user_status = posting.get("user_status")
     user_status_at = posting.get("user_status_at")
-    posting_disappeared = feed_checked_ok and not found_in_current_feed
+    # A partial listing (`job.fetchers.PARTIAL_LISTING_FEEDS`) can confirm a
+    # posting is open, but a posting missing from it has not disappeared.
+    posting_disappeared = feed_checked_ok and feed_listing_complete and not found_in_current_feed
 
     # Henry's Mark open/closed answer sticks unless the posting disappears
     # from the company's own feed.
@@ -50,10 +53,11 @@ def verify_posting(
     if feed_checked_ok:
         if found_in_current_feed:
             return VerifyOutcome(status="open", verified_via="feed", verified_at=now_iso)
-        return VerifyOutcome(
-            status="closed", verified_via="feed", verified_at=now_iso,
-            note="No longer listed in the company's feed.",
-        )
+        if feed_listing_complete:
+            return VerifyOutcome(
+                status="closed", verified_via="feed", verified_at=now_iso,
+                note="No longer listed in the company's feed.",
+            )
 
     # 1b. Listed on the company's own careers page this run. Only a listing
     # confirms anything: careers pages often show just their first page of

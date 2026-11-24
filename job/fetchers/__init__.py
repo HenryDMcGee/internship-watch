@@ -21,6 +21,15 @@ FETCHERS = {
     "amazon_jobs": amazon.fetch,
 }
 
+# Feeds whose reader asks for a filtered or capped listing (see
+# `workday.py`). A posting found in one is confirmed open; a posting missing
+# from one proves nothing, so it must never be closed on that basis.
+PARTIAL_LISTING_FEEDS = frozenset({"workday"})
+
+
+def listing_is_complete(feed_type: str | None) -> bool:
+    return feed_type not in PARTIAL_LISTING_FEEDS
+
 
 @dataclass
 class FetchResult:

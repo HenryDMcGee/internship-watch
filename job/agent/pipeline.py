@@ -25,8 +25,10 @@ from job.agent.schemas import ClaudeOutputError
 from job.agent.titles_pr import open_title_suggestions_pr
 from job.agent.usage import record_usage
 from job.config import load_search_plan, load_watchlist_setting
-from job import coverage, fingerprint
+from job import coverage, fingerprint, sources_lifecycle
+from job.fetchers import workday
 from job.locations import location_match as compute_location_match
+from job.ranking import EXCLUDED_HQ_COUNTRIES
 from job.matching import classify_posting, find_role_conflict, reconsider_rejection
 from job.save_posting import CLASSIFICATION_METHOD, Candidate, canonical_active_title, save_posting
 
@@ -479,13 +481,11 @@ async def _apply_classification_decisions(
 
 
 async def _store_scout_sources(db, found: list[dict], *, now_iso: str, companies: list[dict]) -> int:
-    # `scout.next_source_status` (trial -> active after a real open posting,
-    # or -> demoted after repeated empty checks) needs a found/empty-check
-    # count this step doesn't have -- Claude proposing a URL again isn't
-    # proof of an open posting. That promotion/demotion signal belongs with
-    # whatever actually checks the source (a future increment); for now,
-    # re-finding an already-known source just refreshes when it was last
-    # seen, and status changes stay a later step's job.
+    # A source stored here starts on trial. What happens to it next is
+    # `job/sources_lifecycle.py`'s job, at the start of the next daily run:
+    # adopted as a company's feed if it can be read, demoted if it can't or
+    # if 30 days pass. Re-finding a known source only refreshes when it was
+    # last seen -- Claude proposing a URL again isn't proof of anything.
     companies_by_name = {
         normalize_company_name(c["name"]): c for c in companies if c.get("name")
     }
@@ -493,11 +493,33 @@ async def _store_scout_sources(db, found: list[dict], *, now_iso: str, companies
     companies_updated = 0
     companies_covered: set[int] = set()
     found_by_company: dict[int, list[dict]] = {}
+    # Every page already on file, by normalized address (BR-001.5): the same
+    # page with a trailing slash, another letter case or a query string is not
+    # a new source. `None` marks a page first stored earlier in this reply.
+    known: dict[str, dict | None] = {}
+    for row in await db.all("SELECT id, url, status FROM sources WHERE url IS NOT NULL"):
+        known.setdefault(sources_lifecycle.normalize_url(row["url"]), row)
+    # Companies kept off the list by where they are based (BR-001.4). A page
+    # for one is not stored, unless Henry pinned the company and it is in
+    # this batch.
+    clause, param = in_json("hq_country", sorted(EXCLUDED_HQ_COUNTRIES))
+    excluded_names = {
+        normalize_company_name(r["name"]) for r in await db.all(f"SELECT name FROM companies WHERE {clause}", param)
+    } - set(companies_by_name)
     for f in found:
-        existing = await db.first("SELECT * FROM sources WHERE url = ?", f["url"])
-        if existing:
-            await db.run("UPDATE sources SET last_checked = ? WHERE id = ?", now_iso, existing["id"])
+        if normalize_company_name(f.get("company_name") or "") in excluded_names:
+            continue
+        key = sources_lifecycle.normalize_url(f["url"])
+        if key in known:
+            existing = known[key]
+            if existing:
+                await db.run("UPDATE sources SET last_checked = ? WHERE id = ?", now_iso, existing["id"])
+                if existing["status"] == "demoted":
+                    # Tried and dropped, or never adopted in 30 days. It stays
+                    # dropped: not stored again, and not set on a company.
+                    continue
         else:
+            known[key] = None
             row = scout.new_source_row(f, now_iso=now_iso)
             await db.run(
                 """INSERT INTO sources (name, url, kind, covers, status, discovered_by, discovered_at,
@@ -531,7 +553,8 @@ async def _store_scout_sources(db, found: list[dict], *, now_iso: str, companies
 async def _apply_scout_company_feed(db, found: dict, companies_by_name: dict) -> bool:
     """Attaches a scout result to the company it names, on the company's own
     row, so the company stops counting as uncovered (issues #20, #63):
-      * a URL on a recognized feed platform sets `feed_type` and `feed_id`;
+      * a URL on a recognized feed platform sets `feed_type`, `feed_id` and
+        `feed_url` (the address the feed is read from);
       * any other URL sets `careers_url` and marks it "careers page, no feed",
         for the careers-page reader.
     Never overwrites a working feed, or a `careers_url` Henry approved
@@ -546,20 +569,28 @@ async def _apply_scout_company_feed(db, found: dict, companies_by_name: dict) ->
     if not row or coverage.feed_is_working(row):
         return False
     approved = bool(row.get("careers_url_approved"))
-    feed_type, feed_id = detect_feed(url)
+    feed_type, feed_id = _scout_feed(url)
 
     if feed_type:
+        # The feed's own address goes in `feed_url` (BR-001.3), so nothing
+        # that later changes `careers_url` can break the feed.
+        feed_url = sources_lifecycle.strip_query(url)
         if approved:
             await db.run(
-                "UPDATE companies SET feed_type = ?, feed_id = ?, careers_note = NULL WHERE id = ?",
-                feed_type, feed_id, company["id"],
+                "UPDATE companies SET feed_type = ?, feed_id = ?, feed_url = ?, feed_failures = 0, "
+                "careers_note = NULL WHERE id = ?",
+                feed_type, feed_id, feed_url, company["id"],
             )
         else:
             await db.run(
-                "UPDATE companies SET careers_url = ?, feed_type = ?, feed_id = ?, careers_note = NULL WHERE id = ?",
-                url, feed_type, feed_id, company["id"],
+                "UPDATE companies SET careers_url = ?, feed_type = ?, feed_id = ?, feed_url = ?, feed_failures = 0, "
+                "careers_note = NULL WHERE id = ?",
+                url, feed_type, feed_id, feed_url, company["id"],
             )
         return True
+
+    # Not a feed: this is the page a person reads, and only that. The feed
+    # fields are left exactly as they are, working or not.
 
     if approved or row.get("careers_url") == url:
         return False
@@ -579,8 +610,18 @@ def _scout_candidate_rank(found: dict) -> tuple[int, int]:
     looks like an internship-filtered listing page.
     """
     url = found.get("url") or ""
-    feed_type, _ = detect_feed(url)
+    feed_type, _ = _scout_feed(url)
     return (0 if feed_type else 1, 0 if "intern" in url.lower() else 1)
+
+
+def _scout_feed(url: str) -> tuple[str | None, str | None]:
+    """`detect_feed`, except a Workday link that names no site is not a feed:
+    the Workday reader can't be pointed at a bare host.
+    """
+    feed_type, feed_id = detect_feed(url)
+    if feed_type == "workday" and workday.parse_site_link(url) is None:
+        return None, None
+    return feed_type, feed_id
 
 
 async def _store_careers_repair_proposals(
