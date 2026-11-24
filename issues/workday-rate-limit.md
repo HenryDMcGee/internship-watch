@@ -56,26 +56,48 @@ a run shares one allowance, `RETRY_WAIT_SECONDS_PER_RUN` (90). When it is used u
 fails at once.
 
 **Keep what was read.** If a request is still refused after the retry and the company
-already has postings from an earlier page or search, stop and return those. The listing
+has already had at least one request answered, stop and return what those gave, even if
+that is nothing.
+
+**Changed:** the first wording said "already has postings". A company whose internship
+search was answered with no results and whose MBA search was then refused has been read:
+the address works and the site answered. It counts as read.
+
+Continuing the rule: The listing
 is partial by design (`PARTIAL_LISTING_FEEDS`), so nothing downstream reads a missing
 posting as closed. If nothing has been read, the read fails with an error that names the
 search, the page, and how many requests had succeeded.
 
-**Stop asking.** After `STOP_AFTER_REFUSED_READS` (3) companies in a row end refused,
-the remaining Workday companies are not asked in this run. Each fails with an error that
+**Stop asking.** After `STOP_AFTER_REFUSED_READS` (3) companies in a row on the same
+Workday data center end refused, the remaining companies on that data center are not
+asked in this run. The data center is the `wd1` or `wd5` part of the host.
+
+**Changed:** the first wording stopped all of Workday. On run 111 the first three Workday
+companies read were on `wd1` and all three were refused, while Microchip and Fiserv on
+`wd5` read minutes later. Stopping everything would have turned the two feeds that work
+into none.
+
+Continuing the rule: Each fails with an error that
 says so and contains "HTTP 429", so it is classed as a refusal everywhere else. A
 successful read resets the count.
 
-**A refused try is not a verdict.** In `adopt_trial_feeds`, only an error that
-`is_dead_address_error` accepts (HTTP 404) demotes the source. Any other error leaves it
-on trial, counts it in a new `AdoptionOutcome.undecided`, and reports it with the untried
-addresses so the 30-day rule does not demote it in the same run. After a 429, no further
-address on that platform is tried in the run.
+**A refused try is not a verdict.** In `adopt_trial_feeds`, a temporary error leaves the
+source on trial and counts it in a new `AdoptionOutcome.undecided`. Temporary means the
+site did not give a real answer: HTTP 429, any 5xx, or no answer at all (a timeout or a
+failed connection). The undecided ids are passed to the 30-day rule, which leaves them
+alone for `UNDECIDED_GRACE_DAYS` (14) past the 30. After a 429, no further address on
+that platform is tried in the run.
+
+**Changed:** the first wording said only a 404 demotes. Other real answers still demote
+as they do today: a 403 is a site blocking us, which we respect, and a malformed answer
+or a 400 is a wrong address. And an undecided address does not wait forever: a site that
+answers 500 to a wrong address would otherwise keep it on trial for good.
 
 **A refused feed is not a failing address.** `_wants_a_feed` does not treat a feed as
 replaceable while its last error is a rate limit, however many runs in a row.
 
-**Say so.** The run summary gains one sentence when `undecided` is above zero.
+**Say so.** The run summary gains one sentence when `undecided` is above zero. The
+feeds-failing alert says how many of the feeds it names were told to slow down.
 
 ### Architecture
 
@@ -93,18 +115,19 @@ seconds of retry waits.
 3. [BR-004.1] A company refused on a later page or search returns the postings already
    read, and the read counts as successful.
 4. [BR-004.2] A trial address whose try ends in 429, a timeout or a 5xx stays `trial`.
-   Only a 404 demotes it.
-5. [BR-004.2] An address left undecided is not demoted by the 30-day rule in the same
-   run.
+   A 404, a 403 or a malformed answer demotes it.
+5. [BR-004.2] An address left undecided is not demoted by the 30-day rule until it is 14
+   days past it.
 6. [BR-004.2] A feed whose last error is a rate limit is not replaced by a trial
    address, at any number of failed runs.
 7. [BR-004.3] The same request is never sent more than twice, and total retry waiting
    in a run never exceeds `RETRY_WAIT_SECONDS_PER_RUN`.
-8. [BR-004.3] After three refused companies in a row, no further Workday request is sent
-   in the run, and after a 429 on a trial address no further address on that platform is
+8. [BR-004.3] After three refused companies in a row on one Workday data center, no
+   further request is sent to that data center in the run, and after a 429 on a trial address no further address on that platform is
    tried in the run.
 9. [BR-004.4] A refused read's error names the search, the page and the number of
-   requests that had succeeded; the run summary reports undecided trial addresses.
+   requests that had been answered; the run summary reports undecided trial addresses;
+   the feeds-failing alert counts the feeds that were told to slow down.
 10. [process] `pytest` and `python scripts/validate_titles.py` pass.
 
 ## Out of scope

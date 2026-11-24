@@ -323,3 +323,40 @@ def test_a_broken_lifecycle_step_never_stops_the_run(empty_db, monkeypatch):
     result = run(run_module.run(empty_db, kind="daily"))
 
     assert result["run_status"] in ("completed", "degraded")
+
+
+# -- BR-004: a temporary refusal never costs us a source, and it is visible -----
+
+RATE_LIMITED = "https://boards-api.greenhouse.io/v1/boards/acme/jobs returned HTTP 429"
+
+
+def test_a_trial_address_that_is_refused_waits_for_the_next_run_and_the_summary_says_so(empty_db, monkeypatch):
+    company_id = _insert_company(empty_db, name="Acme", feed_type=None, feed_id=None)
+    source_id = _insert_source(empty_db, discovered_at="2026-10-20T08:00:00-05:00")  # past the 30 days
+    monkeypatch.setattr(run_module, "today_central", lambda: __import__("datetime").date(2026, 11, 25))
+    monkeypatch.setattr(run_module, "run_fetcher", _failing(RATE_LIMITED))
+
+    result = run(run_module.run(empty_db, kind="daily"))
+
+    assert run(empty_db.first("SELECT status FROM sources WHERE id = ?", source_id))["status"] == "trial"
+    assert _company(empty_db, company_id)["feed_type"] is None
+    assert result["feeds_adopted"] == 0
+    assert result["sources_undecided"] == 1
+    assert result["sources_demoted"] == 0
+    assert "1 trial feed address could not be judged this run and waits for the next." in result["summary"]
+
+
+def test_the_failing_feeds_alert_says_how_many_were_told_to_slow_down(empty_db, monkeypatch):
+    _insert_company(
+        empty_db, name="NVIDIA", feed_type="workday", feed_id="nvidia", feed_failures=4,
+        feed_url="https://nvidia.wd5.myworkdayjobs.com/NVIDIAExternalCareerSite",
+    )
+    monkeypatch.setattr(run_module, "run_fetcher", _failing(
+        "https://nvidia.wd5.myworkdayjobs.com/wday/cxs/nvidia/NVIDIAExternalCareerSite/jobs returned HTTP 429"
+    ))
+
+    run(run_module.run(empty_db, kind="daily"))
+
+    alert = run(empty_db.first("SELECT message FROM alerts WHERE type = 'feeds_failing'"))
+    assert "NVIDIA" in alert["message"]
+    assert "1 was told to slow down (HTTP 429)." in alert["message"]
