@@ -17,6 +17,7 @@ from job.agent.alerts import (
     DISCOVERY_FAILED,
     RUN_DEGRADED,
     LONG_RUN,
+    FEEDS_FAILING,
     claude_limit_alert,
     claude_not_configured_alert,
     claude_step_issue_alert,
@@ -24,6 +25,7 @@ from job.agent.alerts import (
     evaluate_budget_alerts,
     evaluate_spike_alert,
     evaluate_workers_paid_suggestion,
+    feeds_failing_alert,
     record_alerts,
     run_failed_alert,
 )
@@ -88,7 +90,7 @@ def test_all_alert_types_registered():
     assert ALERT_TYPES == {
         BUDGET_80, BUDGET_100, USAGE_SPIKE, CLAUDE_LIMIT, RUN_FAILED, CLAUDE_NOT_CONFIGURED, CLAUDE_STEP_ISSUE,
         BROWSER_RUN_80, BROWSER_RUN_100, BROWSER_RUN_MONTH_80, BROWSER_RUN_MONTH_100, WORKERS_PAID_SUGGESTED,
-        DISCOVERY_FAILED, RUN_DEGRADED, LONG_RUN,
+        DISCOVERY_FAILED, RUN_DEGRADED, LONG_RUN, FEEDS_FAILING,
     }
 
 
@@ -192,3 +194,25 @@ def test_record_alerts_allows_same_type_on_a_new_day(empty_db):
     assert len(second) == 1
     rows = run(empty_db.all("SELECT * FROM alerts"))
     assert len(rows) == 2
+
+
+# -- BR-001.2: a feed that keeps failing is never silent -----------------------
+
+def test_feeds_failing_alert_names_the_companies_and_the_run_count():
+    alert = feeds_failing_alert(["NVIDIA", "Salesforce"], runs=5)
+    assert alert.type == FEEDS_FAILING
+    assert alert.severity == "warning"
+    assert "2 job feeds have failed 5 or more runs in a row" in alert.message
+    assert "NVIDIA" in alert.message and "Salesforce" in alert.message
+
+
+def test_feeds_failing_alert_shortens_a_long_list():
+    names = [f"Company {n}" for n in range(30)]
+    alert = feeds_failing_alert(names, runs=5)
+    assert "30 job feeds" in alert.message
+    assert "and 20 more" in alert.message
+    assert "Company 29" not in alert.message
+
+
+def test_feeds_failing_alert_reads_naturally_for_one_feed():
+    assert "1 job feed has failed 5 or more runs in a row: Etsy." in feeds_failing_alert(["Etsy"], runs=5).message

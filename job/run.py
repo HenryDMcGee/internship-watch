@@ -39,6 +39,7 @@ from job.agent.alerts import (
     evaluate_long_run_alert,
     evaluate_spike_alert,
     evaluate_workers_paid_suggestion,
+    feeds_failing_alert,
     record_alerts,
     run_degraded_alert,
     run_failed_alert,
@@ -50,8 +51,8 @@ from job.agent.pipeline import build_unclear_reader, run_agent_steps
 from job.agent.summary import build_summary_payload, send_daily_summary
 from job.agent.usage import record_usage
 from job.d1_client import D1HttpDatabase
-from job import careers_snapshot, feed_snapshot, fingerprint
-from job.fetchers import run_fetcher
+from job import careers_snapshot, feed_health, feed_snapshot, fingerprint, sources_lifecycle
+from job.fetchers import listing_is_complete, run_fetcher
 from job.fetchers import careers_pages
 from job.locations import location_match
 from job.matching import classify_posting, cycle_status
@@ -124,6 +125,9 @@ async def _fetch_and_store(
     settings_ver = fingerprint.settings_version(titles_doc, locations_setting)
 
     for company in companies:
+        # A Workday feed keeps its own address, so a later change to the
+        # company's careers page can't break it (BR-001.3).
+        await feed_health.ensure_feed_url(db, company)
         result = run_fetcher(company)
         feed_ok[company["id"]] = result.error is None
         current_urls[company["id"]] = {p.url for p in result.postings if p.url}
@@ -149,10 +153,15 @@ async def _fetch_and_store(
                VALUES (?, NULL, ?, ?, 0)""",
             run_id, f"{company['name']} ({company.get('feed_type') or 'no feed'})", len(result.postings),
         )
+        # Failed reads in a row (BR-001.2): what the feeds-failing alert and
+        # the clearing of dead feeds both go by.
+        feed_failures = feed_health.next_failure_count(company.get("feed_failures"), feed_status)
         await db.run(
-            "UPDATE companies SET last_result_at = ?, last_feed_status = ?, last_feed_error = ? WHERE id = ?",
-            now_iso(), feed_status, feed_error_text, company["id"],
+            "UPDATE companies SET last_result_at = ?, last_feed_status = ?, last_feed_error = ?, feed_failures = ? "
+            "WHERE id = ?",
+            now_iso(), feed_status, feed_error_text, feed_failures, company["id"],
         )
+        company["feed_failures"] = feed_failures
 
         # A feed that failed to load is never treated as unchanged -- the
         # error is already recorded above, and the last good snapshot (if
@@ -164,8 +173,11 @@ async def _fetch_and_store(
                 feeds_skipped += 1
                 # Nothing in the feed changed, so nothing already on file for
                 # this company can have disappeared from it either -- the
-                # feed-based status check below must not report otherwise.
-                current_urls[company["id"]] = feed_snapshot.ALL_FOUND
+                # feed-based status check below must not report otherwise. A
+                # partial listing never held everything on file, so it keeps
+                # the links it actually returned and vouches only for those.
+                if listing_is_complete(company.get("feed_type")):
+                    current_urls[company["id"]] = feed_snapshot.ALL_FOUND
                 await feed_snapshot.record_unchanged(db, company["id"], now_iso=now_iso())
                 continue
             await feed_snapshot.record_changed(
@@ -571,6 +583,54 @@ def _careers_pages_summary_line(stats: dict | None) -> str | None:
     return line
 
 
+_SUMMARY_NAMES_SHOWN = 10
+
+
+def _names_in_brackets(names: list[str]) -> str:
+    shown = ", ".join(names[:_SUMMARY_NAMES_SHOWN])
+    if len(names) > _SUMMARY_NAMES_SHOWN:
+        shown += f" and {len(names) - _SUMMARY_NAMES_SHOWN} more"
+    return f"({shown})"
+
+
+def _source_upkeep_summary_lines(adoption, feeds_cleared: list[dict], sources_demoted: int) -> list[str]:
+    """What happened to feeds and trial sources this run (BR-001), one
+    sentence each, and nothing at all on a run where nothing happened."""
+    lines = []
+    adopted = adoption.adopted if adoption else []
+    if adopted:
+        lines.append(
+            f"Adopted {len(adopted)} feed{'' if len(adopted) == 1 else 's'} from the trial sources "
+            f"{_names_in_brackets([a['name'] for a in adopted])}."
+        )
+    if adoption and adoption.failed:
+        lines.append(
+            f"Tried {adoption.failed} trial feed address{'' if adoption.failed == 1 else 'es'} that could not be "
+            "read and demoted "
+            f"{'it' if adoption.failed == 1 else 'them'}."
+        )
+    not_found = [c["name"] for c in feeds_cleared if c.get("reason") != feed_health.NO_ADDRESS]
+    if not_found:
+        one = len(not_found) == 1
+        lines.append(
+            f"Cleared {len(not_found)} feed{'' if one else 's'} whose address{'' if one else 'es'} no longer "
+            f"exist{'s' if one else ''} {_names_in_brackets(not_found)}."
+        )
+    no_address = [c["name"] for c in feeds_cleared if c.get("reason") == feed_health.NO_ADDRESS]
+    if no_address:
+        one = len(no_address) == 1
+        lines.append(
+            f"Cleared {len(no_address)} Workday feed{'' if one else 's'} that "
+            f"{'has' if one else 'have'} no site address on file {_names_in_brackets(no_address)}."
+        )
+    if sources_demoted:
+        lines.append(
+            f"Demoted {sources_demoted} trial source{'' if sources_demoted == 1 else 's'} not adopted within "
+            f"{sources_lifecycle.TRIAL_DAYS} days."
+        )
+    return lines
+
+
 async def _verify_and_prune(
     db, companies: list[dict], feed_ok: dict[int, bool], current_urls: dict[int, set[str]],
     browser_budget: BrowserBudget, *, unclear_reader=None, careers_links: dict[int, set[str]] | None = None,
@@ -584,6 +644,7 @@ async def _verify_and_prune(
     if not company_ids:
         return
     careers_links = careers_links or {}
+    feed_types = {c["id"]: c.get("feed_type") for c in companies}
     clause, param = in_json("company_id", company_ids)
     postings = await db.all(
         f"SELECT * FROM postings WHERE archived_at IS NULL AND {clause} "
@@ -598,6 +659,7 @@ async def _verify_and_prune(
             feed_checked_ok=feed_ok.get(company_id, False),
             found_in_current_feed=posting["url"] in current_urls.get(company_id, set()),
             found_on_careers_page=bool(posting["url"]) and posting["url"] in careers_links.get(company_id, set()),
+            feed_listing_complete=listing_is_complete(feed_types.get(company_id)),
             browser_budget=browser_budget,
             now_iso=now_iso(),
             unclear_reader=unclear_reader,
@@ -800,6 +862,22 @@ async def _run_body(db, run_id: int, started_at: str, kind: str, company_ids: li
             except Exception as exc:  # noqa: BLE001 - the backfill must never stop the run
                 print(f"careers backfill: {exc}")
 
+    # Trial sources on a feed platform are tried for the company they name and
+    # adopted as its feed if they can be read (BR-001.5), before the feeds are
+    # read so an adopted feed is read in this same run. Daily runs over the
+    # whole list only: a Check now run is Henry looking at a few companies.
+    whole_list_daily_run = kind == "daily" and company_ids is None
+    adoption = None
+    if whole_list_daily_run:
+        try:
+            adoption = await sources_lifecycle.adopt_trial_feeds(
+                db, companies, fetch=run_fetcher, now_iso=now_iso(),
+                failing_after=await feed_health.load_failing_after_runs(db),
+                hold_feed_types=sources_lifecycle.unproven_feed_types(companies),
+            )
+        except Exception as exc:  # noqa: BLE001 - source upkeep must never stop the run
+            print(f"adopt_trial_feeds: {exc}")
+
     # Results the rules can't place (fuzzy score 80 to 89, other languages) wait here
     # for classification. They are saved only if it matches them to a title, so
     # without Claude (a Check now run, or no credentials) none are saved.
@@ -808,6 +886,33 @@ async def _run_body(db, run_id: int, started_at: str, kind: str, company_ids: li
         new_count, feed_ok, current_urls, no_source_count, feed_error_count, sources_found,
         repeats_recognized, rejections_skipped, feeds_skipped,
     ) = await _fetch_and_store(db, companies, titles_doc, locations_setting, run_id, candidates)
+
+    # A feed whose address has returned "not found" run after run is cleared,
+    # so the company goes back to the careers-page reader and the scout
+    # instead of erroring forever (BR-001.1).
+    feeds_cleared: list[dict] = []
+    sources_demoted = 0
+    if whole_list_daily_run:
+        try:
+            feeds_cleared = await feed_health.clear_dead_feeds(
+                db, threshold=await feed_health.load_failing_after_runs(db), now_iso=now_iso(),
+            )
+            cleared_ids = {c["company_id"] for c in feeds_cleared}
+            for company in companies:
+                if company["id"] in cleared_ids:
+                    company.update(feed_type=None, feed_id=None, feed_url=None, feed_failures=0)
+        except Exception as exc:  # noqa: BLE001 - source upkeep must never stop the run
+            print(f"clear_dead_feeds: {exc}")
+        # Scout-proposed sources not adopted within 30 days are demoted
+        # (BR-001.5). Skipped when adoption did not run, since it is adoption
+        # that says which feed addresses are still waiting for their try.
+        if adoption is not None:
+            try:
+                sources_demoted = await sources_lifecycle.demote_stale_trials(
+                    db, today=today_central(), exclude_ids=adoption.untried_source_ids,
+                )
+            except Exception as exc:  # noqa: BLE001 - source upkeep must never stop the run
+                print(f"demote_stale_trials: {exc}")
 
     agent_outcome = None
     unclear_reader = None
@@ -925,6 +1030,8 @@ async def _run_body(db, run_id: int, started_at: str, kind: str, company_ids: li
     careers_line = _careers_pages_summary_line(careers_stats)
     if careers_line:
         summary += " " + careers_line
+    for line in _source_upkeep_summary_lines(adoption, feeds_cleared, sources_demoted):
+        summary += " " + line
     if kind == "daily" and not claude_configured:
         # Never let this go unsaid (issue #16): a run without Claude
         # credentials still completes, but discovery, classification, the
@@ -997,6 +1104,9 @@ async def _run_body(db, run_id: int, started_at: str, kind: str, company_ids: li
         "rejections_skipped": rejections_skipped,
         "counts": counts,
         "feeds_skipped": feeds_skipped,
+        "feeds_adopted": len(adoption.adopted) if adoption else 0,
+        "feeds_cleared": len(feeds_cleared),
+        "sources_demoted": sources_demoted,
         "ranking_refresh": ranking_summary,
         "summary": summary,
         "agent_outcome": agent_outcome,
@@ -1099,6 +1209,15 @@ async def _finish_daily_run(
         status = await load_budget_status(db, budget_settings, today=today_str)
 
         candidates = list(evaluate_budget_alerts(status))
+        # Feeds that keep failing (BR-001.2). Its own guard, so a problem
+        # reading feed health can't cost the other alerts.
+        try:
+            failing_after = await feed_health.load_failing_after_runs(db)
+            failing_feeds = await feed_health.failing_feed_names(db, failing_after)
+            if failing_feeds:
+                candidates.append(feeds_failing_alert(failing_feeds, runs=failing_after))
+        except Exception as exc:  # noqa: BLE001 - one alert must never cost the rest
+            print(f"feeds-failing alert: {exc}", file=sys.stderr)
         spike = evaluate_spike_alert(status.today.tokens, await _seven_day_avg_tokens(db, today_str))
         if spike:
             candidates.append(spike)

@@ -1069,3 +1069,136 @@ def test_careers_repair_runs_through_the_real_client_without_an_unknown_step_err
     assert MODEL_SETTING["careers_repair"] == "model_scout"
     assert model_for_step({"model_scout": "haiku"}, "careers_repair") == "haiku"
     assert model_for_step({}, "careers_repair") == "sonnet"
+
+
+# -- BR-001.3: the scout can't break a feed by changing the careers page -------
+
+def test_scout_saves_the_feed_address_when_it_finds_a_feed(empty_db):
+    company_id = _insert_company(empty_db, feed_type=None)
+    _store_scout(
+        empty_db, [_scout_found("Acme", "https://acme.wd5.myworkdayjobs.com/en-US/AcmeCareers")],
+        [{"id": company_id, "name": "Acme"}],
+    )
+
+    company = run(empty_db.first("SELECT * FROM companies WHERE id = ?", company_id))
+    assert company["feed_type"] == "workday"
+    assert company["feed_url"] == "https://acme.wd5.myworkdayjobs.com/en-US/AcmeCareers"
+
+
+def test_scout_careers_page_for_a_company_with_a_failing_feed_leaves_the_feed_address_alone(empty_db):
+    # This is how 18 Workday feeds broke: the feed was failing, the scout found
+    # a marketing page, and the one field holding the feed address was replaced.
+    company_id = _insert_company(
+        empty_db, feed_type="workday", feed_id="acme", last_feed_status="error",
+        feed_url="https://acme.wd5.myworkdayjobs.com/AcmeCareers",
+        careers_url="https://acme.wd5.myworkdayjobs.com/AcmeCareers",
+    )
+    _store_scout(
+        empty_db, [_scout_found("Acme", "https://www.acme.example/careers/students")],
+        [{"id": company_id, "name": "Acme"}],
+    )
+
+    company = run(empty_db.first("SELECT * FROM companies WHERE id = ?", company_id))
+    assert company["feed_type"] == "workday"
+    assert company["feed_url"] == "https://acme.wd5.myworkdayjobs.com/AcmeCareers"
+
+
+def test_scout_does_not_set_a_workday_feed_from_a_link_that_names_no_site(empty_db):
+    company_id = _insert_company(empty_db, feed_type=None)
+    _store_scout(
+        empty_db, [_scout_found("Acme", "https://acme.wd5.myworkdayjobs.com")],
+        [{"id": company_id, "name": "Acme"}],
+    )
+
+    company = run(empty_db.first("SELECT * FROM companies WHERE id = ?", company_id))
+    assert company["feed_type"] is None
+    assert company["feed_url"] is None
+
+
+# -- BR-001.5: the same page is not stored or adopted twice --------------------
+
+def test_scout_does_not_store_the_same_page_under_a_slightly_different_address(empty_db):
+    company_id = _insert_company(empty_db, feed_type=None)
+    companies = [{"id": company_id, "name": "Acme"}]
+    assert _store_scout(empty_db, [_scout_found("Acme", "https://jobs.acme.example/")], companies) == 1
+
+    for variant in ("https://jobs.acme.example", "https://jobs.acme.example/?q=intern", "HTTPS://Jobs.Acme.example/#open"):
+        assert _store_scout(empty_db, [_scout_found("Acme", variant)], companies) == 0
+
+    assert run(empty_db.first("SELECT COUNT(*) AS n FROM sources"))["n"] == 1
+
+
+def test_scout_does_not_store_two_variants_of_one_page_from_the_same_reply(empty_db):
+    company_id = _insert_company(empty_db, feed_type=None)
+    stored = _store_scout(
+        empty_db,
+        [_scout_found("Acme", "https://jobs.acme.example/en/jobs/"), _scout_found("Acme", "https://jobs.acme.example/en/jobs")],
+        [{"id": company_id, "name": "Acme"}],
+    )
+
+    assert stored == 1
+    assert run(empty_db.first("SELECT COUNT(*) AS n FROM sources"))["n"] == 1
+
+
+def test_scout_does_not_bring_back_a_demoted_address(empty_db):
+    company_id = _insert_company(empty_db, feed_type=None)
+    run(empty_db.run(
+        "INSERT INTO sources (name, url, kind, status, discovered_by, discovered_at, notes) "
+        "VALUES ('Acme careers', 'https://boards.greenhouse.io/acme', 'Company career sites', 'demoted', "
+        "'claude-scout', '2026-09-01T08:00:00', 'Feed address returned HTTP 404.')"
+    ))
+
+    stored = _store_scout(
+        empty_db, [_scout_found("Acme", "https://boards.greenhouse.io/acme/")], [{"id": company_id, "name": "Acme"}],
+    )
+
+    assert stored == 0
+    company = run(empty_db.first("SELECT * FROM companies WHERE id = ?", company_id))
+    assert company["feed_type"] is None  # the dead board is not set as the feed again
+    assert run(empty_db.first("SELECT status FROM sources"))["status"] == "demoted"
+
+
+def test_scout_falls_back_to_its_other_find_when_the_best_one_is_demoted(empty_db):
+    company_id = _insert_company(empty_db, feed_type=None)
+    run(empty_db.run(
+        "INSERT INTO sources (name, url, kind, status, discovered_by, discovered_at) "
+        "VALUES ('Acme careers', 'https://boards.greenhouse.io/acme', 'Company career sites', 'demoted', "
+        "'claude-scout', '2026-09-01T08:00:00')"
+    ))
+
+    _store_scout(
+        empty_db,
+        [_scout_found("Acme", "https://boards.greenhouse.io/acme"), _scout_found("Acme", "https://www.acme.example/careers")],
+        [{"id": company_id, "name": "Acme"}],
+    )
+
+    company = run(empty_db.first("SELECT * FROM companies WHERE id = ?", company_id))
+    assert company["feed_type"] is None
+    assert company["careers_url"] == "https://www.acme.example/careers"
+
+
+# -- BR-001.4: an excluded company's pages are not stored ----------------------
+
+def test_scout_does_not_store_a_page_for_a_china_based_company_off_the_list(empty_db):
+    _insert_company(empty_db, name="JD.com", status="removed", hq_country="CN", feed_type=None)
+    acme_id = _insert_company(empty_db, feed_type=None)
+
+    stored = _store_scout(
+        empty_db,
+        [_scout_found("JD.com", "https://campus.jd.com/"), _scout_found("Acme", "https://www.acme.example/careers")],
+        [{"id": acme_id, "name": "Acme"}],
+    )
+
+    assert stored == 1
+    assert [r["url"] for r in run(empty_db.all("SELECT url FROM sources"))] == ["https://www.acme.example/careers"]
+
+
+def test_scout_still_stores_a_page_for_a_china_based_company_henry_pinned(empty_db):
+    # A pin is Henry's own choice and outranks the exclusion, here as everywhere.
+    company_id = _insert_company(empty_db, name="Xiaomi", status="pinned", hq_country="CN", feed_type=None)
+
+    stored = _store_scout(
+        empty_db, [_scout_found("Xiaomi", "https://hr.xiaomi.com/campus")], [{"id": company_id, "name": "Xiaomi"}],
+    )
+
+    assert stored == 1

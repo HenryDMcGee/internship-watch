@@ -1,9 +1,10 @@
 """Source scout: finds careers pages, feeds, and job boards for companies
-with no working source first. New sources start as `trial` and become
-`active` after a real open posting; sources that keep finding nothing are
-`demoted`. Demoting is automatic; actually retiring (removing) a source
-needs Henry's approval, so that goes to `proposals` instead (see
-`pipeline.py`).
+with no working source first. New sources start as `trial`. What happens
+next is `job/sources_lifecycle.py`'s job (BR-001.5): a trial source on a feed
+platform becomes `active` when it is adopted as a company's feed, and one
+that can't be read, or isn't adopted within 30 days, is `demoted`. Demoting
+is automatic and keeps the row; actually removing a source needs Henry's
+approval, so that goes to `proposals` instead (see `pipeline.py`).
 """
 from __future__ import annotations
 
@@ -16,8 +17,6 @@ from job.agent.schemas import (
 )
 
 DEFAULT_SEARCH_LIMIT_PER_RUN = 35
-PROMOTE_AFTER_FOUND = 1  # a trial source becomes active after this many real open postings
-DEMOTE_AFTER_EMPTY_CHECKS = 3  # demoted after this many checks in a row finding nothing
 SCOUT_COMPANIES_PER_RUN = 35  # uncovered companies the scout works through each run
 
 
@@ -124,12 +123,3 @@ def new_source_row(found: dict, *, now_iso: str) -> dict:
         "found_count": 0,
         "last_checked": now_iso,
     }
-
-
-def next_source_status(status: str, found_count: int, empty_checks_in_a_row: int) -> str:
-    """The status a source should move to after this run's check, if any."""
-    if found_count >= PROMOTE_AFTER_FOUND:
-        return "active"
-    if status in ("trial", "active") and empty_checks_in_a_row >= DEMOTE_AFTER_EMPTY_CHECKS:
-        return "demoted"
-    return status

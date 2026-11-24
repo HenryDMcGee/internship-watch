@@ -130,6 +130,41 @@ def test_verify_feed_absence_means_closed():
     assert outcome.verified_via == "feed"
 
 
+# -- BR-001.1: a partial listing confirms open, and never proves closed -------
+
+def test_verify_partial_listing_confirms_a_posting_it_contains():
+    outcome = verify_posting(
+        _posting(), feed_checked_ok=True, found_in_current_feed=True, feed_listing_complete=False,
+        browser_budget=BrowserBudget(remaining=5), now_iso="2026-09-20T08:00:00",
+    )
+    assert outcome.status == "open"
+    assert outcome.verified_via == "feed"
+
+
+def test_verify_partial_listing_does_not_close_a_posting_it_lacks():
+    def fake_structured(url, session=None):
+        from job.verify.text_signals import VerifyDecision
+        return VerifyDecision("open", "structured data says open")
+
+    outcome = verify_posting(
+        _posting(), feed_checked_ok=True, found_in_current_feed=False, feed_listing_complete=False,
+        browser_budget=BrowserBudget(remaining=5), now_iso="2026-09-20T08:00:00",
+        check_structured=fake_structured,
+    )
+    assert outcome.status == "open"
+    assert outcome.verified_via == "structured"
+
+
+def test_verify_partial_listing_keeps_a_user_mark_for_a_posting_it_lacks():
+    outcome = verify_posting(
+        _posting(user_status="open", user_status_at="2026-09-19T10:00:00"),
+        feed_checked_ok=True, found_in_current_feed=False, feed_listing_complete=False,
+        browser_budget=BrowserBudget(remaining=5), now_iso="2026-09-20T08:00:00",
+    )
+    assert outcome.status == "open"
+    assert outcome.verified_via == "user"
+
+
 def test_verify_falls_back_to_structured_when_feed_unavailable():
     def fake_structured(url, session=None):
         from job.verify.text_signals import VerifyDecision

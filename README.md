@@ -18,7 +18,7 @@ It finds postings four ways, cheapest first:
 1. **Company job feeds.** Greenhouse, Lever, Ashby, SmartRecruiters, Workday and Amazon.jobs publish machine-readable listings. Free, and the most reliable.
 2. **Careers pages.** For companies with no recognized feed, Cloudflare Browser Run loads the page and a small Claude model pulls the listings out of it.
 3. **Claude discovery.** For companies with neither, Claude searches the web directly. The most expensive route, so it runs last and only on what's left.
-4. **The source scout.** Separately, Claude looks for feeds and careers pages for companies that have neither, moving them onto the cheaper routes over time.
+4. **The source scout.** Separately, Claude looks for feeds and careers pages for companies that have neither, moving them onto the cheaper routes over time. What it finds starts on trial: a feed address is tried at the start of the next run and adopted as the company's feed if it can be read, and anything not adopted within 30 days is demoted and not proposed again.
 
 Everything it finds is matched against your title list, then classified: is it MBA-level, is it Summer 2027, is it in a location you want. Postings it has already seen or already rejected are remembered, so the same work is never paid for twice.
 
@@ -80,7 +80,7 @@ Phases 1 to 4 build the thing. Phases 5 to 8 make it cheaper, wider and more pre
 
 **What you do after it merges.** Open the **Actions** tab, choose **Daily search**, and click **Run workflow** to start one by hand. Manual runs skip the 08:00 guard. Read the run summary afterward, then merge.
 
-**What to watch.** Feeds fail quietly when a company changes platforms. The run summary reports feed errors per run; a number that climbs over a week means a company needs re-scouting.
+**What to watch.** Feeds break when a company changes platforms. A feed that fails five runs in a row raises a "job feeds have failed" alert on the Analytics tab and in the daily summary, naming the companies. A feed whose address no longer exists is cleared on its own, so the company goes back to the careers-page reader and the scout; the run summary says which. Workday is read as a partial listing (internship and MBA searches only), so a posting missing from it is never taken as closed.
 
 ## Phase 3: Claude agent
 

@@ -22,7 +22,7 @@ Every morning, find open Summer 2027 MBA internships that match Henry's titles a
 
 | Part | Where it runs | Notes |
 | --- | --- | --- |
-| Daily job | GitHub Actions, Python 3.12 | 08:00 America/Chicago. Scheduled at 13:00 and 14:00 UTC with a guard step. Can also be started by hand. From the Cloudflare daily trigger (phase 1), the Worker's cron trigger also dispatches it at 08:00 Central, on time; each run records which path started it in `runs.source`. |
+| Daily job | GitHub Actions, Python 3.12 | 08:00 America/Chicago. Scheduled once, at 13:00 UTC; GitHub delivers that hours late, so the guard step lets every run through. Can also be started by hand. From the Cloudflare daily trigger (phase 1), the Worker's cron trigger also dispatches it at 08:00 Central, on time; each run records which path started it in `runs.source`. |
 | Check now | GitHub Actions `check-now.yml` | Started by the Worker through GitHub's API. Checks specific companies only. Max 5 per day. |
 | App | One Cloudflare Python Worker, FastAPI | Serves `/api/*` and the dashboard's static files from `frontend/` through the `ASSETS` binding (`run_worker_first = true`; unmatched paths go to `ASSETS`). Verifies the Cloudflare Access token on every API request. `workers_dev` and preview URLs are off. Developed and deployed with `pywrangler` (`uv run pywrangler dev`, `uv run pywrangler deploy`). Uses the Python version Cloudflare's runtime requires (3.13 at the time of writing). |
 | Address | Worker route | `internship-watch.mcgeehenry.com/*` on the mcgeehenry.com zone, with a proxied `AAAA internship-watch 100::` DNS record added once by Henry. |
@@ -48,7 +48,7 @@ Every morning, find open Summer 2027 MBA internships that match Henry's titles a
    6. Henry's Mark open or Mark closed answer, which sticks unless the posting disappears from the company's own feed
 7. Archive postings that are gone, past their deadline, no longer accepting applications, or for the wrong cycle, such as "MBA class of 2027". Never delete.
 8. Save everything to D1 and record verification method and time.
-9. Source scout: find careers pages, feeds, and job boards for companies without a working source first. New sources start as `trial` and become `active` after finding a real open posting. Sources that keep finding nothing are `demoted`. Retiring needs Henry's approval.
+9. Source scout: find careers pages, feeds, and job boards for companies without a working source first. New sources start as `trial`. A trial source on a job-feed platform is tried for the company it names and becomes `active` when it is adopted as that company's feed. A trial source that can't be read, or isn't adopted within 30 days, is `demoted` (kept, never deleted) and is not proposed again (BR-001, `docs/requirements/BR-001-feed-coverage.md`). Removing a source needs Henry's approval.
 10. Daily improvement: write tomorrow's search plan. Small changes (query wording, source order) apply automatically. Company and source changes go to Proposals. Title suggestions are pull requests editing `config/titles.json`.
 11. Record usage per Claude call, evaluate alert rules, and trigger the Claude routine with the daily summary and any alerts.
 
