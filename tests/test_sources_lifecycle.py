@@ -286,6 +286,111 @@ def test_a_feed_that_has_never_been_read_is_not_replaced(empty_db):
     assert run(empty_db.first("SELECT * FROM companies WHERE id = ?", company_id))["feed_type"] == "lever"
 
 
+# -- which company a source belongs to, and when a feed may be replaced --------
+#
+# Found by running the matching over the real trial sources before this
+# shipped: a looser rule would have handed Zebra's board to the company named
+# Workday, and swapped 19 good Workday addresses before the fixed reader had
+# read them once.
+
+def test_a_source_that_only_mentions_a_company_in_passing_is_not_its_feed(empty_db):
+    # The company named Workday is mentioned by every "(Workday)" source, and
+    # the company named Strategy by anything that covers "strategy" roles.
+    _insert_company(empty_db, name="Workday", feed_type=None, rank=1)
+    _insert_company(empty_db, name="Strategy", feed_type=None, rank=2)
+    _insert_source(empty_db, name="Zebra careers (Workday)", url="https://zebra.wd1.myworkdayjobs.com/Zebra_Careers")
+    _insert_source(
+        empty_db, name="Spotify - Lever", url="https://jobs.lever.co/spotify",
+        covers="Live postings including Summer Internship, Business Strategy and Product Management, MBA",
+    )
+    calls = []
+
+    def fetch(company, session=None):
+        calls.append(company["name"])
+        return _fetch_ok(company)
+
+    outcome = run(sources_lifecycle.adopt_trial_feeds(
+        empty_db, _companies(empty_db), fetch=fetch, now_iso="2026-11-24T08:00:00-06:00",
+    ))
+
+    assert calls == []
+    assert outcome.adopted == []
+
+
+def test_a_source_is_matched_to_the_company_its_name_starts_with(empty_db):
+    company_id = _insert_company(empty_db, name="Workday", feed_type=None)
+    _insert_source(
+        empty_db, name="Workday Early Career", url="https://workday.wd5.myworkdayjobs.com/Workday_Early_Career",
+    )
+
+    outcome = run(sources_lifecycle.adopt_trial_feeds(
+        empty_db, _companies(empty_db), fetch=_fetch_ok, now_iso="2026-11-24T08:00:00-06:00",
+    ))
+
+    assert [a["company_id"] for a in outcome.adopted] == [company_id]
+
+
+def test_a_source_on_the_companys_own_board_is_matched_whatever_it_is_called(empty_db):
+    # "Fair Isaac (FICO)" is never spelled that way by a source, but the
+    # address is on the tenant the company's feed already names.
+    company_id = _insert_company(
+        empty_db, name="Fair Isaac (FICO)", feed_type="workday", feed_id="fico", last_feed_status="error",
+        careers_url="https://www.fico.com/en/careers",
+    )
+    _insert_source(empty_db, name="FICO Careers (Workday)", url="https://fico.wd1.myworkdayjobs.com/External")
+
+    outcome = run(sources_lifecycle.adopt_trial_feeds(
+        empty_db, _companies(empty_db), fetch=_fetch_ok, now_iso="2026-11-24T08:00:00-06:00",
+    ))
+
+    assert [a["company_id"] for a in outcome.adopted] == [company_id]
+    assert run(empty_db.first("SELECT feed_url FROM companies WHERE id = ?", company_id))["feed_url"] == (
+        "https://fico.wd1.myworkdayjobs.com/External"
+    )
+
+
+def test_a_feed_with_a_readable_address_is_not_replaced_until_it_counts_as_failing(empty_db):
+    # NVIDIA's address was right all along; the reader was wrong. One failed
+    # read, or four, is not a reason to swap it for another board.
+    company_id = _insert_company(
+        empty_db, name="NVIDIA", feed_type="workday", feed_id="nvidia", last_feed_status="error", feed_failures=4,
+        feed_url="https://nvidia.wd5.myworkdayjobs.com/NVIDIAExternalCareerSite",
+    )
+    _insert_source(
+        empty_db, name="NVIDIA University Jobs (Workday)", url="https://nvidia.wd5.myworkdayjobs.com/en-US/UniversityJobs",
+    )
+    calls = []
+
+    def fetch(company, session=None):
+        calls.append(company["name"])
+        return _fetch_ok(company)
+
+    run(sources_lifecycle.adopt_trial_feeds(
+        empty_db, _companies(empty_db), fetch=fetch, now_iso="2026-11-24T08:00:00-06:00", failing_after=5,
+    ))
+
+    assert calls == []
+    assert run(empty_db.first("SELECT feed_url FROM companies WHERE id = ?", company_id))["feed_url"] == (
+        "https://nvidia.wd5.myworkdayjobs.com/NVIDIAExternalCareerSite"
+    )
+
+
+def test_a_feed_that_counts_as_failing_can_be_replaced(empty_db):
+    company_id = _insert_company(
+        empty_db, name="NVIDIA", feed_type="workday", feed_id="nvidia", last_feed_status="error", feed_failures=5,
+        feed_url="https://nvidia.wd5.myworkdayjobs.com/NVIDIAExternalCareerSite",
+    )
+    _insert_source(
+        empty_db, name="NVIDIA University Jobs (Workday)", url="https://nvidia.wd5.myworkdayjobs.com/en-US/UniversityJobs",
+    )
+
+    outcome = run(sources_lifecycle.adopt_trial_feeds(
+        empty_db, _companies(empty_db), fetch=_fetch_ok, now_iso="2026-11-24T08:00:00-06:00", failing_after=5,
+    ))
+
+    assert [a["company_id"] for a in outcome.adopted] == [company_id]
+
+
 def test_a_fetcher_that_raises_counts_as_a_failed_try_and_does_not_stop_the_rest(empty_db):
     _insert_company(empty_db, name="Alpha", feed_type=None, rank=1)
     beta = _insert_company(empty_db, name="Beta", feed_type=None, rank=2)

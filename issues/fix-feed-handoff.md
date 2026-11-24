@@ -177,6 +177,14 @@ run without telling anyone.
 company has no working feed, test the URL and adopt it as the company's feed if it
 returns jobs.
 
+**Changed:** two limits on adoption, both found by running the matching over the real
+trial sources before this shipped. A source belongs to a company only when the source's
+name starts with the company's name, or its address is on the board the company's feed
+already names; a company merely mentioned in a source's description is not enough (every
+"(Workday)" source mentions the company named Workday). And a feed that has an address to
+read is only replaced once it counts as failing under the feed-health rule, so the 19
+Group A addresses get read by the fixed reader before anything else is tried.
+
 **Retirement rule.** A `trial` row older than 30 days that was not adopted as a company's
 feed becomes `status='demoted'`, with the date and reason in `notes`. Demoted, not
 deleted. "Graduated" means adopted as a company's feed after a successful read. Do not
