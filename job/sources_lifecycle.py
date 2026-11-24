@@ -37,6 +37,11 @@ ADOPTION_SECONDS_PER_RUN = 120
 # The run passes the feed-health setting (`job/feed_health.py`); this is its
 # default.
 FAILING_AFTER_RUNS = 5
+# Platforms whose trial addresses are tried only once a tracked company's
+# feed on that platform has read successfully. The Workday reader was rebuilt
+# without being tried against live sites; if it is wrong, every try would
+# fail and demote a good address.
+READER_MUST_PROVE_ITSELF = frozenset({"workday"})
 # amazon.jobs lists every Amazon company in one feed, so a page there says
 # nothing about which company it belongs to.
 ADOPTABLE_FEEDS = frozenset({"greenhouse", "lever", "ashby", "smartrecruiters", "workday"})
@@ -73,6 +78,13 @@ def feed_for_url(url: str | None) -> tuple[str, str | None, str] | None:
     elif not feed_id:
         return None
     return feed_type, feed_id, strip_query(url)
+
+
+def unproven_feed_types(companies: list[dict]) -> frozenset[str]:
+    """The platforms in `READER_MUST_PROVE_ITSELF` with no working feed among
+    `companies` yet."""
+    proven = {c.get("feed_type") for c in companies if coverage.feed_is_working(c)}
+    return frozenset(READER_MUST_PROVE_ITSELF - proven)
 
 
 @dataclass
@@ -130,12 +142,11 @@ def _source_is_for(company: dict, names: list[str], source: dict, feed_type: str
 async def adopt_trial_feeds(
     db, companies: list[dict], *, fetch, now_iso: str, limit: int = ADOPTION_TRIES_PER_RUN,
     seconds_budget: float = ADOPTION_SECONDS_PER_RUN, clock=time.monotonic,
-    failing_after: int = FAILING_AFTER_RUNS,
+    failing_after: int = FAILING_AFTER_RUNS, hold_feed_types: frozenset[str] = frozenset(),
 ) -> AdoptionOutcome:
     """Tries trial feed addresses for the companies in `companies` that want
     a feed (`_wants_a_feed`), most important company first and newest address
-    first,
-    and adopts the first one that can be read. `fetch` is the feed reader
+    first, and adopts the first one that can be read. `fetch` is the feed reader
     (`job.fetchers.run_fetcher`); a read with no error is a success even when
     it lists nothing, since a correct feed can be empty out of season.
 
@@ -143,7 +154,10 @@ async def adopt_trial_feeds(
     and the dict in `companies` both get the feed, so the same run reads it.
 
     At most `limit` tries and `seconds_budget` seconds a run. Addresses left
-    over are reported as untried and wait for the next run.
+    over are reported as untried and wait for the next run. So are addresses
+    on a platform in `hold_feed_types`: a failed try demotes for good, so the
+    run holds a platform back until its reader has read a feed successfully
+    (`READER_MUST_PROVE_ITSELF`).
     """
     outcome = AdoptionOutcome()
     wanting = sorted((c for c in companies if _wants_a_feed(c, failing_after)), key=_by_importance)
@@ -165,7 +179,7 @@ async def adopt_trial_feeds(
         for source, (feed_type, feed_id, feed_url) in candidates:
             if source["status"] != "trial" or not _source_is_for(company, names, source, feed_type, feed_id):
                 continue
-            if tries >= limit or clock() - started >= seconds_budget:
+            if feed_type in hold_feed_types or tries >= limit or clock() - started >= seconds_budget:
                 outcome.untried_source_ids.add(source["id"])
                 continue
             tries += 1

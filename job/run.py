@@ -873,6 +873,7 @@ async def _run_body(db, run_id: int, started_at: str, kind: str, company_ids: li
             adoption = await sources_lifecycle.adopt_trial_feeds(
                 db, companies, fetch=run_fetcher, now_iso=now_iso(),
                 failing_after=await feed_health.load_failing_after_runs(db),
+                hold_feed_types=sources_lifecycle.unproven_feed_types(companies),
             )
         except Exception as exc:  # noqa: BLE001 - source upkeep must never stop the run
             print(f"adopt_trial_feeds: {exc}")
